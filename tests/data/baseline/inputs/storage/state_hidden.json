@@ -1,0 +1,15 @@
+{
+ "hero": "凛",
+ "skin": "neon_sticker",
+ "share_format": "text",
+ "collapsed_cards": [
+  "owned"
+ ],
+ "aux": "abc",
+ "free_notice_closed": true,
+ "window_pos": [
+  10,
+  20
+ ],
+ "opaque": true
+}

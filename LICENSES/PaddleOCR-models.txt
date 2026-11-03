@@ -1,0 +1,7 @@
+PaddleOCR models (PP-OCRv6 text detection small, PP-OCRv6 text recognition small,
+ch_ppocr_mobile_v2.0 text direction classifier), as converted to ONNX and
+distributed with RapidOCR 3.9.2.
+
+Copyright (c) PaddlePaddle Authors. All Rights Reserved.
+Licensed under the Apache License, Version 2.0 (see Apache-2.0.txt).
+Source: https://github.com/PaddlePaddle/PaddleOCR

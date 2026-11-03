@@ -1,0 +1,16 @@
+{
+ "hero": 5,
+ "window_pos": "abc",
+ "manual": "yes",
+ "hotkey": 5,
+ "window_rel": [
+  1,
+  2
+ ],
+ "collapsed_cards": "owned",
+ "share_format": 1,
+ "opaque": "true",
+ "skin": 3,
+ "aux": 7,
+ "free_notice_closed": "no"
+}

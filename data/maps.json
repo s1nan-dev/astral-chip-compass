@@ -1,0 +1,151 @@
+{
+ "异变图书馆": {
+  "file": "anomalous-library.md",
+  "tasks": ["击倒 3 只魔法茶壶", "击倒 2 只罪恶茶壶", "击倒 2 个大盗", "击倒 3 个看守"],
+  "until": "2026-10-14",
+  "chip_tasks": 4.0,
+  "progress_cap": 17,
+  "progress_caps": {"普通": 18, "困难": 18, "噩梦": 17, "疯狂": 17},
+  "limited": true,
+  "ended": false
+ },
+ "海选赛运动场": {
+  "file": "arena-maps.md",
+  "tasks": ["击倒 2 只魔法茶壶", "击倒 2 个果冻巫师", "击倒果冻战士", "击倒裁判艾米", "击倒 1 个果冻护卫", "击倒 3 个果冻护卫"],
+  "until": "2026-09-02",
+  "chip_tasks": 4.0,
+  "progress_cap": 15,
+  "progress_caps": {"普通": 17, "困难": 16, "噩梦": 15, "疯狂": 15},
+  "limited": true,
+  "ended": true
+ },
+ "淘汰赛运动场": {
+  "file": "arena-maps.md",
+  "tasks": ["击倒大嗓门和练家子", "击倒 2 只蟹布罗", "击倒 2 只虾布罗", "击倒裁判艾米", "击倒 2 只海盗鲨鱼", "击倒 4 只金小鱼"],
+  "until": "2026-09-02",
+  "chip_tasks": 4.0,
+  "progress_cap": 15,
+  "progress_caps": {"普通": 17, "困难": 16, "噩梦": 15, "疯狂": 15},
+  "limited": true,
+  "ended": true
+ },
+ "决赛大赛场": {
+  "file": "arena-maps.md",
+  "tasks": ["击倒 3 个机械投手", "击倒 2 个机械监控师", "击倒 2 个机械四分卫", "击倒 2 艘思维飞艇", "击倒裁判艾米"],
+  "until": "2026-09-02",
+  "chip_tasks": 5.0,
+  "progress_cap": 15,
+  "progress_caps": {"普通": 17, "困难": 16, "噩梦": 15, "疯狂": 15},
+  "limited": true,
+  "ended": true
+ },
+ "龙宫游乐园": {
+  "file": "dragon-palace-amusement-park.md",
+  "tasks": [
+   "击倒大嗓门和练家子",
+   "击倒 6 只蟹布罗",
+   "击倒 2 只虾布罗",
+   "击倒 4 只虾布罗",
+   "获得 4 个葫芦",
+   "击倒 3 只金小鱼",
+   "击倒 6 只金小鱼",
+   "苍鲤的【金鳞】层数到达 11"
+  ],
+  "chip_tasks": 4.0,
+  "progress_cap": 16,
+  "progress_caps": {"普通": 18, "困难": 17, "噩梦": 16, "疯狂": 16},
+  "limited": false,
+  "ended": false,
+  "until": null
+ },
+ "星趴·梦想号": {
+  "file": "dreama.md",
+  "tasks": ["击倒 4 只海盗鲨鱼", "击倒 2 只海盗精锐", "击倒 9 只海盗鲨鱼"],
+  "chip_tasks": 3.0,
+  "progress_cap": 18,
+  "progress_caps": {"普通": 20, "困难": 20, "噩梦": 20, "疯狂": 18},
+  "extreme": {"progress_cap": 18, "chip_tasks": 3.0},
+  "limited": false,
+  "ended": false,
+  "until": null
+ },
+ "园林中庭": {
+  "file": "garden-courtyard.md",
+  "tasks": [
+   "击倒家禽服务员",
+   "收集 2 个神秘的蛋",
+   "击倒 3 只迎宾燕",
+   "击倒 2 只铜盏仙鹤",
+   "击倒 1 只铜盏孔雀",
+   "击倒 2 只铜盏孔雀",
+   "击倒 2 只铜盏鸳鸯",
+   "击倒 4 只铜盏鸳鸯",
+   "战胜姬梦枫"
+  ],
+  "chip_tasks": 4.0,
+  "progress_cap": 17,
+  "progress_caps": {"普通": 18, "困难": 18, "噩梦": 17, "疯狂": 17},
+  "limited": false,
+  "ended": false,
+  "until": null
+ },
+ "幽魂暗巷": {
+  "file": "ghost-alley.md",
+  "tasks": ["有角色首次获得 1 颗星星", "击倒 3 只圆锯猴助手", "击倒人工生命体—天崩", "击倒人工生命体—噩兆", "击倒 3 只科学怪猿"],
+  "chip_tasks": 4.0,
+  "progress_cap": 16,
+  "progress_caps": {"普通": 18, "困难": 18, "噩梦": 17, "疯狂": 16},
+  "limited": false,
+  "ended": false,
+  "until": null
+ },
+ "魔法学院": {
+  "file": "magic-academy.md",
+  "tasks": ["击倒果冻战士", "击倒 3 只魔法茶壶", "击倒 8 只魔法茶壶", "击倒 2 个果冻护卫", "击倒 3 个果冻巫师", "击倒 4 个果冻护卫"],
+  "chip_tasks": 3.0,
+  "progress_cap": 16,
+  "progress_caps": {"普通": 18, "困难": 17, "噩梦": 16, "疯狂": 16},
+  "limited": false,
+  "ended": false,
+  "until": null
+ },
+ "御魂庆典": {
+  "file": "soul-celebration.md",
+  "tasks": ["击倒 4 只冰冷蓝灵", "击倒 2 个长戟灵体或刀剑灵体", "击倒武魂灵体-戮或武魂灵体-怨（仅极限）", "击倒 5 个长戟灵体或刀剑灵体"],
+  "chip_tasks": 3.0,
+  "progress_cap": 19,
+  "progress_caps": {"普通": 20, "困难": 20, "噩梦": 20, "疯狂": 19},
+  "extreme": {"progress_cap": 17, "chip_tasks": 4.0},
+  "limited": false,
+  "ended": false,
+  "until": null
+ },
+ "水乡古镇": {
+  "file": "water-town.md",
+  "tasks": [
+   "击倒 4 只爆竹呱呱",
+   "击倒 9 只爆竹呱呱",
+   "击倒 2 个氛围机器人或机械蛇龙",
+   "击倒 4 个氛围机器人或机械蛇龙",
+   "击倒 2 只三联爆竹呱",
+   "轮次 7 以前舞狮嘎呜的生命值低于 189"
+  ],
+  "chip_tasks": 3.0,
+  "progress_cap": 16,
+  "progress_caps": {"普通": 20, "困难": 18, "噩梦": 17, "疯狂": 16},
+  "extreme": {"progress_cap": 16, "chip_tasks": 5.0},
+  "limited": false,
+  "ended": false,
+  "until": null
+ },
+ "森秋幻境": {
+  "file": "autumnwood-mirage.md",
+  "tasks": ["击倒 3 只闹钟猫头鹰", "击倒 3 只采集小熊", "击倒 2 只玩具恐龙", "建造 8 个建筑"],
+  "chip_tasks": 4.0,
+  "progress_cap": 17,
+  "progress_caps": {"普通": 18, "困难": 18, "噩梦": 17, "疯狂": 17},
+  "limited": false,
+  "ended": false,
+  "until": null
+ }
+}

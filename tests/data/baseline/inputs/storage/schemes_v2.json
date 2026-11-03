@@ -1,0 +1,55 @@
+{
+ "version": 2,
+ "schemes": [
+  {
+   "id": "a1",
+   "hero_id": 102,
+   "hero": "芬妮",
+   "name": "治愈坦克",
+   "author": "甲",
+   "note": "说明",
+   "chips": [
+    {
+     "code": 40,
+     "name": "医疗箱-完备治疗",
+     "tier": "core"
+    },
+    {
+     "code": 34,
+     "name": "缓冲盾牌",
+     "tier": "core"
+    },
+    {
+     "code": 38,
+     "name": "大碗炖肉",
+     "tier": "first"
+    }
+   ],
+   "copied_from_default": ""
+  },
+  {
+   "id": "b2",
+   "hero_id": 121,
+   "hero": "凛",
+   "name": "标记充能",
+   "author": "",
+   "note": "",
+   "chips": [
+    {
+     "code": 43,
+     "name": "标记喷罐",
+     "tier": "first"
+    },
+    {
+     "code": 45,
+     "name": "忍术飞镖",
+     "tier": "core"
+    }
+   ],
+   "copied_from_default": ""
+  }
+ ],
+ "last_used": {
+  "102": "a1"
+ }
+}

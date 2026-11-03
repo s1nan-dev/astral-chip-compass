@@ -1,0 +1,515 @@
+{
+ "20261002_013522_chipselect_levelup_star1_badge_on.png": {
+  "centers": [
+   [
+    1030.0,
+    579.0
+   ],
+   [
+    1937.0,
+    578.0
+   ],
+   [
+    2853.5,
+    578.0
+   ]
+  ],
+  "name_scores": [
+   1.0,
+   1.0,
+   1.0
+  ],
+  "names": [
+   "小猪存钱罐",
+   "电流核心",
+   "银行卡-余额多"
+  ],
+  "partial": [
+   false,
+   false,
+   false
+  ],
+  "probabilities": [
+   60,
+   37,
+   3
+  ],
+  "problems": [],
+  "rarity": [
+   "蓝",
+   "紫",
+   "紫"
+  ],
+  "raw": [
+   "小猪存钱罐",
+   "电流核心",
+   "银行卡-余额多"
+  ],
+  "reread": false,
+  "rerolls": 3,
+  "selected": null,
+  "team": false,
+  "unit": 911.75,
+  "unrecorded": [
+   false,
+   false,
+   false
+  ]
+ },
+ "20261002_144845_chipselect_levelup_star1_2560x1057.jpg": {
+  "centers": [
+   [
+    819.887451171875,
+    297.8843078613281
+   ],
+   [
+    1289.50048828125,
+    297.2450866699219
+   ],
+   [
+    1758.145751953125,
+    296.92547607421875
+   ]
+  ],
+  "name_scores": [
+   1.0,
+   1.0,
+   1.0
+  ],
+  "names": [
+   "电流剑",
+   "医疗箱-紧急治疗",
+   "速度轮滑-中级"
+  ],
+  "partial": [
+   false,
+   false,
+   false
+  ],
+  "probabilities": [
+   60,
+   37,
+   3
+  ],
+  "problems": [],
+  "rarity": [
+   "蓝",
+   "蓝",
+   "紫"
+  ],
+  "raw": [
+   "电流剑",
+   "医疗箱-紧急治疗",
+   "速度轮滑-中级"
+  ],
+  "reread": false,
+  "rerolls": 3,
+  "selected": null,
+  "team": false,
+  "unit": 469.129150390625,
+  "unrecorded": [
+   false,
+   false,
+   false
+  ]
+ },
+ "20261002_145427_chipselect_levelup_star2_2560x1057.jpg": {
+  "centers": [
+   [
+    819.242431640625,
+    297.8843078613281
+   ],
+   [
+    1289.5003662109375,
+    297.24505615234375
+   ],
+   [
+    1759.7584228515625,
+    297.8843078613281
+   ]
+  ],
+  "name_scores": [
+   1.0,
+   1.0,
+   1.0
+  ],
+  "names": [
+   "手电筒-强光",
+   "手持风扇-小",
+   "魔法箭袋"
+  ],
+  "partial": [
+   false,
+   false,
+   false
+  ],
+  "probabilities": [
+   40,
+   45,
+   15
+  ],
+  "problems": [],
+  "rarity": [
+   "紫",
+   "蓝",
+   "紫"
+  ],
+  "raw": [
+   "手电筒-强光",
+   "手持风扇-小",
+   "魔法箭袋"
+  ],
+  "reread": false,
+  "rerolls": 4,
+  "selected": null,
+  "team": false,
+  "unit": 470.25799560546875,
+  "unrecorded": [
+   false,
+   false,
+   false
+  ]
+ },
+ "20261002_145915_chipselect_task_tier3_no_reroll_button_2560x1057.jpg": {
+  "centers": [
+   [
+    819.2423095703125,
+    296.92547607421875
+   ],
+   [
+    1289.5003662109375,
+    296.6058349609375
+   ],
+   [
+    1759.758544921875,
+    297.8843078613281
+   ]
+  ],
+  "name_scores": [
+   1.0,
+   1.0,
+   1.0
+  ],
+  "names": [
+   "大背包",
+   "智能手表",
+   "电击手套"
+  ],
+  "partial": [
+   false,
+   false,
+   false
+  ],
+  "probabilities": [
+   25,
+   50,
+   25
+  ],
+  "problems": [],
+  "rarity": [
+   "紫",
+   "紫",
+   "紫"
+  ],
+  "raw": [
+   "大背包",
+   "智能手表",
+   "电击手套"
+  ],
+  "reread": false,
+  "rerolls": 0,
+  "selected": null,
+  "team": true,
+  "unit": 470.25811767578125,
+  "unrecorded": [
+   false,
+   false,
+   false
+  ]
+ },
+ "20261003_124946_chipselect_levelup_star1_al_real.jpg": {
+  "centers": [
+   [
+    1024.0,
+    576.0
+   ],
+   [
+    1942.0,
+    579.0
+   ],
+   [
+    2853.0,
+    580.0
+   ]
+  ],
+  "name_scores": [
+   1.0,
+   1.0,
+   1.0
+  ],
+  "names": [
+   "“8面”骰子",
+   "循环往复",
+   "摩托头盔-一般"
+  ],
+  "partial": [
+   false,
+   false,
+   false
+  ],
+  "probabilities": [
+   60,
+   37,
+   3
+  ],
+  "problems": [],
+  "rarity": [
+   "蓝",
+   "蓝",
+   "蓝"
+  ],
+  "raw": [
+   "“8面”骰子",
+   "循环往复",
+   "摩托头盔-一般"
+  ],
+  "reread": false,
+  "rerolls": 3,
+  "selected": null,
+  "team": false,
+  "unit": 914.5,
+  "unrecorded": [
+   false,
+   false,
+   false
+  ]
+ },
+ "20261003_130112_chipselect_team_task_tier2_star1_al_real.jpg": {
+  "centers": [
+   [
+    1029.0,
+    579.0
+   ],
+   [
+    1938.0,
+    578.0
+   ],
+   [
+    2852.0,
+    579.0
+   ]
+  ],
+  "name_scores": [
+   1.0,
+   1.0,
+   1.0
+  ],
+  "names": [
+   "额外电池",
+   "摩托头盔-高级",
+   "速度轮滑-中级"
+  ],
+  "partial": [
+   false,
+   false,
+   false
+  ],
+  "probabilities": [
+   40,
+   45,
+   15
+  ],
+  "problems": [],
+  "rarity": [
+   "紫",
+   "金",
+   "紫"
+  ],
+  "raw": [
+   "额外电池",
+   "摩托头盔-高级",
+   "速度轮滑-中级"
+  ],
+  "reread": false,
+  "rerolls": 3,
+  "selected": null,
+  "team": true,
+  "unit": 911.5,
+  "unrecorded": [
+   false,
+   false,
+   false
+  ]
+ },
+ "20261003_130854_chipselect_task_tier2_after_reroll_bankcards_real.jpg": {
+  "centers": [
+   [
+    1028.0,
+    579.0
+   ],
+   [
+    1939.0,
+    576.0
+   ],
+   [
+    2852.0,
+    579.0
+   ]
+  ],
+  "name_scores": [
+   1.0,
+   1.0,
+   1.0
+  ],
+  "names": [
+   "银行卡-用不完",
+   "银行卡-余额多",
+   "小猪存钱罐"
+  ],
+  "partial": [
+   false,
+   false,
+   false
+  ],
+  "probabilities": [
+   40,
+   45,
+   15
+  ],
+  "problems": [],
+  "rarity": [
+   "金",
+   "紫",
+   "蓝"
+  ],
+  "raw": [
+   "银行卡-用不完",
+   "银行卡-余额多",
+   "小猪存钱罐"
+  ],
+  "reread": false,
+  "rerolls": 3,
+  "selected": null,
+  "team": false,
+  "unit": 912.0,
+  "unrecorded": [
+   false,
+   false,
+   false
+  ]
+ },
+ "20261003_131934_chipselect_team_task_tier3_star3_left_blue_real.jpg": {
+  "centers": [
+   [
+    1028.0,
+    577.0
+   ],
+   [
+    1939.0,
+    577.0
+   ],
+   [
+    2850.0,
+    578.0
+   ]
+  ],
+  "name_scores": [
+   1.0,
+   1.0,
+   0.8571428571428571
+  ],
+  "names": [
+   "医疗箱-紧急治疗",
+   "维生素药丸",
+   "银行卡-余额多"
+  ],
+  "partial": [
+   false,
+   false,
+   false
+  ],
+  "probabilities": [
+   25,
+   50,
+   25
+  ],
+  "problems": [],
+  "rarity": [
+   "蓝",
+   "紫",
+   "紫"
+  ],
+  "raw": [
+   "医疗箱-紧急治疗",
+   "维生素药丸",
+   "银行卡一余额多"
+  ],
+  "reread": false,
+  "rerolls": 4,
+  "selected": null,
+  "team": true,
+  "unit": 911.0,
+  "unrecorded": [
+   false,
+   false,
+   false
+  ]
+ },
+ "20261003_131952_chipselect_shop_star3_al_real.jpg": {
+  "centers": [
+   [
+    1029.0,
+    577.0
+   ],
+   [
+    1939.0,
+    579.0
+   ],
+   [
+    2854.5,
+    577.5
+   ]
+  ],
+  "name_scores": [
+   1.0,
+   1.0,
+   1.0
+  ],
+  "names": [
+   "探天卫星",
+   "摩托头盔-中级",
+   "书签"
+  ],
+  "partial": [
+   false,
+   false,
+   false
+  ],
+  "probabilities": [
+   25,
+   50,
+   25
+  ],
+  "problems": [],
+  "rarity": [
+   "金",
+   "紫",
+   "蓝"
+  ],
+  "raw": [
+   "探天卫星",
+   "摩托头盔-中级",
+   "书签"
+  ],
+  "reread": false,
+  "rerolls": 4,
+  "selected": null,
+  "team": false,
+  "unit": 912.75,
+  "unrecorded": [
+   false,
+   false,
+   false
+  ]
+ }
+}

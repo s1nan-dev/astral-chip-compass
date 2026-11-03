@@ -1,0 +1,28 @@
+{
+ "version": 1,
+ "last_used": {
+  "102": "a1"
+ },
+ "schemes": [
+  {
+   "id": "a1",
+   "hero_id": 102,
+   "hero": "芬妮",
+   "name": "旧格式",
+   "author": "",
+   "note": "",
+   "schools": [
+    "治愈"
+   ],
+   "only_schools": true,
+   "chips": [
+    {
+     "code": 34,
+     "name": "缓冲盾牌",
+     "tier": "core"
+    }
+   ],
+   "copied_from_default": ""
+  }
+ ]
+}

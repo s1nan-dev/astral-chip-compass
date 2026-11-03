@@ -1,0 +1,515 @@
+{
+ "source": "logs/games/20261004-132535.jsonl",
+ "note": "10-04 真人局（芬妮，异变图书馆，噩梦）两段识别读数，按帧分组；select 为三选一的识别结果。13:36 那次三选一选中的筹码只在不写记录的快速复查里看到，按随后的 picked 记录补在最后一帧上",
+ "start": {
+  "hero": "芬妮",
+  "star": 1,
+  "round": 3,
+  "map": "异变图书馆",
+  "owned": [
+   "银行卡-余额少"
+  ],
+  "progress": 3,
+  "difficulty": "噩梦",
+  "teammates": [
+   {
+    "hero": "姬梦朝",
+    "bot": false
+   },
+   {
+    "hero": "照",
+    "bot": false
+   },
+   {
+    "hero": "邦妮",
+    "bot": false
+   }
+  ]
+ },
+ "frames": [
+  {
+   "time": "13:35:58.549",
+   "round": null
+  },
+  {
+   "time": "13:36:15.765",
+   "select": {
+    "names": [
+     "缓冲盾牌",
+     "电流核心",
+     "手持风扇-小"
+    ],
+    "raw": [
+     "缓冲盾牌",
+     "电流核心",
+     "手持风扇-小"
+    ],
+    "rerolls": 3,
+    "probabilities": [
+     60,
+     37,
+     3
+    ],
+    "selected": null
+   },
+   "round": 3,
+   "progress": [
+    3,
+    null
+   ]
+  },
+  {
+   "time": "13:36:18.905",
+   "select": {
+    "names": [
+     "缓冲盾牌",
+     "电流核心",
+     "手持风扇-小"
+    ],
+    "raw": [
+     "缓冲盾牌",
+     "电流核心",
+     "手持风扇-小"
+    ],
+    "rerolls": 3,
+    "probabilities": [
+     60,
+     37,
+     3
+    ],
+    "selected": 0
+   },
+   "round": 3,
+   "progress": [
+    3,
+    null
+   ]
+  },
+  {
+   "time": "13:36:22.120",
+   "round": 3,
+   "stars": [
+    1,
+    1.0
+   ],
+   "progress": [
+    3,
+    null
+   ]
+  },
+  {
+   "time": "13:36:25.919",
+   "round": 3,
+   "stars": [
+    1,
+    1.0
+   ],
+   "progress": [
+    3,
+    null
+   ]
+  },
+  {
+   "time": "13:36:41.527",
+   "round": 4,
+   "progress": [
+    4,
+    null
+   ]
+  },
+  {
+   "time": "13:36:45.113",
+   "round": 4,
+   "stars": [
+    1,
+    1.0
+   ],
+   "progress": [
+    4,
+    null
+   ]
+  },
+  {
+   "time": "13:36:48.943",
+   "round": 4,
+   "stars": [
+    1,
+    1.0
+   ],
+   "progress": [
+    4,
+    null
+   ]
+  },
+  {
+   "time": "13:36:52.921",
+   "round": 4,
+   "stars": [
+    1,
+    1.0
+   ],
+   "progress": [
+    4,
+    null
+   ]
+  },
+  {
+   "time": "13:36:56.796",
+   "round": 4,
+   "stars": [
+    1,
+    1.0
+   ],
+   "progress": [
+    4,
+    null
+   ]
+  },
+  {
+   "time": "13:37:00.820",
+   "round": 4,
+   "stars": [
+    1,
+    0.735
+   ],
+   "progress": [
+    4,
+    null
+   ]
+  },
+  {
+   "time": "13:37:04.611",
+   "round": 4,
+   "stars": [
+    1,
+    1.0
+   ],
+   "progress": [
+    4,
+    null
+   ]
+  },
+  {
+   "time": "13:37:08.496",
+   "round": 4,
+   "progress": [
+    4,
+    null
+   ]
+  },
+  {
+   "time": "13:37:12.231",
+   "round": 4,
+   "progress": [
+    4,
+    null
+   ]
+  },
+  {
+   "time": "13:37:15.152",
+   "round": 4,
+   "stars": [
+    1,
+    0.956
+   ],
+   "progress": [
+    4,
+    null
+   ]
+  },
+  {
+   "time": "13:37:18.907",
+   "round": null
+  },
+  {
+   "time": "13:37:23.396",
+   "round": null
+  },
+  {
+   "time": "13:37:26.537",
+   "round": null
+  },
+  {
+   "time": "13:37:31.570",
+   "round": 4,
+   "stars": [
+    1,
+    1.0
+   ],
+   "progress": [
+    4,
+    null
+   ]
+  },
+  {
+   "time": "13:37:34.721",
+   "round": 4,
+   "stars": [
+    2,
+    0.744
+   ],
+   "progress": [
+    4,
+    null
+   ]
+  },
+  {
+   "time": "13:37:36.584",
+   "select": {
+    "names": [
+     "银行卡-余额多",
+     "维生素药丸",
+     "银行卡-用不完"
+    ],
+    "raw": [
+     "银行卡-余额多",
+     "维生素药丸",
+     "银行卡-用不完"
+    ],
+    "rerolls": 4,
+    "probabilities": [
+     40,
+     45,
+     15
+    ],
+    "selected": null
+   }
+  },
+  {
+   "time": "13:37:37.769",
+   "round": 4,
+   "progress": [
+    4,
+    null
+   ]
+  },
+  {
+   "time": "13:37:39.718",
+   "select": {
+    "names": [
+     "银行卡-余额多",
+     "维生素药丸",
+     "银行卡-用不完"
+    ],
+    "raw": [
+     "银行卡一余额多",
+     "维生素药丸",
+     "银行卡-用不完"
+    ],
+    "rerolls": 4,
+    "probabilities": [
+     40,
+     45,
+     15
+    ],
+    "selected": 2
+   }
+  },
+  {
+   "time": "13:37:41.270",
+   "round": 4,
+   "stars": [
+    2,
+    1.0
+   ],
+   "progress": [
+    4,
+    null
+   ]
+  },
+  {
+   "time": "13:37:45.126",
+   "round": 4,
+   "stars": [
+    2,
+    1.0
+   ],
+   "progress": [
+    4,
+    null
+   ]
+  },
+  {
+   "time": "13:37:48.828",
+   "round": 4,
+   "stars": [
+    2,
+    1.0
+   ],
+   "progress": [
+    4,
+    null
+   ]
+  },
+  {
+   "time": "13:37:52.564",
+   "round": 4,
+   "stars": [
+    2,
+    1.0
+   ],
+   "progress": [
+    4,
+    null
+   ]
+  },
+  {
+   "time": "13:37:55.593",
+   "round": 4,
+   "stars": [
+    2,
+    1.0
+   ],
+   "progress": [
+    4,
+    null
+   ]
+  },
+  {
+   "time": "13:37:59.663",
+   "round": 4,
+   "stars": [
+    2,
+    1.0
+   ],
+   "progress": [
+    4,
+    null
+   ]
+  },
+  {
+   "time": "13:40:16.215",
+   "round": null
+  },
+  {
+   "time": "13:40:19.534",
+   "round": null
+  },
+  {
+   "time": "13:40:34.712",
+   "select": {
+    "names": [
+     "银行卡-余额多",
+     "ATM机",
+     "美工刀-初级"
+    ],
+    "raw": [
+     "银行卡-余额多",
+     "ATM机",
+     "美工刀-初级"
+    ],
+    "rerolls": 4,
+    "probabilities": [
+     40,
+     45,
+     15
+    ],
+    "selected": null
+   },
+   "round": 4,
+   "progress": [
+    4,
+    null
+   ]
+  },
+  {
+   "time": "13:40:37.815",
+   "select": {
+    "names": [
+     "银行卡-余额多",
+     "ATM机",
+     "美工刀-初级"
+    ],
+    "raw": [
+     "银行卡-余额多",
+     "ATM机",
+     "美工刀-初级"
+    ],
+    "rerolls": 4,
+    "probabilities": [
+     40,
+     45,
+     15
+    ],
+    "selected": 0
+   },
+   "round": 4,
+   "progress": [
+    4,
+    null
+   ]
+  },
+  {
+   "time": "13:40:41.396",
+   "round": 4,
+   "stars": [
+    2,
+    1.0
+   ],
+   "progress": [
+    4,
+    null
+   ]
+  },
+  {
+   "time": "13:40:45.194",
+   "round": 5,
+   "stars": [
+    2,
+    1.0
+   ],
+   "progress": [
+    5,
+    null
+   ]
+  },
+  {
+   "time": "13:40:49.021",
+   "round": 5,
+   "stars": [
+    2,
+    1.0
+   ],
+   "progress": [
+    5,
+    null
+   ]
+  },
+  {
+   "time": "13:40:52.847",
+   "round": 5,
+   "stars": [
+    2,
+    0.611
+   ],
+   "progress": [
+    5,
+    null
+   ]
+  },
+  {
+   "time": "13:40:56.635",
+   "round": 5,
+   "stars": [
+    2,
+    1.0
+   ],
+   "progress": [
+    5,
+    null
+   ]
+  },
+  {
+   "time": "13:40:59.787",
+   "round": 5,
+   "stars": [
+    2,
+    1.0
+   ],
+   "progress": [
+    5,
+    null
+   ]
+  }
+ ]
+}

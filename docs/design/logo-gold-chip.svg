@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-38 -38 76 76" width="256" height="256">
+<title>拾星助手 · 金色筹码标志</title>
+<defs>
+<path id="logo-ring" d="M-29.5,0a29.5,29.5 0 1,1 59,0a29.5,29.5 0 1,1 -59,0"/>
+</defs>
+<circle r="36" fill="#1d1f2b"/>
+<text font-size="5.6" fill="#a9aec0" font-family="Bahnschrift, 'Segoe UI', sans-serif" font-weight="600"><textPath href="#logo-ring" textLength="182" lengthAdjust="spacing">ASTRAL CHIP COMPASS · ASTRAL CHIP COMPASS ·</textPath></text>
+<circle r="24" fill="none" stroke="#f2b232" stroke-width="6"/>
+<path d="M0-12C1.2-4.2 4.2-1.2 12 0C4.2 1.2 1.2 4.2 0 12C-1.2 4.2-4.2 1.2-12 0C-4.2-1.2-1.2-4.2 0-12Z" fill="#ffd36e"/>
+</svg>

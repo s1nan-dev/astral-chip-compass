@@ -1,0 +1,17 @@
+RapidOCR 3.9.2 (rapidocr_lite, a trimmed copy modified by this project)
+
+The text recognition component shipped in this distribution is rapidocr_lite: a
+trimmed copy of RapidAI's RapidOCR 3.9.2, modified for this project and compiled
+into the executable. Copyright (c) RapidAI. All rights reserved.
+Licensed under the Apache License, Version 2.0 (see Apache-2.0.txt).
+Source: https://github.com/RapidAI/RapidOCR
+The code in rapidocr_lite was changed from RapidOCR 3.9.2: the parameter reader
+uses a plain Python config instead of OmegaConf/PyYAML, the ONNX Runtime engine
+is the only inference backend, model download / command line / visualization /
+per-character box code was removed, image loading only takes arrays, logging
+uses the standard library, and the polygon unclip uses a pure Python area and
+perimeter instead of Shapely. The detection, direction classification and
+recognition core (pre/post-processing and inference) is unchanged. Per section
+4(b) of the Apache License 2.0, each modified file in the source code of this
+tool carries a notice of the changes, and rapidocr_lite/NOTICE.md in the source
+code lists them file by file.

@@ -1,0 +1,9 @@
+# 换行符照原样存、不转换（只在 Windows 上开发）；图片、模型、压缩包按二进制处理
+* -text
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.ico binary
+*.onnx binary
+*.zip binary

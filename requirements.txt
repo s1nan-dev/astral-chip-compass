@@ -1,0 +1,69 @@
+# 拾星助手运行所需的全部库（含间接依赖），版本取自开发环境的 .venv（Python 3.14）。
+# 这是完整的锁定清单，安装时加 --no-deps：pip 只装这里列出的版本，不再自己解析依赖。
+#
+# 哪些进发行版（tools/build_release.py 打包时按它的排除表裁掉用不到的；对着编译出的 dist 核过）：
+#   进：PySide6_Essentials、shiboken6、numpy 和 opencv-python-headless（打包环境里换成 tools/build_cv.py 编的精简版，
+#       见 docs/软件维护说明.md「打包发行版」）、onnxruntime、mss、pyclipper。文字识别用的是项目里的精简版 rapidocr_lite，
+#       识别模型随发行版放在 app\models。
+#   不进、只在开发时用：原版 rapidocr 和它带进来的 omegaconf、antlr4-python3-runtime、PyYAML、shapely、pillow、tqdm、
+#       colorama、colorlog、six、requests 一家（urllib3、certifi、charset-normalizer、idna）。原版 rapidocr 是识别模型
+#       文件的来源（开发版从它的包里找模型，打包时拷进 app\models），也是比对精简版识别结果时的基准；
+#       pillow 另给工具和测试用。onnxruntime 带进来的 flatbuffers、packaging、protobuf、typing_extensions 运行时用不到，
+#       也不进发行版。
+#
+# 为什么要 --no-deps：rapidocr 的元数据要求带图形界面的 opencv-python，而本项目只用
+# opencv-python-headless（不弹 OpenCV 自己的窗口）。两者共用同一个 cv2 目录，同时装会互相覆盖。
+# 按依赖自动解析一定会装上 opencv-python，所以改为按这份清单逐个安装。
+# 这样装好后 pip check 会提示「rapidocr 需要 opencv-python」，属预期，可以忽略。
+#
+# 换电脑重装（PowerShell，在项目根目录下）：
+#   New-Item -ItemType Directory -Force .tmp | Out-Null
+#   $env:TEMP = "$PWD\.tmp"; $env:TMP = $env:TEMP; $env:PIP_CACHE_DIR = "$PWD\.tmp\pip-cache"
+#   py -3.14 -m venv .venv
+#   .venv\Scripts\python -m pip install --no-deps -r requirements.txt
+# 这三个环境变量让 pip 的临时文件和缓存留在项目里，不落到项目文件夹外。
+# .tmp 要先建好：TEMP 指向不存在的目录时，Python 会改用系统临时目录。
+# 也可以在 .venv\pip.ini 里把缓存固定到 .tmp\pip-cache（新建 .venv 后要重放一份）；
+# 临时目录 pip.ini 管不了，只认 TEMP / TMP，每次装库前都要设。
+#
+# 已有的 .venv 里如果装过 opencv-python（不加 --no-deps 装 rapidocr 时会带进来），在没有程序占用 cv2 时执行：
+#   .venv\Scripts\python -m pip uninstall -y opencv-python
+#   .venv\Scripts\python -m pip install --force-reinstall --no-deps opencv-python-headless==5.0.0.93
+# （先卸 opencv-python 会删掉共用的 cv2 目录，所以第二步必须紧跟着重装 headless 版。）
+#
+# 打包发行版另需 requirements-build.txt（Nuitka 和 zig 编译器），见 tools/build_release.py。
+
+# ---- 直接依赖 ----
+numpy==2.5.3
+opencv-python-headless==5.0.0.93
+mss==10.2.0
+rapidocr==3.9.2
+onnxruntime==1.30.0
+# rapidocr 的依赖；装 rapidocr 时曾带进过旧的版本，文字识别跑不起来，所以单独固定
+omegaconf==2.3.1
+PySide6_Essentials==6.11.2
+
+# ---- 间接依赖 ----
+# PySide6
+shiboken6==6.11.2
+# rapidocr
+pyclipper==1.4.0
+six==1.17.0
+shapely==2.1.2
+PyYAML==6.0.3
+pillow==12.3.0
+tqdm==4.70.1
+colorama==0.4.6
+requests==2.34.2
+certifi==2026.7.22
+charset-normalizer==3.5.2
+idna==3.20
+urllib3==2.8.0
+colorlog==6.12.0
+# omegaconf
+antlr4-python3-runtime==4.9.3
+# onnxruntime
+flatbuffers==25.12.19
+packaging==26.3
+protobuf==7.36.2
+typing_extensions==4.16.0

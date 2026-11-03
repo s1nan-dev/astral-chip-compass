@@ -1,0 +1,35 @@
+{
+ "version": 3,
+ "profiles": [
+  1,
+  2
+ ],
+ "last_used": {
+  "102": "n1"
+ },
+ "schemes": [
+  {
+   "id": "n1",
+   "hero_id": 102,
+   "hero": "芬妮",
+   "name": "新版本的",
+   "new_field": {
+    "x": 1
+   },
+   "chips": [
+    {
+     "code": 34,
+     "name": "缓冲盾牌",
+     "tier": "core",
+     "pinned": true
+    }
+   ]
+  },
+  {
+   "id": "n2",
+   "hero_id": 102,
+   "hero": "芬妮",
+   "name": 5
+  }
+ ]
+}

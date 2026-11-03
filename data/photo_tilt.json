@@ -1,0 +1,8 @@
+{
+ "note": "对局左下角斜着摆的角色照（照游戏内核对）。photos 的键是角色照的文件名（识别图片清单 assets_manifest.json 里 dir 为 heroes 的 file；不用下载的健全版，即 sfw_skip.json 里列的，也照样写：已经下过的照常转过来建模板），值是角度（-45～45 度）：认角色时先把整张角色照绕脸部区域（HERO_FACE）的中心转这么多度，再取脸部比对；正数为逆时针，同 OpenCV 的 getRotationMatrix2D。没列出的角色照照原样比对，以后再有斜着摆的皮肤，在 photos 里加一项。",
+ "photos": {
+  "UT_Hero_RolePhoto_103_01.png": 17,
+  "UT_Hero_RolePhoto_103_01_sfw.png": 17.1,
+  "UT_Hero_RolePhoto_105_01.png": -42.3
+ }
+}

@@ -1,0 +1,68 @@
+name: 问题反馈
+description: 识别出错、推荐明显不对、程序打不开或运行中消失等
+title: "[问题反馈] "
+labels: ["问题反馈"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        谢谢反馈。请尽量填全，尤其是诊断包——它能省下很多来回。
+
+        诊断包的导出方法见[使用说明](https://s1nan-dev.github.io/astral-chip-compass/#反馈问题)的「反馈问题」一节。
+  - type: input
+    id: version
+    attributes:
+      label: 版本号
+      description: 「关于」窗口里写的那个，例如 1.0.0。
+      placeholder: 1.0.0
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: 出了什么问题
+      options:
+        - 识别出错（筹码、角色、地图、轮次、星数等读错）
+        - 推荐明显不对
+        - 程序打不开或运行中突然消失
+        - 其他
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows 版本
+      description: 例如 Windows 11 23H2、Windows 10 22H2。
+    validations:
+      required: true
+  - type: input
+    id: screen
+    attributes:
+      label: 屏幕分辨率和游戏窗口大小
+      description: 屏幕分辨率和缩放（例如 2560×1440、150%），以及游戏窗口的逻辑大小（例如 1920×1080 窗口化、全屏）。
+    validations:
+      required: true
+  - type: textarea
+    id: how
+    attributes:
+      label: 怎么出现的
+      description: 哪一局（地图、角色）、第几次筹码三选一、当时在做什么；怎么复现。
+    validations:
+      required: true
+  - type: textarea
+    id: diagnosis
+    attributes:
+      label: 诊断包
+      description: |
+        把导出的诊断包文件夹压缩后拖进这里（点击标题栏的「全部展开」按钮，再点击底栏的「设置」按钮，在打开的窗口中点击「导出诊断」按钮）。可以出问题时导出，也可以打完这一局再导出：诊断包包含本局和上一局从头到尾的识别记录和推荐日志。
+        程序打不开或运行中消失时，附上 app\.tmp 文件夹里的崩溃记录 crash.txt、crash.old.txt（有哪个发哪个）和错误记录 overlay_err.txt。
+      placeholder: 把诊断包压缩包拖到这里
+    validations:
+      required: false
+  - type: textarea
+    id: extra
+    attributes:
+      label: 补充说明
+      description: 其他想说明的（例如结算画面、任务栏、选角界面的截图，如果有/没有做过的操作）。
+    validations:
+      required: false

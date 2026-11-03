@@ -1,0 +1,29 @@
+# 虚拟环境、临时文件、打包产物
+.venv/
+.tmp/
+dist/
+build/
+__pycache__/
+*.py[co]
+*.part
+
+# 开发版的用户数据：设置、筹码方案（含 .bak、.tmp、.broken-时间、退回文件和 .used-时间）、推荐日志、诊断包
+/state.json*
+/state.fallback.json*
+/schemes.json*
+/schemes.fallback.json*
+/logs/
+/reports/
+
+# 截图样本、生成的界面预览、测试截图：体积大、有玩家昵称，只留在本机和备份里
+/samples/
+/docs/previews/
+/tests/data/*
+!/tests/data/replay_20261004_switch.json
+!/tests/data/baseline/
+
+# 运行时按 data/assets_manifest.json 下载的识别图片（来自吉星派对 WIKI，版权归游戏方，不进仓库）
+/assets/*
+!/assets/stars/
+/assets/stars/*
+!/assets/stars/star_bar.png

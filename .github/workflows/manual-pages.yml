@@ -1,0 +1,60 @@
+# 把 docs/使用说明.md 生成的「使用说明.html」发布到 GitHub Pages。
+# 网页和发行版里的那一份逐字节相同：都调用 tools/manual_html.py 的 build_page，只用标准库，GitHub 的机器上不用装本项目的依赖。
+name: 使用说明网页版
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      # 使用说明的文件名是中文：按通配写 docs 下的 .md，不靠路径过滤去认中文文件名；改到别的说明时多发布一次，网页不变
+      - "docs/*.md"
+      - "docs/manual/**"
+      - "README.md"
+      - "tools/manual_html.py"
+      - "advisor/version.py"
+      - "data/meta.json"
+      - ".github/workflows/manual-pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 同一时间只跑一个发布：后推的等前一个做完，不打断正在进行的发布
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build:
+    # 只在 s1nan-dev/astral-chip-compass 公开以后发布（网页版就是它的 GitHub Pages）：复刻的仓库、同一份代码的其他副本，
+    # 以及仓库还没公开的时候都没有打开 GitHub Pages，在那里跑只会失败；这一步跳过时，deploy 跟着跳过
+    if: github.repository == 's1nan-dev/astral-chip-compass' && !github.event.repository.private
+    runs-on: ubuntu-latest
+    steps:
+      - name: 取出仓库
+        uses: actions/checkout@v5
+      - name: 安装 Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+      - name: 生成使用说明网页
+        run: python tools/manual_html.py --out _site/index.html
+      - name: 配置 GitHub Pages
+        uses: actions/configure-pages@v6
+      - name: 上传网页
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: 发布到 GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5

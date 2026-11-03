@@ -1,0 +1,181 @@
+{
+ "note": "缺角色照的皮肤从卡面原画现裁角色照的裁法（照游戏内核对）。crops 的键是角色照的文件名（识别图片清单 assets_manifest.json 里 dir 为 heroes 的 file），card 是 BWIKI 上同一编号、同一皮肤的卡面原画（UT_Hero_Card_*），affine 是 2×3 仿射矩阵（按行写 6 个数）：作用在卡面的归一化坐标 (x/宽, y/高, 1) 上，得到角色照（240×340）的像素坐标，用 cv2.warpAffine 时第一列除以卡面的宽、第二列除以卡面的高。生成识别图片清单时裁法照抄进清单（发行版不带这个文件；不用下载的健全版，即 sfw_skip.json 里列的，不进清单，裁法照留），首次运行时下载卡面、在本机裁出角色照，卡面用完就删。改了这里要重裁开发目录里的角色照、重新生成清单；裁法转了角度的（对局里斜着摆），photo_tilt.json 里要有同样角度的一项。新皮肤的裁法怎么推算、改完跑什么，见软件维护说明「出了新皮肤、WIKI 上没有角色照」。",
+ "crops": {
+  "UT_Hero_RolePhoto_102_01_sfw.png": {
+   "card": "UT_Hero_Card_102_01_sfw.png",
+   "affine": [620.259057, -0.11831, -187.312197, 0.085896, 854.319078, 20.378439]
+  },
+  "UT_Hero_RolePhoto_103_01_sfw.png": {
+   "card": "UT_Hero_Card_103_01_sfw.png",
+   "affine": [584.72823, -262.036095, -81.66437, 179.663362, 852.816624, -49.650343]
+  },
+  "UT_Hero_RolePhoto_103_sfw.png": {
+   "card": "UT_Hero_Card_103_sfw.png",
+   "affine": [500.465852, -0.127769, -171.282567, 0.085301, 749.633957, 41.154316]
+  },
+  "UT_Hero_RolePhoto_104_01_sfw.png": {
+   "card": "UT_Hero_Card_104_01_sfw.png",
+   "affine": [733.926422, -0.19957, -228.479854, 0.172002, 851.559228, 28.924404]
+  },
+  "UT_Hero_RolePhoto_105_01.png": {
+   "card": "UT_Hero_Card_105_01.png",
+   "affine": [510.254744, 595.661198, -401.079793, -463.482777, 655.771837, 191.784277]
+  },
+  "UT_Hero_RolePhoto_106_02.png": {
+   "card": "UT_Hero_Card_106_02.png",
+   "affine": [638.992687, -0.091437, -260.143133, 0.065347, 894.112901, -41.441637]
+  },
+  "UT_Hero_RolePhoto_106_02_sfw.png": {
+   "card": "UT_Hero_Card_106_02_sfw.png",
+   "affine": [640.735562, -0.420228, -261.745489, 0.300323, 896.551626, -43.77405]
+  },
+  "UT_Hero_RolePhoto_107_02_sfw.png": {
+   "card": "UT_Hero_Card_107_02_sfw.png",
+   "affine": [581.320134, 0.113015, -226.490814, -0.081742, 803.719125, -39.140663]
+  },
+  "UT_Hero_RolePhoto_107_03_sfw.png": {
+   "card": "UT_Hero_Card_107_03_sfw.png",
+   "affine": [879.851496, 0.020288, -280.091978, -0.017808, 1002.362464, -58.061458]
+  },
+  "UT_Hero_RolePhoto_107_Max_sfw.png": {
+   "card": "UT_Hero_Card_107_Max_sfw.png",
+   "affine": [426.81627, 0.022174, -93.710375, -0.01364, 693.839257, -71.514234]
+  },
+  "UT_Hero_RolePhoto_108.png": {
+   "card": "UT_Hero_Card_108.png",
+   "affine": [493.370789, -0.086395, -93.837461, 0.037841, 1126.417326, -91.021648]
+  },
+  "UT_Hero_RolePhoto_108_01_sfw.png": {
+   "card": "UT_Hero_Card_108_01_sfw.png",
+   "affine": [673.963134, 0.0, -209.331797, 0.0, 1278.033794, -144.738863]
+  },
+  "UT_Hero_RolePhoto_108_02_sfw.png": {
+   "card": "UT_Hero_Card_108_02_sfw.png",
+   "affine": [626.514953, 0.067934, -158.944656, -0.052725, 807.24042, -59.857634]
+  },
+  "UT_Hero_RolePhoto_108_Max_sfw.png": {
+   "card": "UT_Hero_Card_108_Max_sfw.png",
+   "affine": [903.972357, 0.068106, -402.869327, -0.062593, 983.596865, -87.617575]
+  },
+  "UT_Hero_RolePhoto_108_sfw.png": {
+   "card": "UT_Hero_Card_108_sfw.png",
+   "affine": [496.45974, -0.213718, -104.056955, 0.093608, 1133.469725, -89.756824]
+  },
+  "UT_Hero_RolePhoto_112_02_sfw.png": {
+   "card": "UT_Hero_Card_112_02_sfw.png",
+   "affine": [541.128153, -0.036341, -192.369867, 0.018446, 1066.068711, -20.51197]
+  },
+  "UT_Hero_RolePhoto_112_03.png": {
+   "card": "UT_Hero_Card_112_03.png",
+   "affine": [832.263207, 0.040919, -198.356169, -0.035463, 960.303701, -39.961818]
+  },
+  "UT_Hero_RolePhoto_112_03_sfw.png": {
+   "card": "UT_Hero_Card_112_03_sfw.png",
+   "affine": [827.474747, -0.016273, -197.061301, 0.014104, 954.778555, -39.671891]
+  },
+  "UT_Hero_RolePhoto_113_03_sfw.png": {
+   "card": "UT_Hero_Card_113_03_sfw.png",
+   "affine": [789.082798, -0.322468, -299.007305, 0.234522, 1084.988847, -45.504251]
+  },
+  "UT_Hero_RolePhoto_113_04.png": {
+   "card": "UT_Hero_Card_113_04.png",
+   "affine": [762.832993, -0.105461, -245.242397, 0.092639, 868.42287, -47.15134]
+  },
+  "UT_Hero_RolePhoto_113_Max_sfw.png": {
+   "card": "UT_Hero_Card_113_Max_sfw.png",
+   "affine": [678.977327, -0.066965, -251.109321, 0.062926, 722.560331, -47.202734]
+  },
+  "UT_Hero_RolePhoto_114_01_sfw.png": {
+   "card": "UT_Hero_Card_114_01_sfw.png",
+   "affine": [495.136525, -0.083396, -128.299369, 0.062239, 663.443802, 4.857742]
+  },
+  "UT_Hero_RolePhoto_114_03_sfw.png": {
+   "card": "UT_Hero_Card_114_03_sfw.png",
+   "affine": [569.500199, 0.016446, -129.721101, -0.009707, 964.917367, 24.119942]
+  },
+  "UT_Hero_RolePhoto_114_04_sfw.png": {
+   "card": "UT_Hero_Card_114_04_sfw.png",
+   "affine": [776.695205, 0.162618, -267.375862, -0.158858, 795.078524, -6.096488]
+  },
+  "UT_Hero_RolePhoto_114_sfw.png": {
+   "card": "UT_Hero_Card_114_sfw.png",
+   "affine": [665.810146, 0.009917, -173.128752, -0.006383, 1034.38362, 15.850357]
+  },
+  "UT_Hero_RolePhoto_116_01_sfw.png": {
+   "card": "UT_Hero_Card_116_01_sfw.png",
+   "affine": [587.718064, -0.615666, -191.740029, 0.310533, 1165.214945, -15.18509]
+  },
+  "UT_Hero_RolePhoto_116_02_sfw.png": {
+   "card": "UT_Hero_Card_116_02_sfw.png",
+   "affine": [673.175908, -0.232413, -219.687228, 0.137685, 1136.320932, -115.707553]
+  },
+  "UT_Hero_RolePhoto_117_02_sfw.png": {
+   "card": "UT_Hero_Card_117_02_sfw.png",
+   "affine": [569.845222, -0.091245, -190.277494, 0.067381, 771.665405, -21.354295]
+  },
+  "UT_Hero_RolePhoto_117_04.png": {
+   "card": "UT_Hero_Card_117_04.png",
+   "affine": [748.572994, 0.041444, -249.008605, -0.025518, 1215.763276, -159.245835]
+  },
+  "UT_Hero_RolePhoto_117_04_sfw.png": {
+   "card": "UT_Hero_Card_117_04_sfw.png",
+   "affine": [752.386635, 0.0, -252.010281, 0.0, 1221.957041, -158.490912]
+  },
+  "UT_Hero_RolePhoto_119_03.png": {
+   "card": "UT_Hero_Card_119_03.png",
+   "affine": [1245.53701, 0.512154, -482.606499, -0.464389, 1373.645555, -236.809712]
+  },
+  "UT_Hero_RolePhoto_119_03_sfw.png": {
+   "card": "UT_Hero_Card_119_03_sfw.png",
+   "affine": [1235.592133, 0.371613, -477.751767, -0.336955, 1362.677808, -235.183507]
+  },
+  "UT_Hero_RolePhoto_120_01_sfw.png": {
+   "card": "UT_Hero_Card_120_01_sfw.png",
+   "affine": [1006.889194, -0.106622, -402.91314, 0.083663, 1283.20415, -267.325637]
+  },
+  "UT_Hero_RolePhoto_120_02_sfw.png": {
+   "card": "UT_Hero_Card_120_02_sfw.png",
+   "affine": [869.943695, 0.135248, -183.352364, -0.148275, 793.514533, -55.050826]
+  },
+  "UT_Hero_RolePhoto_121_01_sfw.png": {
+   "card": "UT_Hero_Card_121_01_sfw.png",
+   "affine": [405.539531, -0.093092, -129.210601, 0.039745, 949.873341, 22.766257]
+  },
+  "UT_Hero_RolePhoto_121_03.png": {
+   "card": "UT_Hero_Card_121_03.png",
+   "affine": [1333.634368, -0.105116, -595.21926, 0.090923, 1541.81144, -224.000581]
+  },
+  "UT_Hero_RolePhoto_121_03_sfw.png": {
+   "card": "UT_Hero_Card_121_03_sfw.png",
+   "affine": [1334.793839, 0.210415, -594.807329, -0.182004, 1543.151901, -225.631396]
+  },
+  "UT_Hero_RolePhoto_121_Max_sfw.png": {
+   "card": "UT_Hero_Card_121_Max_sfw.png",
+   "affine": [495.04624, -0.362238, -133.672695, 0.177191, 1012.040342, -0.660992]
+  },
+  "UT_Hero_RolePhoto_121_sfw.png": {
+   "card": "UT_Hero_Card_121_sfw.png",
+   "affine": [826.324501, 0.115104, -258.379341, -0.083624, 1137.388921, -25.75177]
+  },
+  "UT_Hero_RolePhoto_123_01_sfw.png": {
+   "card": "UT_Hero_Card_123_01_sfw.png",
+   "affine": [744.614447, 0.086658, -404.448761, -0.090426, 713.588845, -11.338416]
+  },
+  "UT_Hero_RolePhoto_123_02.png": {
+   "card": "UT_Hero_Card_123_02.png",
+   "affine": [991.170239, 0.045144, -421.609716, -0.033787, 1324.313569, -191.207164]
+  },
+  "UT_Hero_RolePhoto_123_sfw.png": {
+   "card": "UT_Hero_Card_123_sfw.png",
+   "affine": [557.495061, -0.175857, -181.724491, 0.107492, 912.06192, 22.822161]
+  },
+  "UT_Hero_RolePhoto_127_01_sfw.png": {
+   "card": "UT_Hero_Card_127_01_sfw.png",
+   "affine": [644.484493, 0.001092, -194.686729, -0.000687, 1025.103958, 27.229659]
+  },
+  "UT_Hero_RolePhoto_128_Max_sfw.png": {
+   "card": "UT_Hero_Card_128_Max_sfw.png",
+   "affine": [482.57556, 0.084782, -94.185793, -0.041126, 994.848078, -8.796526]
+  }
+ }
+}

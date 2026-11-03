@@ -1,0 +1,15 @@
+# 打包发行版所需的工具（只在打包时用，不进发行版）。和 requirements.txt 一样用 --no-deps 安装。
+#
+# Nuitka 4.2 正式支持 Python 3.14。C 编译器用 PyPI 上的 ziglang（zig 自带 clang 和 Windows 的 C 运行库头文件），
+# 装在虚拟环境里即可，不需要在系统里安装 Visual Studio 或 MinGW。
+# tools/build_release.py --setup 会在 .tmp\build-venv 建一个打包专用环境，按这两份清单安装。
+# 这里锁定的 ziglang 就是编真正的程序（Nuitka）和根目录启动程序用的那一版：build_release.py 的 build_env 把它放在
+# PATH 最前，Nuitka 不再自己下最新版。换版本时一起改 advisor/version.py 的 THIRD_PARTY、THIRD_PARTY_NOTICES.md 和
+# zig 的许可证说明（再运行 --licenses）：编译前的版本核对会查这几处。
+Nuitka==4.2.2
+ziglang==0.16.0
+# 压缩发行版用的 Deflate 编码器（libdeflate 的绑定）：zip 里每个文件记的压缩方法号仍是 8（Deflate），只是编码器换成
+# libdeflate 的最高级（12），压缩包比 zlib 的 9 级小约 2.4%。只在打包时用，不随发行版发布（不进 requirements.txt、
+# 不加第三方声明）：tools/build_release.py 的 make_zip 用 deflate.deflate_compress，找不到这个包时会报错并说明怎么装，
+# 不悄悄退回 zlib。
+deflate==0.9.0

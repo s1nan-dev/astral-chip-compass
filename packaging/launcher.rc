@@ -1,0 +1,39 @@
+// 启动程序（packaging/launcher.c）的资源：图标、清单和版本信息，和真正的程序（Nuitka 编出来的 app\ACC.exe）一致；
+// 内部名称、原始文件名是启动程序自己的文件名。
+// 版本号、产品名、文件说明、版权由 tools/build_release.py 按 advisor/version.py 生成 launcher_version.h（编译时
+// 放在临时文件夹里，用 /i 指过去），这里不写死；不写公司（见 build_release.py 的 version_strings）。文件是 UTF-8。
+#pragma code_page(65001)
+#include "launcher_version.h"
+
+LANGUAGE 0, 0 // 语言中立，同 Nuitka 写的资源
+
+1 ICON "app.ico"
+1 24 "launcher.manifest" // 24 = RT_MANIFEST，1 = 程序自己的清单
+
+1 VERSIONINFO
+FILEVERSION ACC_VERSION_NUMS
+PRODUCTVERSION ACC_VERSION_NUMS
+FILEFLAGSMASK 0x3F
+FILEFLAGS 0x0
+FILEOS 0x4      // VOS__WINDOWS32
+FILETYPE 0x1    // VFT_APP
+FILESUBTYPE 0x0
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "000004b0" // 语言中立、Unicode，同 Nuitka 写的
+        BEGIN
+            VALUE "FileDescription", ACC_DESCRIPTION
+            VALUE "FileVersion", ACC_VERSION_TEXT
+            VALUE "InternalName", ACC_INTERNAL_NAME
+            VALUE "LegalCopyright", ACC_COPYRIGHT
+            VALUE "OriginalFilename", ACC_ORIGINAL_FILENAME
+            VALUE "ProductName", ACC_PRODUCT
+            VALUE "ProductVersion", ACC_VERSION_TEXT
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0, 1200
+    END
+END

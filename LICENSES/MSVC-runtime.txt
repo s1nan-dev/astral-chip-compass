@@ -1,0 +1,11 @@
+Microsoft Visual C++ runtime files
+
+msvcp140.dll, msvcp140_1.dll, msvcp140_2.dll, vcruntime140.dll and
+vcruntime140_1.dll in this folder are Microsoft Visual C++ redistributable
+runtime files, all from the same release (14.44). They are redistributed
+unmodified, exactly as shipped inside the PySide6 wheel, under the Microsoft
+Visual Studio distributable-code terms:
+https://learn.microsoft.com/visualstudio/releases/2022/redistribution
+
+程序目录里已带有所需的运行库文件（同一套，14.44 版）。如果启动时仍提示缺少 msvcp140.dll 或 vcruntime140.dll，
+请安装微软官方的「Microsoft Visual C++ 可再发行程序包（x64）」：https://aka.ms/vs/17/release/vc_redist.x64.exe

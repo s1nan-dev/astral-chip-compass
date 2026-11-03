@@ -1,0 +1,47 @@
+{
+ "version": 2,
+ "future": {
+  "a": [
+   1,
+   2
+  ]
+ },
+ "last_used": {
+  "999": "ghost",
+  "102": "f1"
+ },
+ "schemes": [
+  {
+   "id": "f1",
+   "hero_id": 102,
+   "hero": "芬妮",
+   "name": "甲",
+   "color": "red",
+   "schools": [
+    "治愈",
+    "新流派"
+   ],
+   "chips": [
+    {
+     "code": 34,
+     "name": "缓冲盾牌",
+     "tier": "core",
+     "pinned": true
+    }
+   ]
+  },
+  {
+   "id": "ghost",
+   "hero_id": 999,
+   "hero": "以后的角色",
+   "name": "乙",
+   "chips": [
+    {
+     "code": 120,
+     "name": "X",
+     "tier": "core"
+    }
+   ]
+  }
+ ]
+}

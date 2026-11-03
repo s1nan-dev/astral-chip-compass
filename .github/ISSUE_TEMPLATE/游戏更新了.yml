@@ -1,0 +1,46 @@
+name: 游戏更新了
+description: 游戏改了筹码、角色、地图、卡牌等，告诉维护的人
+title: "[游戏更新了] "
+labels: ["游戏更新了"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        发现游戏改了，就能顺手告诉维护的人；改资料时照[软件维护说明](https://github.com/s1nan-dev/astral-chip-compass/blob/main/docs/软件维护说明.md)「发生什么变更改哪里」里对应的那一类去改。
+  - type: input
+    id: when
+    attributes:
+      label: 游戏哪次更新
+      description: 版本号或更新日期，例如「1.4.0 更新」「2026-10-14 更新」。
+    validations:
+      required: true
+  - type: dropdown
+    id: what
+    attributes:
+      label: 改了什么
+      multiple: true
+      options:
+        - 筹码（效果、新增、改名或移除）
+        - 角色（技能、权重、新增）
+        - 地图（新增、限时地图上下线）
+        - 卡牌或道具
+        - 畸变组件
+        - 其他
+    validations:
+      required: true
+  - type: textarea
+    id: detail
+    attributes:
+      label: 具体内容
+      description: |
+        写清改了什么，例如「书签：效果牌伤害 +1 → +2」「新增筹码：××（效果：……）」「新地图：××（任务：……）」。
+        最好附游戏截图，或更新公告的链接。
+    validations:
+      required: true
+  - type: input
+    id: source
+    attributes:
+      label: 资料从哪里看到的
+      description: 游戏内、更新公告、wiki 页面等的链接或出处。
+    validations:
+      required: false

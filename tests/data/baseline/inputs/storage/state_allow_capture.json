@@ -1,0 +1,16 @@
+{
+ "hero": "芬妮",
+ "window_pos": [
+  300,
+  120
+ ],
+ "manual": false,
+ "hotkey": null,
+ "window_rel": [
+  0.7406,
+  0.0037,
+  "tr"
+ ],
+ "collapsed_cards": [],
+ "allow_capture": true
+}
