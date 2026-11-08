@@ -123,18 +123,47 @@ def hand_over_update() -> bool:
         return False
 
 
+def take_hidden_start() -> frozenset:
+    """软件内更新下好以后自动重启时悬浮窗收在托盘里的记号（hidden_start.take，run() 查过防多开以后、hand_over_update 以前
+    调用）：发行版里读走、删掉，返回这一次要收在托盘里启动的几张；没有、对不上时为空。开发版不读，返回空。出错时记进错误
+    记录，返回空（照常显示）。在 hand_over_update 以前读：这次启动转去换上次没换上的版本时，记号已经删了，换好以后照常显示。"""
+    import traceback
+
+    from .. import paths
+
+    if not paths.is_frozen():
+        return frozenset()
+    try:
+        from .. import version
+        from . import hidden_start
+
+        return hidden_start.take(paths.program_folder(), version.VERSION)
+    except Exception:  # noqa: BLE001  读不了就照常显示
+        log_error("读「更新后收在托盘里启动」的记号出错，照常显示悬浮窗", traceback.format_exc(), append=True)
+        return frozenset()
+
+
 def run() -> None:
     """python -m advisor.ui 的入口（发行版 ACC.exe 同样调用它）：启动悬浮窗，失败时写文件并弹窗，而不是悄无声息地退出。
 
     一开始先从环境变量里取走「悬浮窗出来了」的事件名（startup.take_ready_event），之后起的子进程继承不到。
 
     带 PREVIEW_ARG 启动的是正在运行的拾星助手为画皮肤缩略图另起的子进程：在查防多开之前分出去，画完就退出，出错也只写在
-    错误输出里（由主程序记进错误记录），不弹窗。
+    错误输出里（由主程序记进错误记录），不弹窗。它不读设置文件，界面语言照主进程放进环境变量的语言定（lang.init_from_env）。
+
+    带 --wait-pid 旧进程号启动的是设置窗口的「现在重开」起的新进程（advisor/ui/relaunch.py）：在查防多开之前先等旧进程
+    退出，最多 DEFAULT_WAIT_S 秒；等不到也照常往下，拿不到防多开的锁就和平时第二次双击一样。
 
     再查是否已有一个拾星助手在运行（single_instance.claim，开发版和发行版算同一个）：有就请它显示悬浮窗，本进程直接返回
     （退出码 0），不导入界面库，不弹窗、不写任何文件。查的时候出错不拦，照常启动。
 
-    发行版里，上一次下好、核对过的新版本还没换上时，起换版本程序、本进程直接返回（hand_over_update）；起不来照常启动。
+    发行版里，上一次下好、核对过的新版本还没换上时，起换版本程序、本进程直接返回（hand_over_update）；起不来照常启动。在这之前
+    读走软件内更新自动重启时留的「收在托盘里启动」的记号（take_hidden_start），交给悬浮窗（main 的 start_hidden）。
+
+    换上新版本这一步做完、导入界面模块以前定这个进程的界面语言（lang.init）：设置文件里选过的，没选过时按 Windows 的显示
+    语言。界面文字多是各模块导入时就拷走的常量，所以要在导入悬浮窗以前定。不能放到查防多开以前：找设置文件的位置时可能
+    把退回用的设置文件写回个人目录，马上要退出的第二个实例不能碰它（lang.py 的模块说明）。定的时候出错（设置文件坏得一读就
+    报错，例如嵌套太深的 JSON）不拦：按 Windows 的显示语言照常启动，坏文件由之后读设置的地方另存、拿备份恢复。
 
     之后打开崩溃记录（开发版；发行版的入口已经打开了），把发行版的入口去掉了的 Qt 环境变量记进错误记录，显示悬浮窗之前
     把识别要用的库加载一遍（startup.preload），再起悬浮窗。
@@ -146,9 +175,18 @@ def run() -> None:
 
     startup.take_ready_event()
     if PREVIEW_ARG in sys.argv[1:]:
+        from . import lang
+
+        lang.init_from_env()  # 子进程不读设置文件：照主进程放进环境变量的语言（lang.child_env）
         from .preview_child import child_main
 
         sys.exit(child_main())
+    from . import relaunch
+
+    waited = relaunch.waited_pid(sys.argv[1:])
+    if waited is not None:
+        # 「现在重开」起的新进程：先等旧进程退出（它还在写设置、放防多开的锁），等不到照常往下
+        relaunch.wait_for_exit(waited)
     try:
         from . import single_instance
 
@@ -156,15 +194,26 @@ def run() -> None:
             return
     except Exception:  # noqa: BLE001  查不了时不拦
         log_error("检查是否已有拾星助手在运行时出错，照常启动", traceback.format_exc(), append=True)
+    start_hidden = take_hidden_start()
     if hand_over_update():
         return
+    from . import lang
+
+    try:
+        lang.init()  # 导入界面模块以前定好界面语言（见上面的说明）
+    except Exception:  # noqa: BLE001  定不了时按 Windows 的显示语言照常启动（见上面的说明）
+        lang.CURRENT = lang.system_language()
+        log_error("读设置文件里的界面语言时出错，按 Windows 的显示语言启动", traceback.format_exc(), append=True)
     startup.open_crash_log()
     startup.log_dropped_env()
     try:
         from .overlay_parts.app import main
 
         startup.preload()
-        main()
+        if start_hidden:
+            main(start_hidden=start_hidden)  # 自动重启前收在托盘里的几张，这一次照旧收着启动
+        else:
+            main()
     except SystemExit as e:
         if isinstance(e, Exited) or e.code in (None, 0):
             raise

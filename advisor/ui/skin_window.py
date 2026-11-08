@@ -34,7 +34,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import unlock
-from . import chrome, decor, skin_preview, theme
+from . import chrome, decor, lang, skin_preview, theme
 from .glyphs import ICON_ABOUT, ICON_SKIN, draw_glyph
 from .widgets import GlyphBox, TextLabel, color
 from .theme import COMMON as C
@@ -152,7 +152,7 @@ class SkinTile(QAbstractButton):
         self.key = skin.key
         # 还没解锁：灰色剪影、名称写 LOCKED_NAME，点了没反应（窗口不接它的 clicked），鼠标移上去不变亮
         self.locked = not unlock.skin_open(skin.key)
-        label = LOCKED_NAME if self.locked else skin.label
+        label = LOCKED_NAME if self.locked else lang.t(skin.label)
         self.setText(label)
         self.setAccessibleName(label)
         self.setCursor(Qt.ArrowCursor if self.locked else Qt.PointingHandCursor)
@@ -887,3 +887,6 @@ class SkinWindow(SkinnedWindow, chrome.HideNotice, QDialog):
         # 显示时窗口已放到所在的屏幕上，按那块屏幕的可用高度再量一次
         self.fit_size()
         super().showEvent(event)
+
+
+lang.localize(globals())

@@ -172,14 +172,21 @@ class MainShutdownTest(unittest.TestCase):
         from advisor.ui import overlay
 
         main_mod = sys.modules[overlay_app.main.__module__]
-        order = []
+        order = self.order = []  # 用例可以往里记自己换掉的那几步，和这里记的排在一起看先后
         app = mock.Mock()
         app.exec.side_effect = lambda: order.append("exec") or code
         window = mock.MagicMock()
-        window.shutdown.side_effect = lambda: order.append("shutdown") or stopped
+
+        def shutdown(*args, **kwargs):
+            order.append("shutdown")
+            return stopped
+
+        window.shutdown.side_effect = shutdown
         recorder = mock.Mock()
         recorder.close.side_effect = lambda: order.append("recorder.close")
-        session = SimpleNamespace(eventlog=SimpleNamespace(recorder=recorder), save=lambda force=False: None)
+        session = SimpleNamespace(eventlog=SimpleNamespace(recorder=recorder), save=lambda force=False: None,
+                                  settings=SimpleNamespace(big_cores=False))
+        self.timer_class = mock.MagicMock()  # 假的定时器：这里的窗口是假的，当不了真定时器的父对象
 
         def terminate(n):
             order.append(f"terminate({n})")
@@ -188,6 +195,7 @@ class MainShutdownTest(unittest.TestCase):
         with mock.patch.object(main_mod, "build", return_value=(app, window, session, threading.Lock())), \
                 mock.patch.object(main_mod, "Watcher", return_value=mock.MagicMock()), \
                 mock.patch.object(main_mod, "Hotkey", return_value=mock.MagicMock()), \
+                mock.patch.object(main_mod, "QTimer", self.timer_class), \
                 mock.patch.object(main_mod, "expected_capture", return_value="window"), \
                 mock.patch.object(main_mod.Services, "load", return_value=None), \
                 mock.patch.object(si, "listen", return_value=listener or mock.MagicMock()), \
@@ -208,6 +216,49 @@ class MainShutdownTest(unittest.TestCase):
         self.assertEqual(raised.code, 0)
         self.assertEqual(order, ["exec", "shutdown", "recorder.close"])  # 不直接结束进程
         self.assertEqual(errors.entries(), [])
+
+    def test_usage_timer(self):
+        """main() 先记一次占用的基准，再在第一张悬浮窗上起一个每分钟一次的粗定时器（不放进 build()，两开时也只有这一份）；到点时
+        把识别活动、手动模式、暂停状态一起记下，取这几项出错时占用照记。"""
+        from PySide6.QtCore import Qt
+
+        capture_errors(self)
+        main_mod = sys.modules[overlay_app.main.__module__]
+        with mock.patch.object(main_mod.usage, "tick") as tick:
+            raised, _, window = self.run_main()
+            self.assertIsInstance(raised, SystemExit)
+            tick.assert_called_once_with()
+            self.timer_class.assert_called_once_with(window)
+            timer = self.timer_class.return_value
+            timer.setInterval.assert_called_once_with(main_mod.usage.TICK_S * 1000)
+            timer.setTimerType.assert_called_once_with(Qt.VeryCoarseTimer)
+            timer.start.assert_called_once_with()
+            tick.reset_mock()
+            window.follower.activity, window.manual, window.paused = "nogame", True, False
+            timer.timeout.connect.call_args.args[0]()  # 到点
+            tick.assert_called_once_with({"activity": "nogame", "manual": True, "paused": False})
+            tick.reset_mock()
+            main_mod._usage_tick(SimpleNamespace())  # 取不到界面状态
+            tick.assert_called_once_with({})
+
+    def test_attaches_usage_file_and_flushes_on_exit(self):
+        """main() 在第一次 tick 之前把占用记录接到 logs\\usage.jsonl 上；退出时关好识别记录以后、结束进程以前把还没写的
+        记录写完，后台识别没停下、直接结束进程时也写。"""
+        capture_errors(self)
+        main_mod = sys.modules[overlay_app.main.__module__]
+        for stopped, raised_type, ending in ((True, SystemExit, []), (False, Ended, ["terminate(0)"])):
+            with self.subTest(stopped=stopped), \
+                    mock.patch.object(main_mod.usage, "attach",
+                                      side_effect=lambda path: self.order.append("usage.attach")) as attach, \
+                    mock.patch.object(main_mod.usage, "tick", side_effect=lambda: self.order.append("usage.tick")), \
+                    mock.patch.object(main_mod.usage, "flush",
+                                      side_effect=lambda: self.order.append("usage.flush")) as flush:
+                raised, order, _ = self.run_main(stopped=stopped)
+                self.assertIsInstance(raised, raised_type)
+                attach.assert_called_once_with(main_mod.logs_dir() / main_mod.usage.FILE_NAME)
+                flush.assert_called_once_with()
+                self.assertEqual(order, ["usage.attach", "usage.tick", "exec", "shutdown", "recorder.close",
+                                         "usage.flush", *ending])
 
     def test_stuck_watcher_ends_process_after_recorder_closed(self):
         """shutdown() 说识别线程没停下：关好识别记录以后直接结束进程（退出码 0），不让 Qt 析构还在跑的线程。"""

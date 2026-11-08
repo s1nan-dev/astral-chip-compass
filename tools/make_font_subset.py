@@ -1,24 +1,29 @@
-"""做随软件带的标题字体：把思源黑体简体中文的 Heavy、Bold（SourceHanSansSC-Heavy.otf、SourceHanSansSC-Bold.otf）按界面用到的字
-做成子集，放进 fonts 文件夹。
+"""做随软件带的标题字体：把思源黑体简体中文、繁体中文的 Heavy、Bold（SourceHanSansSC-*.otf、SourceHanSansTC-*.otf）按
+界面用到的字做成子集，放进 fonts 文件夹。
 
 用法（在项目根目录下）：
-    .venv\\Scripts\\python -m tools.make_font_subset <源字体的路径> [<源字体的路径> ...] [--weight heavy|bold] [--out <输出路径>]
-例如两个字重一起重做：
-    .venv\\Scripts\\python -m tools.make_font_subset .tmp\\fonts_src\\SourceHanSansSC-Heavy.otf .tmp\\fonts_src\\SourceHanSansSC-Bold.otf
+    .venv\\Scripts\\python -m tools.make_font_subset <源字体的路径> [<源字体的路径> ...] [--weight heavy|bold|heavy-hant|bold-hant]
+                                                    [--out <输出路径>]
+例如四个文件一起重做：
+    .venv\\Scripts\\python -m tools.make_font_subset .tmp\\fonts_src\\SourceHanSansSC-Heavy.otf .tmp\\fonts_src\\SourceHanSansSC-Bold.otf ^
+        .tmp\\fonts_src\\SourceHanSansTC-Heavy.otf .tmp\\fonts_src\\SourceHanSansTC-Bold.otf
 
 字重按源字体的文件名认（WEIGHTS 里各字重的 source），文件名不同时用 --weight 指定（只给一个源字体时）；源字体的粗细
 （OS/2 的 usWeightClass）和字重对不上时不做。输出默认是 fonts 里这个字重的文件，--out 只在给一个源字体时能用。
 
-源字体从思源黑体的官方发布页（GitHub adobe-fonts/source-han-sans 的 Releases，「09_SourceHanSansSC.zip」里的
-OTF/SimplifiedChinese/SourceHanSansSC-Heavy.otf、SourceHanSansSC-Bold.otf）取得；要装 fontTools（只在做子集时用，程序运行不需要）。
+源字体从思源黑体的官方发布页（GitHub adobe-fonts/source-han-sans 的 Releases）取得：「09_SourceHanSansSC.zip」里的
+OTF/SimplifiedChinese/SourceHanSansSC-Heavy.otf、SourceHanSansSC-Bold.otf，「10_SourceHanSansTC.zip」里的
+OTF/TraditionalChinese/SourceHanSansTC-Heavy.otf、SourceHanSansTC-Bold.otf；要装 fontTools（只在做子集时用，程序运行不需要）。
 
-各字重的子集（WEIGHTS）：皮肤的 Fonts.TITLE_FAMILY 写字体名，Fonts.FILES 写文件名。
-- heavy：字体名「ACC Heading」，fonts/ACCHeading-Heavy.otf；
-- bold：字体名「ACC Title」，fonts/ACCTitle-Bold.otf。
+各字重的子集（WEIGHTS）：皮肤的 Fonts.TITLE_FAMILY 写字体名，Fonts.FILES 写简体子集的文件名；界面是繁体时 load_fonts 把
+文件换成同字重的繁体子集（theme.HANT_FILES）。
+- heavy：字体名「ACC Heading」，fonts/ACCHeading-Heavy.otf；繁体（heavy-hant）：fonts/ACCHeadingTC-Heavy.otf；
+- bold：字体名「ACC Title」，fonts/ACCTitle-Bold.otf；繁体（bold-hant）：fonts/ACCTitleTC-Bold.otf。
 两个字重用不同的字体名：同一个字体名下有两个粗细时，Qt 按要的粗细在两个文件里挑，原来只用 Heavy 的皮肤可能改用 Bold 画。
-字体名里也不写 Bold、Heavy 这类表示粗细的词，免得字体库按名字把它认成另一个字体名下的一个粗细。
+字体名里也不写 Bold、Heavy 这类表示粗细的词，免得字体库按名字把它认成另一个字体名下的一个粗细。繁体子集的字体名和简体
+子集相同（只按界面语言装不同的文件），各自只有一个粗细。
 
-收哪些字（collect_text，两个字重收的字相同）：
+收哪些字（两个字重收的字相同；繁体子集另收繁体界面会用到的字，见 collect_text_hant）：
 - advisor/ui（含子文件夹 theme、skins、settings、overlay_parts、scheme_editor、scheme_list，见 SOURCES；每个文件夹只收
   这一层）、advisor/engine、advisor/session 下各模块，以及 version.py、schemes.py、prefs.py、data.py、update.py、
   update_apply.py 里写的全部字符串（不含文档字符串）：
@@ -29,6 +34,13 @@ OTF/SimplifiedChinese/SourceHanSansSC-Heavy.otf、SourceHanSansSC-Bold.otf）取
 - 七套皮肤的名字（SKIN_NAMES）；
 - ASCII 可打印字符（数字、英文字母、半角标点）和常用全角标点（EXTRA）。
 用户自己起的方案名、作者名不在子集里：界面上用标题字体写这些字时，子集里没有的字退回微软雅黑（theme.title_font），不出方块。
+
+繁体子集收的字（collect_text_hant）：简体子集收的全部字（还没有转成繁体的界面文字，繁体界面上照样要写），加上繁体界面
+可能显示的全部文字逐条转成繁体以后的字（tools/hant_table.py 的 all_texts，和 hant_table show --all 同一个范围：界面
+文字 ui_strings、调了 localize 的模块的常量、advisor 下 lang.t() 里写死的文字、advisor/ui 以外会显示的常量
+SHOWN_CONSTANTS），加上资料库里的游戏繁体名（筹码、角色、称号、全名、地图、畸变组件的 hant），以及流派、职业、档位、
+角色分组名、七套皮肤的名字转成繁体以后的字。同样是去重、排好序的字。界面文字、补充词组（data/zh_hant_extra.toml）
+改了以后，转出来的繁体可能多出子集里没有的字，繁体两个子集要重做。
 
 改名：思源黑体的许可证（SIL OFL 1.1）保留了字体名「Source」，改动过的字体（子集也算）不能再用这个名字，所以子集的字体名
 改成各字重的 family。版权声明和许可证说明（name 表的 0、13、14 号）照原样保留。
@@ -49,13 +61,15 @@ class Weight:
     """一个字重的子集：源字体、改成的名字、输出的文件。（不用 dataclass：测试按文件路径载入本脚本、不登记模块，
     dataclass 在那种载入方式下会出错。）"""
 
-    def __init__(self, source: str, weight_class: int, family: str, style: str, legacy_style: str, ps_name: str):
+    def __init__(self, source: str, weight_class: int, family: str, style: str, legacy_style: str, ps_name: str,
+                 hant: bool = False):
         self.source = source  # 源字体的文件名（按它认字重）
         self.weight_class = weight_class  # 源字体的粗细（OS/2 的 usWeightClass），对不上时不做
         self.family = family  # 子集的字体名（Qt 里的字体名，theme.Fonts.TITLE_FAMILY 写这个）
         self.style = style  # 粗细的名字（全名、name 表 17 号）
         self.legacy_style = legacy_style  # name 表 2 号（只有常规、粗体、斜体、粗斜体四种写法；别的粗细写 Regular，另写 16、17 号）
         self.ps_name = ps_name  # PostScript 名，也是输出的文件名
+        self.hant = hant  # 繁体子集（源字体是繁体中文，收字用 collect_text_hant）
 
     @property
     def typographic(self) -> bool:
@@ -75,6 +89,9 @@ class Weight:
 WEIGHTS = {
     "heavy": Weight("SourceHanSansSC-Heavy.otf", 900, "ACC Heading", "Heavy", "Regular", "ACCHeading-Heavy"),
     "bold": Weight("SourceHanSansSC-Bold.otf", 700, "ACC Title", "Bold", "Bold", "ACCTitle-Bold"),
+    "heavy-hant": Weight("SourceHanSansTC-Heavy.otf", 900, "ACC Heading", "Heavy", "Regular", "ACCHeadingTC-Heavy",
+                         hant=True),
+    "bold-hant": Weight("SourceHanSansTC-Bold.otf", 700, "ACC Title", "Bold", "Bold", "ACCTitleTC-Bold", hant=True),
 }
 # 七套皮肤的名字（皮肤窗口、设置里的「皮肤」会用标题字体写）
 SKIN_NAMES = ("默认", "霓虹贴纸", "碳纤流光", "白色海景房", "经典主题-白", "经典主题-黑", "经典主题-反色")
@@ -119,18 +136,61 @@ def data_names() -> list[str]:
     return out
 
 
-def collect_text() -> str:
-    """子集要收的字（去重、排好序）。"""
+def ui_strings() -> list[str]:
+    """界面模块里写的全部字符串（不含文档字符串）、七套皮肤的名字、ASCII 可打印字符和常用全角标点。
+
+    不含资料库里的名字（data_names）：繁体界面显示资料库里的名字时另有「简体名 → 游戏繁体名」（`lang.to_hant` 先锁住
+    这些写法）。collect_text 的结果加上这些名字，和原来一样。
+    """
     parts: list[str] = []
     for rel in SOURCES:
         target = ROOT / rel
         files = sorted(target.glob("*.py")) if target.is_dir() else [target]
         for path in files:
             parts += source_strings(path)
-    parts += data_names()
     parts += SKIN_NAMES
     parts.append("".join(chr(c) for c in range(0x20, 0x7F)))
     parts.append(EXTRA)
+    return parts
+
+
+def hant_data_names() -> list[str]:
+    """资料库里繁体界面会写的名字：游戏的繁体名（筹码、角色、称号、全名、地图、畸变组件的 hant），以及流派、职业、档位、
+    角色分组名、七套皮肤的名字转成繁体以后的写法。"""
+    from advisor.data import CLASSES, HERO_GROUPS, SCHOOLS, TIER_LABEL, load_db
+    from advisor.schemes import TIER_LABEL as SCHEME_TIER_LABEL
+    from advisor.ui import lang
+
+    db = load_db()
+    out: list[str] = []
+    for chip in db.chips.values():
+        out.append(getattr(chip, "hant", "") or chip.name)
+    for hero in db.heroes.values():
+        out += [getattr(hero, "hant", ""), getattr(hero, "hant_title", ""), getattr(hero, "hant_full_name", "")]
+        out.append(lang.to_hant(hero.group))
+    for info in db.map_info.values():
+        out.append(getattr(info, "hant", "") or info.name)
+    for mutator in db.mutators.values():
+        out.append(getattr(mutator, "hant", "") or mutator.name)
+    out += [lang.to_hant(text) for text in
+            (*SCHOOLS, *CLASSES, *TIER_LABEL.values(), *SCHEME_TIER_LABEL.values(), *HERO_GROUPS, *SKIN_NAMES)]
+    return [text for text in out if isinstance(text, str)]
+
+
+def collect_text_hant() -> str:
+    """繁体子集要收的字（去重、排好序）：简体子集收的全部字，加上繁体界面可能显示的全部文字（tools/hant_table.py 的
+    all_texts，和 show --all 同一个范围）和资料库名字转成繁体以后的字。"""
+    from advisor.ui import lang
+    from tools import hant_table
+
+    parts = [collect_text(), *hant_data_names(), *(lang.to_hant(text) for _, text in hant_table.all_texts())]
+    chars = {ch for text in parts for ch in text if ch.isprintable() or ch == "　"}
+    return "".join(sorted(chars))
+
+
+def collect_text() -> str:
+    """子集要收的字（去重、排好序）。"""
+    parts = ui_strings() + data_names()
     chars = {ch for text in parts for ch in text if ch.isprintable() or ch == "　"}
     return "".join(sorted(chars))
 
@@ -199,12 +259,13 @@ def main(argv=None) -> int:
             ap.error(f"认不出字重：{source.name}（文件名应为 "
                      + "、".join(w.source for w in WEIGHTS.values()) + "，或用 --weight 指定）")
         jobs.append((source, weight, args.out or weight.out))
-    text = collect_text()
-    cjk = sum(1 for ch in text if "一" <= ch <= "鿿")
+    texts = {"简体": collect_text(), "繁体": collect_text_hant()}
     for source, weight, out in jobs:
+        text = texts["繁体" if weight.hant else "简体"]
+        cjk = sum(1 for ch in text if "一" <= ch <= "鿿")
         make_subset(source, out, text, weight)
-        print(f"{weight.style}：收字 {len(text)} 个（其中汉字 {cjk} 个），子集 {out}（字体名 {weight.family}）："
-              f"{out.stat().st_size / 1024 / 1024:.2f} MB")
+        print(f"{'繁体' if weight.hant else '简体'} {weight.style}：收字 {len(text)} 个（其中汉字 {cjk} 个），"
+              f"子集 {out}（字体名 {weight.family}）：{out.stat().st_size / 1024 / 1024:.2f} MB")
     return 0
 
 

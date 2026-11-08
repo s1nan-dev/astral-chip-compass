@@ -31,3 +31,19 @@ def pixels(widget):
 
     settle()
     return widget.grab().toImage().convertToFormat(QImage.Format_ARGB32)
+
+
+def qt_messages(test) -> list[str]:
+    """这条测试从现在到结束 Qt 自己报出来的提示和警告（例如往不在重画的部件上画时的「Should no longer be called」）：返回
+    一直往里添的列表，测试结束时换回原来的处理。"""
+    from PySide6.QtCore import qInstallMessageHandler
+
+    got: list[str] = []
+    previous = qInstallMessageHandler(lambda mode, context, message: got.append(message))
+    test.addCleanup(qInstallMessageHandler, previous)
+    return got
+
+
+def paint_messages(messages: list[str]) -> list[str]:
+    """qt_messages 收到的里面和重画有关的几句（画笔用不了、部件拿不到画图引擎）。"""
+    return [m for m in messages if "paint" in m.lower()]

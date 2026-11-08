@@ -1,5 +1,5 @@
-"""「筹码方案」卡片和地图：「筹码方案」卡片里只列当前角色的方案（下拉框的内容和选中项），「识别」卡片里的地图选择行
-（请用户选地图、提示打开任务栏），以及地图事件直接发放的筹码（龙宫游乐园）。
+"""「筹码方案」卡片和地图：「筹码方案」卡片里只列当前角色的方案（下拉框的内容和选中项：这一局实际用的那套，按地图换着时
+是换成的那套），「识别」卡片里的地图选择行（请用户选地图、提示打开任务栏），以及地图事件直接发放的筹码（龙宫游乐园）。
 
 SchemeCard：控件（角色下拉框、方案下拉框、地图选择行、地图发放的筹码那一行）由搭界面时建好交给这里，这里按当前快照和状态填。
 只读内存、不读 Session 的当前值以外的状态；改 Session（选地图、补录发放的筹码）经外壳给的回调。
@@ -12,6 +12,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QFontMetrics
 
 from ...schemes import default_schools, target_schools
+from .. import lang, names
 from ..text import SCHEME_DEFAULT, tip_paragraphs_html
 from ..theme import COMMON as C
 from ..widgets import add_combo_header
@@ -25,6 +26,7 @@ from .wording import (
     SCHEME_DEFAULT_TIP,
     SCHEME_DEFAULT_TIP_TIERS,
     SCHEME_GROUP,
+    SCHEME_MAPS_TIP,
     SCHEME_NO_SCHOOL,
     SCHEME_TARGET_TIP,
     SCHEME_UNRECORDED_TIP,
@@ -36,19 +38,21 @@ class SchemeCard:
     """「筹码方案」卡片和地图的内容和状态。控件由搭界面（layout）建好交给这里。"""
 
     def __init__(self, *, hero_box, scheme_box, map_label, map_buttons, map_dismiss, granted_label, granted_buttons,
-                 db, session, store, live, trace_user, refresh, card_width, choose_map, add_owned, manual, usable_key):
+                 db, session, lock, store, live, trace_user, refresh, card_width, choose_map, add_owned, manual,
+                 usable_key):
         # 控件：角色下拉框、方案下拉框；地图选择行的提示（map_label）、候选地图按钮的网格、「关闭本条提示」；地图发放的筹码那一行
         self.hero_box, self.scheme_box = hero_box, scheme_box
         self.map_label, self.map_buttons, self.map_dismiss = map_label, map_buttons, map_dismiss
         self.granted_label, self.granted_buttons = granted_label, granted_buttons
-        # 服务：资料库、Session、方案存储（None 时只有默认推荐）；只读的显示状态：三选一显示期间的状态（live）
-        self.db, self.session, self.store, self.live = db, session, store, live
+        # 服务：资料库、Session 和它的锁、方案存储（None 时只有默认推荐）；只读的显示状态：三选一显示期间的状态（live）
+        self.db, self.session, self.lock, self.store, self.live = db, session, lock, store, live
         # 回调：记识别记录、刷新、卡片里一行内容的宽度、选地图、补录（外壳）；manual() 是不是手动模式，usable_key() 能用的
         # 热键文字（没设置或登记不上时为空，热键部件给）
         self.trace_user, self.refresh, self.card_width = trace_user, refresh, card_width
         self.choose_map, self.add_owned, self.manual, self.usable_key = choose_map, add_owned, manual, usable_key
         self.scheme_shown: tuple | None = None  # 方案下拉框当前列出的内容（没变就不重建）
-        self.scheme_used: tuple | None = None  # 上次刷新时的（角色, 正在用的方案或 None）：判断正在用的那套是否被改、被删
+        # 上次刷新时的（角色, 这一局实际用的方案或 None）：判断正在用的那套是否被改、被删、不再适用（去掉了这张地图等）
+        self.scheme_used: tuple | None = None
         self.map_shown: tuple = ()  # 候选地图按钮当前列出的地图（没变就不重建）
         self.map_on = False  # 地图选择行有内容（地图不可靠）
         self.map_prompt = False  # 一行显示时也要出现（请用户选地图，或对局中提示打开任务栏）
@@ -71,18 +75,21 @@ class SchemeCard:
             box.removeItem(0)
             self.hero_extra = False
         if hero and not known and not self.hero_extra:
-            box.insertItem(0, HERO_UNRECORDED.format(name=hero), hero)
+            box.insertItem(0, lang.t(HERO_UNRECORDED.format(name=hero)), hero)
             self.hero_extra = True
         box.setCurrentIndex(box.findData(hero))
         box.blockSignals(False)
 
     def current_scheme(self, hero: str | None = None):
-        """角色 hero（不给时为 Session 现在的角色；刷新时给这一轮快照里的）正在用的我的方案（schemes.Scheme，
-        SchemeStore.current 只读内存）；用默认推荐、没有方案存储、角色资料库未收录时为 None。"""
+        """角色 hero（不给时为 Session 现在的角色）这一局实际用的我的方案（schemes.Scheme：Session.scheme_choice 的 used，
+        按地图换着时是换成的那套；保存的那套见 SchemeStore.current）；用默认推荐、没有方案存储、角色资料库未收录时为 None。
+        持锁读 Session（识别线程同时在改地图、本局结束等），所以不能在持锁时调用。刷新时方案下拉框照这一轮的快照画
+        （show_schemes），不经这里。"""
         hero = self.session.settings.hero if hero is None else hero
         if self.store is None or hero not in self.db.heroes:
             return None
-        return self.store.current(hero)
+        with self.lock:
+            return self.session.scheme_choice(hero).used
 
     def schools_text(self, schools) -> str:
         return "、".join(schools) or SCHEME_NO_SCHOOL
@@ -95,20 +102,27 @@ class SchemeCard:
             known = hero in self.db.heroes
             schools = default_schools(self.db, hero) if known else ()
             tip = SCHEME_DEFAULT_TIP_TIERS if known and hero in self.db.player_synergy else SCHEME_DEFAULT_TIP
-            return tip.format(schools=self.schools_text(schools))
+            return lang.t(tip.format(schools=self.schools_text(schools)))
         if scheme.note:
-            return scheme.note
-        return SCHEME_TARGET_TIP.format(schools=self.schools_text(target_schools(self.db, scheme.tiers)))
+            return lang.t(scheme.note)
+        return lang.t(SCHEME_TARGET_TIP.format(schools=self.schools_text(target_schools(self.db, scheme.tiers))))
 
     def show_schemes(self, view) -> None:
         """方案下拉框：只列当前角色的方案。第一项「默认推荐」，有我的方案时下面是不能选的分组标题「── 我的方案 ──」和各套
-        方案（没有时不显示分组标题）；选中该角色上次用的方案（每个角色记住各自的，换角色时换成新角色的列表）。资料库未收录的
-        角色：不可用，固定为「默认推荐」。框和文字、下拉列表都不加颜色；名称照原样显示（下拉框画的是纯文本），悬停说明里
-        带网页标记的说明也原样显示（text.escaped_tip）。列表和选中项没变时不重建。"""
+        方案（没有时不显示分组标题）；选中这一局实际用的那套（快照的 scheme：平时是该角色上次用的方案，每个角色记住各自的，
+        换角色时换成新角色的列表；对局里按地图换着时是换成的那套，对局结束回到上次用的）。资料库未收录的角色：不可用，固定为
+        「默认推荐」。框和文字、下拉列表都不加颜色；名称照原样显示（下拉框画的是纯文本），悬停说明里带网页标记的说明也原样
+        显示（text.escaped_tip）。标了适用地图的方案在悬停说明的最后另起一段写「适用地图：……」（SCHEME_MAPS_TIP：按
+        Scheme.maps 的先后用「、」连起来，通用方案不写）。列表和选中项没变时不重建。"""
         hero = view.hero
         known = hero in self.db.heroes
         schemes = self.store.schemes(hero) if self.store is not None and known else []
-        current = self.current_scheme(hero)
+        if self.store is None or not known:
+            current = None
+        elif view.scheme_read:
+            current = view.scheme  # 和地图、本局结束与否同一刻取的
+        else:
+            current = self.current_scheme(hero)  # 快照里这几项没读到：现取
         self.scheme_used = (hero, current)
         box = self.scheme_box
         key = (hero, known, tuple(schemes), current.id if current is not None else "")
@@ -116,28 +130,36 @@ class SchemeCard:
             self.scheme_shown = key
             box.blockSignals(True)
             box.clear()
-            box.addItem(SCHEME_DEFAULT, "")
+            box.addItem(lang.t(SCHEME_DEFAULT), "")
             box.setItemData(0, tip_paragraphs_html(self.scheme_tip(None, hero)), Qt.ToolTipRole)
             if schemes:
-                add_combo_header(box, SCHEME_GROUP)  # 分组标题：没有数据，不能选
+                add_combo_header(box, lang.t(SCHEME_GROUP))  # 分组标题：没有数据，不能选
                 for scheme in schemes:
-                    box.addItem(scheme.name, scheme.id)
-                    box.setItemData(box.count() - 1, tip_paragraphs_html(self.scheme_tip(scheme, hero)),
-                                    Qt.ToolTipRole)
+                    box.addItem(lang.t(scheme.name), scheme.id)
+                    tip = self.scheme_tip(scheme, hero)
+                    if scheme.maps:  # 标了适用地图：下拉列表一行放不下，写在悬停说明的最后一段
+                        tip += "\n" + lang.t(SCHEME_MAPS_TIP.format(
+                            maps="、".join(names.map_in(self.db, m) for m in scheme.maps)))
+                    box.setItemData(box.count() - 1, tip_paragraphs_html(tip), Qt.ToolTipRole)
             index = box.findData(current.id) if current is not None else 0
             box.setCurrentIndex(max(index, 0))
             box.blockSignals(False)
         box.setEnabled(known)
-        _set_tip(box, SCHEME_BOX_TIP if known else SCHEME_UNRECORDED_TIP)
+        _set_tip(box, lang.t(SCHEME_BOX_TIP if known else SCHEME_UNRECORDED_TIP))
 
-    def summary(self, hero: str | None = None) -> list:
+    def summary(self, hero: str | None = None, view=None) -> list:
         """「筹码方案」卡片收起时卡片头的摘要：「芬妮 · 治愈坦克」，用默认推荐时「芬妮 · 默认推荐」（wording.scheme_summary，
-        「推荐」卡片头的那段暗色小字同一个写法）；不加颜色。hero 不给时为 Session 现在的角色（刷新时给这一轮快照里的）。"""
+        「推荐」卡片头的那段暗色小字同一个写法）；不加颜色。方案是这一局实际用的那套（按地图换着时写换成的那套）。
+        hero 不给时为 Session 现在的角色。刷新时给这一轮的快照 view（hero 是快照里的角色）：照快照里的方案写，和方案下拉框
+        同一刻取的，不另持锁；没给快照、或快照里方案那几项没读到时持锁现取（current_scheme），这时不能在持锁时调用。"""
         hero = self.session.settings.hero if hero is None else hero
         info = self.db.heroes.get(hero)
-        scheme = self.current_scheme(hero)
-        text = scheme_summary(info.name if info is not None else hero,
-                              scheme.name if scheme is not None else SCHEME_DEFAULT)
+        if view is not None and view.scheme_read:
+            scheme = view.scheme if self.store is not None and info is not None else None
+        else:
+            scheme = self.current_scheme(hero)
+        text = lang.t(scheme_summary(names.hero_name(info) if info is not None else hero,
+                                     scheme.name if scheme is not None else SCHEME_DEFAULT))
         return [(text, None)]
 
     def items(self) -> list[tuple[str, str | None, bool]]:
@@ -171,19 +193,19 @@ class SchemeCard:
             return
         if ask and choices:
             prompt, name = MAP_ASK, "ask"
-            tip = "已读取任务栏，但几张地图的任务相互重叠，匹配度均低。请点击右侧按钮选择当前地图。"
+            tip = lang.t("已读取任务栏，但几张地图的任务相互重叠，匹配度均低。请点击右侧按钮选择当前地图。")
         elif ask:
             prompt, name, tip = MAP_ASK_NO_CHOICE, "ask", ""
         else:
             prompt = OPEN_TASKS
             key = self.usable_key()
             if self.manual() and key:
-                prompt = f"请打开游戏中的任务栏，然后按 {key}"
-            name, tip = "hint", "打开任务栏后，根据任务栏中的任务文字自动识别地图；也可点击上方的地图下拉框手动指定。"
+                prompt = lang.t(f"请打开游戏中的任务栏，然后按 {key}")
+            name, tip = "hint", lang.t("打开任务栏后，根据任务栏中的任务文字自动识别地图；也可点击上方的地图下拉框手动指定。")
         if self.map_label.objectName() != name:
             self.map_label.setObjectName(name)
             _own_style(self.map_label, f"color:{C.WARN_COLOR if name == 'ask' else C.DIM_COLOR}")
-        self.map_label.setText(prompt)
+        self.map_label.setText(prompt)  # 常量（MAP_ASK 等）和上面拼的那句都已按界面语言写好
         _set_tip(self.map_label, tip)
         self.set_map_buttons(choices)
         self.map_dismiss.setVisible(name == "hint")
@@ -208,7 +230,8 @@ class SchemeCard:
         self.map_shown = tuple(choices)
         buttons = []
         for name in choices:
-            btn = _button(name, accent="map", tip=f"当前地图为「{name}」时点击")
+            shown = names.map_in(self.db, name)
+            btn = _button(shown, accent="map", tip=lang.t(f"当前地图为「{shown}」时点击"))
             btn.clicked.connect(lambda _=False, n=name: self.choose_map(n))
             buttons.append(btn)
         if not buttons:
@@ -249,24 +272,26 @@ class SchemeCard:
         return picks
 
     def show_granted(self, view) -> None:
-        names = self.granted_of(self.db, view.map, view.owned)
-        key = (view.map, tuple(names))
+        granted = self.granted_of(self.db, view.map, view.owned)
+        key = (view.map, tuple(granted))
         if key != self.granted_shown:
             self.granted_shown = key
             buttons = []
-            for name in names:
+            for name in granted:
                 chip = self.db.chips[name]
-                btn = _button(name, color=C.RARITY_COLOR.get(chip.rarity, C.TEXT_COLOR), tip=f"补录：{name}。{chip.effect}")
+                shown = names.chip_name(chip)
+                btn = _button(shown, color=C.RARITY_COLOR.get(chip.rarity, C.TEXT_COLOR),
+                              tip=lang.t(f"补录：{shown}。{chip.effect}"))
                 btn.clicked.connect(lambda _=False, n=name: self.add_owned(n))
                 buttons.append(btn)
             if buttons:
-                self.granted_label.setText(f"{view.map}发放的筹码：")
-                _set_tip(self.granted_label, "这些筹码由地图事件直接发放，不经过筹码三选一。获得时请点击右侧对应的按钮补录。")
+                self.granted_label.setText(lang.t(f"{names.map_in(self.db, view.map)}发放的筹码："))
+                _set_tip(self.granted_label, lang.t("这些筹码由地图事件直接发放，不经过筹码三选一。获得时请点击右侧对应的按钮补录。"))
                 label_w = QFontMetrics(self.granted_label.font()).horizontalAdvance(self.granted_label.text())
                 _fill_grid(self.granted_buttons, buttons, self.card_width() - label_w - 8)
             else:
                 _clear_grid(self.granted_buttons)
-        self.granted_on = bool(names)
+        self.granted_on = bool(granted)
 
     def granted_buttons_text(self) -> list[str]:
         items = [self.granted_buttons.itemAt(i).widget() for i in range(self.granted_buttons.count())]

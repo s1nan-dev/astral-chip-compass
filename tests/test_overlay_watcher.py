@@ -1,6 +1,7 @@
 """后台识别线程（Watcher）：取帧、发截取状态、暂停、空闲会话的关闭、取帧统计、按热键识别完的通知（capture_done），
 识别出错的提示（固定中文、同一句 10 分钟内只发一次，RecogErrorTextTest）。
 用假的取帧对象（FakeSource）和假的识别流程（SameScreen），不真的截图、不跑识别；不建悬浮窗。"""
+import contextlib
 import threading
 import time
 import unittest
@@ -99,6 +100,297 @@ class WatcherTest(unittest.TestCase):
                 watcher.stop()
         self.assertTrue(done)
         self.assertEqual((events, status), ([], []))
+
+
+class WatcherPlatformTest(unittest.TestCase):
+    """识别线程固定跟一个端（platform）：两个客户端同时识别时，每路的取帧对象只找自己那个端的游戏窗口，不按游戏平台设置找；
+    不给时和原来一样。不真截图：建取帧对象的两个类换成假的，看交给它们的 finder。"""
+
+    def setUp(self):
+        self.db = load_db()
+        self.session = OverlaySession(self.db, UiSettings(hero="凛"))
+
+    def watcher(self, platform=None):
+        return Watcher(self.db, self.session, threading.Lock(), manual=True, platform=platform)
+
+    def frame_source(self, platform):
+        """建这个识别线程的取帧对象（_open_source），返回交给 screen.FrameSource 的参数。"""
+        from advisor.ui import screen
+        from advisor.vision import window_capture
+
+        made = {}
+
+        class FakeSource:
+            def __init__(self, **kwargs):
+                made.update(kwargs)
+
+            def close(self):
+                pass
+
+        with mock.patch.object(window_capture, "init_thread"), \
+                mock.patch.object(window_capture, "uninit_thread"), \
+                mock.patch.object(screen, "FrameSource", FakeSource):
+            self.watcher(platform)._open_source()
+        return made
+
+    def band_source(self, platform):
+        """建这个识别线程快速盯绿框的取帧对象（_start_pick_watch 交给盯绿框线程的 make），返回交给 screen.BandSource 的参数。"""
+        from advisor.ui import screen
+
+        made = {}
+
+        class FakeBand:
+            def __init__(self, *args, **kwargs):
+                self.kwargs = kwargs
+                made["band"] = self
+
+            def close(self):
+                pass
+
+        watch = self.watcher(platform)
+        watch._active = object()
+        with mock.patch.object(screen, "BandSource", FakeBand), \
+                mock.patch("advisor.vision.pick_watch.PickWatcher") as pick_cls:
+            watch._start_pick_watch()
+            pick_cls.call_args.args[0]()  # 盯绿框的线程第一次要查时建取帧对象
+        return made["band"]
+
+    def test_frame_source_finds_that_platform(self):
+        """给了端：取帧对象的 finder 只找这个端（capture.find_game(platform=...)）。"""
+        from advisor.vision import capture
+
+        finder = self.frame_source(capture.TAPTAP)["finder"]
+        with mock.patch.object(capture, "find_game", return_value="game") as find:
+            self.assertEqual(finder(), "game")
+        find.assert_called_once_with(platform=capture.TAPTAP)
+
+    def test_frame_source_without_platform(self):
+        """不给端（只有一个识别线程）：不传 finder，取帧对象照旧按游戏平台设置找。"""
+        self.assertIsNone(self.frame_source(None)["finder"])
+
+    def test_band_source_finds_that_platform(self):
+        """快速盯绿框的取帧对象也跟着识别线程的端：finder 只找这个端。"""
+        from advisor.vision import capture
+
+        finder = self.band_source(capture.STEAM).kwargs["finder"]
+        with mock.patch.object(capture, "find_game", return_value="game") as find:
+            self.assertEqual(finder(), "game")
+        find.assert_called_once_with(platform=capture.STEAM)
+
+    def test_band_source_without_platform(self):
+        self.assertIsNone(self.band_source(None).kwargs["finder"])
+
+
+def wait_until(check, timeout=3.0):
+    """等后台线程做到 check() 为真；处理 Qt 事件，让队列里的信号也能到主线程。"""
+    end = time.monotonic() + timeout
+    while not check() and time.monotonic() < end:
+        APP.processEvents()
+        time.sleep(0.02)
+    return check()
+
+
+class WatcherSwitchPlatformTest(unittest.TestCase):
+    """运行中换端（set_platform）：识别线程下一圈开头关掉旧的取帧对象（先关会话、再做窗口截取的线程收尾），按新的端重建
+    （快速盯绿框的线程也换，新的接到现在的识别流程上）；相同的值不重建；识别流程不重建，只把它的端一起换掉。暂停着时照样换。
+    取帧对象、快速盯绿框的线程、识别流程都换成假的，窗口截取的线程初始化和收尾也换成假的，记下先后。"""
+
+    def setUp(self):
+        self.db = load_db()
+        self.session = OverlaySession(self.db, UiSettings(hero="凛"))
+        self.made, self.calls, self.picks, self.processors = [], [], [], []
+
+    @contextlib.contextmanager
+    def fakes(self):
+        """换掉建取帧对象、快速盯绿框的线程、识别流程和窗口截取的线程初始化、收尾的几处。"""
+        from advisor.ui import screen
+        from advisor.vision import window_capture
+        from advisor.vision.pick_watch import PickWatch
+
+        made, calls, picks, processors = self.made, self.calls, self.picks, self.processors
+
+        class FakeFrameSource:
+            """假的取帧对象：记下交给它的 finder、取了几次；关的时候记一笔（和线程初始化、收尾排在一起看先后）。"""
+
+            def __init__(self, **kwargs):
+                self.finder = kwargs.get("finder")
+                self.number = len(made)
+                self.grabs = 0
+                made.append(self)
+
+            def grab(self):
+                self.grabs += 1
+                return object()
+
+            def close(self):
+                calls.append(f"close{self.number}")
+
+            def close_if_idle(self):
+                return None
+
+            def take_period(self):
+                return {}
+
+        class FakePick:
+            """假的快速盯绿框的线程：记下接到了哪些交换、停了几次。"""
+
+            def __init__(self, make, **kwargs):
+                self.stopped = 0
+                self.attached = []
+                picks.append(self)
+
+            def start(self):
+                pass
+
+            def stop(self):
+                self.stopped += 1
+                return True
+
+            def attach(self, exchange):
+                self.attached.append(exchange)
+
+            def take_period(self):
+                return {}
+
+        class RecordingProcessor:
+            """假的识别流程：带一份真的交换（PickWatch）；端由识别线程建好以后设在 platform 上。"""
+
+            chip_select_visible = False
+
+            def __init__(self, *args):
+                self.platform = "还没设"
+                self.pick_watch = PickWatch()
+                processors.append(self)
+
+            def process(self, img, now, force=False):
+                return []
+
+        with mock.patch.object(window_capture, "init_thread", side_effect=lambda: calls.append("init")), \
+                mock.patch.object(window_capture, "uninit_thread", side_effect=lambda: calls.append("uninit")), \
+                mock.patch.object(screen, "FrameSource", FakeFrameSource), \
+                mock.patch("advisor.vision.pick_watch.PickWatcher", FakePick), \
+                mock.patch("advisor.vision.pipeline.FrameProcessor", RecordingProcessor):
+            yield
+
+    def assert_paired(self):
+        """每次线程初始化都配一次收尾，收尾之前先关了那一份取帧对象，每一份只关一次（不漏不重）。"""
+        calls = self.calls
+        self.assertEqual(calls.count("init"), calls.count("uninit"), calls)
+        closes = [c for c in calls if c.startswith("close")]
+        self.assertEqual(closes, [f"close{n}" for n in range(len(self.made))], calls)
+        for i, c in enumerate(calls):
+            if c == "uninit":
+                self.assertTrue(i > 0 and calls[i - 1].startswith("close"), calls)
+
+    def finds(self, source):
+        """这一份取帧对象的 finder 找窗口时交给 capture.find_game 的参数；没有 finder（按游戏平台设置找）时为 None。"""
+        from advisor.vision import capture
+
+        if source.finder is None:
+            return None
+        with mock.patch.object(capture, "find_game", return_value="game") as find:
+            self.assertEqual(source.finder(), "game")
+        return find.call_args.kwargs
+
+    def test_switch_platform(self):
+        from advisor.vision import capture
+
+        made, calls, picks, processors = self.made, self.calls, self.picks, self.processors
+
+        def switched(n):
+            """第 n 份取帧对象、第 n 个快速盯绿框的线程都建好，而且后一个已经接到识别流程上（换端那一步做完了）。"""
+            return len(made) >= n and len(picks) >= n and bool(picks[n - 1].attached)
+
+        done = []
+        with self.fakes():
+            watcher = Watcher(self.db, self.session, threading.Lock(), manual=True, platform=capture.STEAM)
+            watcher.capture_done.connect(lambda: done.append(1))
+            watcher.start()
+            try:
+                watcher.trigger()
+                self.assertTrue(wait_until(lambda: done))
+                self.assertEqual(len(made), 1)
+                self.assertEqual(self.finds(made[0]), {"platform": capture.STEAM})
+                processor = processors[0]
+                self.assertEqual(processor.platform, capture.STEAM)
+                self.assertEqual(picks[0].attached, [processor.pick_watch])
+
+                watcher.set_platform(capture.TAPTAP)
+                self.assertTrue(wait_until(lambda: switched(2)))
+                self.assertEqual(calls, ["init", "close0", "uninit", "init"])  # 先关会话、再收尾，再按新的端建
+                self.assertEqual(picks[0].stopped, 1)  # 旧的快速盯绿框的线程也停了
+                self.assertEqual(picks[1].attached, [processor.pick_watch])  # 新的接到同一个识别流程上
+                self.assertEqual(self.finds(made[1]), {"platform": capture.TAPTAP})
+                self.assertEqual(processor.platform, capture.TAPTAP)  # 识别流程跟着换，不重建
+                self.assertEqual(processors, [processor])
+
+                watcher.set_platform(capture.TAPTAP)  # 相同的值：不重建
+                time.sleep(0.15)
+                self.assertEqual((len(made), len(picks)), (2, 2))
+
+                watcher.set_platform(None)  # 换回按游戏平台设置找
+                self.assertTrue(wait_until(lambda: switched(3)))
+                self.assertEqual(calls[4:], ["close1", "uninit", "init"])
+                self.assertIsNone(made[2].finder)
+                self.assertIsNone(processor.platform)
+                self.assertEqual(picks[2].attached, [processor.pick_watch])
+            finally:
+                self.assertTrue(watcher.stop())
+        self.assertEqual(calls[-2:], ["close2", "uninit"])  # 线程结束时最后一份照样收尾
+        self.assertEqual([p.stopped for p in picks], [1, 1, 1])
+        self.assert_paired()
+
+    def test_board_handed_to_processor(self):
+        """两张悬浮窗共用的牌子（select_board，Lanes 在线程开始前设上）交给建好的识别流程（FrameProcessor.board）；识别流程
+        重建、线程结束时，换下来的那一份在牌子上擦掉（不再算显示着三选一）。"""
+        notes = []
+
+        class Board:
+            def note(self, owner, showing, now):
+                notes.append((owner, showing))
+
+        board = Board()
+        done = []
+        with self.fakes():
+            watcher = Watcher(self.db, self.session, threading.Lock(), manual=True)
+            watcher.select_board = board
+            watcher.capture_done.connect(lambda: done.append(1))
+            watcher.start()
+            try:
+                watcher.trigger()
+                self.assertTrue(wait_until(lambda: done))
+                self.assertIs(self.processors[0].board, board)
+                watcher.reload()
+                watcher.trigger()
+                self.assertTrue(wait_until(lambda: len(done) >= 2))
+                self.assertEqual(len(self.processors), 2)
+                self.assertIs(self.processors[1].board, board)
+                self.assertEqual(notes, [(self.processors[0], False)])
+            finally:
+                self.assertTrue(watcher.stop())
+        self.assertEqual(notes, [(self.processors[0], False), (self.processors[1], False)])
+
+    def test_switch_while_paused(self):
+        """暂停着（找不到游戏窗口等）换端：照样换掉取帧对象和快速盯绿框的线程（新建的取帧对象不开会话，恢复以后按新的端
+        找），暂停期间不取帧；还没建识别流程时没有要接的。线程结束时收尾照样配对。"""
+        from advisor.vision import capture
+
+        with self.fakes():
+            watcher = Watcher(self.db, self.session, threading.Lock(), platform=capture.STEAM)
+            watcher.set_paused("focus", True, why="nogame")
+            watcher.start()
+            try:
+                self.assertTrue(wait_until(lambda: len(self.picks) >= 1))
+                watcher.set_platform(capture.TAPTAP)
+                self.assertTrue(wait_until(lambda: len(self.picks) >= 2))
+                self.assertEqual(self.calls, ["init", "close0", "uninit", "init"])
+                self.assertEqual(self.finds(self.made[1]), {"platform": capture.TAPTAP})
+                self.assertEqual([s.grabs for s in self.made], [0, 0])
+                self.assertEqual(self.processors, [])
+                self.assertEqual([p.attached for p in self.picks], [[], []])
+            finally:
+                self.assertTrue(watcher.stop())
+        self.assert_paired()
 
 
 class SameScreen:
@@ -233,7 +525,7 @@ class WatcherCaptureTest(unittest.TestCase):
         return status, recog, logged
 
     def test_window_gone_shown_as_is(self):
-        """找不到游戏窗口、窗口最小化（capture.WindowGone）：截取那边约定的两句固定中文原样显示，不算出错（不记错误记录，
+        """找不到游戏窗口、窗口最小化（capture.WindowGone）：截取那边约定的几句固定中文原样显示，不算出错（不记错误记录，
         不发识别出错的提示）。"""
         from advisor.vision import capture
 

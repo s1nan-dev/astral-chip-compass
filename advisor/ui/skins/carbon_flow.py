@@ -68,6 +68,8 @@ def _carbon_flow() -> Skin:
         f"QLabel#title {{ padding: 2px 6px 3px 30px; font-size: 14pt; font-style: italic; $TITLE_FONT }}\n"
         f"QLabel#cardTitle {{ padding: 2px 6px 2px 30px; font-size: 11pt; font-style: italic; $TITLE_FONT }}\n"
         f"QLabel#summary {{ color: {p['text']}; font-weight: bold; }}\n"
+        f"QLabel#laneTag {{ background: rgba(0,229,255,16); color: {p['cyan']}; border: 1px solid {p['cyan']}; "
+        f"border-radius: 0px; padding: 0px 8px; font-weight: bold; }}\n"
         f"QWidget#globalArea {{ background: rgba(17,22,32,210); border: 1px solid {p['edge']}; }}\n"
         f"QLabel#ask, QLabel#notice_warn, QLabel#notice_action {{ background: rgba(255,59,92,22); color: {p['red']}; "
         f"border: 1px solid {p['red']}; padding: 5px 10px; }}\n"
@@ -79,7 +81,7 @@ def _carbon_flow() -> Skin:
         "muted": (p["line"], p["field"], p["dim"]), "button": (p["line"], p["tile"], p["text"]),
         "plus": (p["green"], (61, 255, 143, 22), p["green"]), "minus": (p["red"], (255, 59, 92, 26), p["red"]),
     }
-    settings_extra = cut + _scrollbar(p["track"], p["cyan"]) + (
+    settings_extra = cut + combo + _scrollbar(p["track"], p["cyan"]) + (
         f"QScrollArea, QWidget#qt_scrollarea_viewport {{ background: transparent; border: none; }}\n"
         f"QPushButton[cutbox=\"true\"] {{ padding: 4px 16px; min-height: 22px; }}\n"
         f"QPushButton#exportButton[cutbox=\"true\"] {{ color: {p['cyan_ink']}; font-weight: bold; }}\n"
@@ -118,6 +120,10 @@ def _carbon_flow() -> Skin:
         f"padding: 2px 6px; }}\n"
         f"QPlainTextEdit:hover {{ border-color: transparent; }}\n"
         f"QPlainTextEdit#preview {{ color: {p['cyan']}; font-size: 11pt; font-weight: bold; $NUMBER_FONT }}\n"
+        # 按编号导入的输入框：同粘贴框，底和框由切角框画（chrome.cut_corners），样式表只管字和内边距
+        f"QLineEdit {{ background: transparent; color: {p['text']}; border: 4px solid transparent; padding: 0px 6px; }}\n"
+        f"QLineEdit:hover {{ border-color: transparent; }}\n"
+        f"QLineEdit:disabled {{ color: {p['disabled']}; }}\n"
     )
     editor_extra = cut + combo + _scrollbar(p["track"], p["cyan"]) + (
         f"QPushButton#small[cutbox=\"true\"] {{ padding: 2px 10px; font-size: 9pt; }}\n"
@@ -163,6 +169,7 @@ def _carbon_flow() -> Skin:
     return make_skin(
         CARBON_FLOW_KEY, CARBON_FLOW_LABEL, common=common, fonts=fonts, layouts=layouts,
         overlay=dict(
+            WIDTH=520,  # 比默认的 459 宽：最长的角色名、最长的方案名在「筹码方案」卡片的下拉框里要写得下
             PANEL_MARGINS=(18, 10, 14, 14), PANEL_SPACING=10, HEAD_SPACING=6,
             PANEL_BG="transparent", PANEL_BORDER="transparent", PANEL_RADIUS=0, PANEL_PAUSED_BG="transparent",
             PANEL_PAUSED_BORDER="transparent", PANEL_ATTENTION_BORDER=p["red"], PANEL_OPAQUE_BG="transparent",
@@ -186,8 +193,8 @@ def _carbon_flow() -> Skin:
             TOGGLE_PRESSED_BG="transparent",
             REMOVE_PADDING="0px 6px", REMOVE_RADIUS=0, SCROLL_WIDTH=6, SCROLL_HANDLE=p["cyan"], SCROLL_RADIUS=3,
             SCROLL_HANDLE_MIN=24, CLOSE_PADDING="3px 11px 5px 11px",
-            SCHEME_TOOL_ICON_PX=20, SCHEME_TOOL_COLOR=p["text"], SCHEME_TOOL_DISABLED=p["disabled"], SCHEME_TOOL_GAP=4,
-            SCHEME_TOOL_PADDING=(12, 7),
+            SCHEME_TOOL_ICON_PX=14, SCHEME_TOOL_COLOR=p["text"], SCHEME_TOOL_DISABLED=p["disabled"], SCHEME_TOOL_GAP=3,
+            SCHEME_TOOL_PADDING=(12, 5),
             MARK_BEST_COLOR=p["cyan_ink"], MARK_COLOR=p["text"],
             NAME_BORDER_ALPHA=255, UNREADABLE_BORDER_ALPHA=255, NAME_PADDING="1px 8px", NAME_WEIGHT_BEST=700,
             NAME_WEIGHT=700, PICKED_WEIGHT=700, GRID_DIAMETER=26,
@@ -275,7 +282,8 @@ def _carbon_flow() -> Skin:
             TIER_SEGMENTED=True, SEGMENT_BORDER=p["line"],
         ),
         share=dict(
-            SIZE=(900, 540), SCREEN_MARGIN=0, SHEET_EXTRA=share_extra, WINDOW_BG=p["bg"], TEXT_COLOR=p["text"],
+            # 高度连导入那一块的按编号导入、提示行算在内：取回一套以后粘贴框、识别结果照旧整个看得见
+            SIZE=(900, 580), SCREEN_MARGIN=0, SHEET_EXTRA=share_extra, WINDOW_BG=p["bg"], TEXT_COLOR=p["text"],
             SECTION_COLOR=p["text"], GROUP_HEAD_COLOR=p["dim"], DIM_COLOR=p["dim"], OK_COLOR=p["green"],
             WARN_COLOR=p["red"], BOX_BG="transparent", BOX_BORDER="transparent", BOX_RADIUS=0,
             INPUT_BG=p["field"], INPUT_BORDER=p["line"], INPUT_RADIUS=0, INPUT_PADDING="4px 10px",
@@ -295,6 +303,8 @@ def _carbon_flow() -> Skin:
             WIDTH=720, HEIGHT=0, SCREEN_MARGIN=0, SHEET_EXTRA=settings_extra, WINDOW_BG=p["bg"], TEXT_COLOR=p["text"],
             DIM_COLOR=p["dim"], WARN_COLOR=p["red"], CARD_BG=p["card"], CARD_BORDER=p["edge"], DIVIDER_COLOR=p["edge"],
             ICON_BG=p["tile"], ICON_COLOR=p["soft"], SELECTED_COLOR=p["cyan"],
+            LEVEL_COLOR={"easy": p["green"], "normal": p["cyan"], "danger": p["amber"],
+                         "critical": "#ff8a1f", "overload": p["red"]},
             TILE_BG=p["field"], TILE_BORDER=p["line"], TILE_HOVER_BORDER="#5a6b8c", TILE_ON_BG="rgba(0,229,255,22)",
             TILE_PEN=1, TILE_ON_PEN=1.4, TILE_RADIUS=0, TILE_MARGINS=(16, 10, 14, 12), TILE_SPACING=12,
             RADIO_SIZE=16, RADIO_GAP=8, RADIO_PEN=1.4, RADIO_DOT=3.5, RADIO_OFF_COLOR=p["disabled"], TILE_CUT=10,
@@ -310,7 +320,8 @@ def _carbon_flow() -> Skin:
             TIP_BG=p["panel"], TIP_BORDER=p["line"], TIP_PADDING=6,
             SCROLL_HANDLE=p["cyan"], SCROLL_WIDTH=6, SCROLL_RADIUS=3,
             ITEM_BARS={"mode": p["cyan"], "hotkey": p["amber"], "capture": p["green"], "lowend": p["magenta"],
-                       "skin": p["magenta"], "opaque": p["slate"], "export": p["cyan"], "update": p["green"],
+                       "big_cores": p["amber"], "skin": p["magenta"], "opaque": p["slate"], "export": p["cyan"],
+                       "update": p["green"],
                        "about": p["slate"]},
         ),
         chrome=dict(

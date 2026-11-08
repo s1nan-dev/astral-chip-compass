@@ -1085,6 +1085,180 @@ class OutOfGameTwiceTest(Clocked):
         self.assertFalse(self.s.can_undo_new_game)
 
 
+class MainMenuTest(Clocked):
+    """对局中途回到主菜单（中途退出、断线）：和房间一样，对局状态还在时隔一会儿、20 秒内连续两次读到才结束本局，依据
+    「检测到主菜单」；只读到一次就回到了对局画面的不算。之后连续两次读到的轮次不比离开时小、中间没读到别的对局外画面、
+    离开不到 REJOIN_MAX_S（断线以后连回了同一局）时不开新的一局：撤回那次结束、接着记（status 的 cause 为 rejoined，
+    识别记录 read:rejoined）；之后认出别的角色照常判新的一局。读到了房间等别的画面、轮次比离开时小、离开太久的照常开新的一局。"""
+
+    MENU = screen("main_menu")
+
+    def playing(self, last=6):
+        """打到第 last 轮、2 星、进度 last+1/17，记下一个筹码。"""
+        self.rounds(last)
+        self.stars(2)
+        self.s.on_progress(last + 1, 17)
+        self.s.on_progress(last + 1, 17)
+        self.assertEqual(self.pick(OFFER_A).kind, "picked")
+        self.s.take_events()
+
+    def end_by_menu(self, last=6):
+        self.playing(last)
+        self.assertIsNone(self.s.on_out_of_game(self.MENU))
+        self.tick(1.5)
+        ev = self.s.on_out_of_game(self.MENU)
+        self.assertEqual((ev.kind, ev.why), ("game_over", "检测到主菜单"))
+        self.s.take_events()
+
+    def round_twice(self, rnd, gap=16.0):
+        """离开 gap 秒以后连续两次读到第 rnd 轮（隔 3 秒），返回两次的结果。"""
+        self.tick(gap)
+        first = self.s.on_hud(hud(rnd))
+        self.tick()
+        return first, self.s.on_hud(hud(rnd))
+
+    def records(self, kind):
+        return [r for r in self.s.recent_events(600) if r["kind"] == kind]
+
+    def test_menu_twice_ends_game(self):
+        """第 6 轮时隔 1.5 秒两次读到主菜单：本局结束，依据「检测到主菜单」；主菜单上没有难度和地图，不留给下一局。"""
+        self.end_by_menu()
+        self.assertTrue(self.s.game.game_over)
+        self.assertEqual(self.s.game_over_info["why"], "检测到主菜单")
+        self.assertEqual(self.s.game_over_info["rounds"], 6)
+        self.assertEqual((self.s.pending._next_difficulty, self.s.pending._next_map), ({}, None))
+        self.assertEqual(self.records("read:game_over")[-1]["why"], "检测到主菜单")
+
+    def test_single_menu_does_not_end(self):
+        """只读到一次主菜单就回到了对局画面：不算结束，那一次作废；之后再读到一次也还只是第一次。"""
+        self.playing()
+        self.assertIsNone(self.s.on_out_of_game(self.MENU))
+        self.tick()
+        self.assertIsNone(self.s.on_hud(hud(6)))
+        self.tick()
+        self.assertIsNone(self.s.on_out_of_game(self.MENU))
+        self.assertFalse(self.s.game.game_over)
+        self.assertEqual(self.s.settings.owned, [OFFER_A[1]])
+
+    def test_rejoin_keeps_game(self):
+        """主菜单结束（第 6 轮）以后连续两次读到第 7 轮：同一局接着记，筹码、星数、进度上限都在，没有新的一局；
+        之后照常记筹码。"""
+        self.end_by_menu()
+        first, ev = self.round_twice(7)
+        self.assertIsNone(first)
+        self.assertEqual((ev.kind, ev.cause), ("status", "rejoined"))
+        self.assertNotIn("newgame", kinds(self.s.take_events()))
+        st = self.s.settings
+        self.assertEqual((st.owned, st.round, st.star, self.s.game.progress_cap), ([OFFER_A[1]], 7, 2, 17))
+        self.assertFalse(self.s.game.game_over)
+        self.assertIsNone(self.s.game_over_info)
+        self.assertFalse(self.s.can_undo_new_game)
+        self.assertEqual(self.s.games, 0)
+        rec = self.records("read:rejoined")
+        self.assertEqual([(r["left"], r["round"], r["seconds"]) for r in rec], [(6, 7, 19)])
+        self.assertEqual(_event_record(ev)["cause"], "rejoined")
+        self.tick()
+        self.assertIsNone(self.s.on_hud(hud(7)))  # 第 7 轮照常
+        self.assertEqual(self.pick(OFFER_B).kind, "picked")
+        self.assertEqual(self.s.settings.owned, [OFFER_A[1], OFFER_B[1]])
+
+    def test_rejoin_then_other_hero(self):
+        """接着记以后认出了别的角色（其实是开了新的一局，房间和选角界面都没截到）：照常判新的一局，刚接回来时不拿轮次
+        否决它；认回这一局的角色以后，轮次照旧否决认错的角色。"""
+        self.end_by_menu()
+        self.round_twice(7)
+        self.tick()
+        ev = self.heroes("凛")[-1]
+        self.assertEqual((ev.kind, ev.cause, ev.undo), ("newgame", "hero", True))
+        self.assertEqual(self.s.settings.owned, [])
+        self.assertTrue(self.s.undo_new_game())
+        self.assertEqual(self.s.settings.owned, [OFFER_A[1]])
+
+        self.setUp()
+        self.end_by_menu()
+        self.round_twice(7)
+        self.heroes(HERO, times=1)  # 认回了这一局的角色
+        self.tick()
+        self.assertEqual(self.heroes("凛"), [None, None])  # 第 7 轮还在：按认错处理
+        self.assertEqual(self.s.settings.owned, [OFFER_A[1]])
+
+    def test_room_after_menu_starts_new_game(self):
+        """主菜单结束以后读到了组队房间（确实离开了那一局），再连续两次读到第 1 轮：新的一局，从开局看起，不请用户打开
+        「查看筹码」面板。"""
+        self.end_by_menu()
+        self.tick()
+        self.assertIsNone(self.s.on_out_of_game(screen("team_room", "噩梦")))
+        first, ev = self.round_twice(1)
+        self.assertEqual((ev.kind, ev.cause, ev.undo), ("newgame", "round", True))
+        self.assertEqual(self.s.settings.owned, [])
+        self.assertFalse(self.s.game.panel_needed)
+        self.assertTrue(self.s.game.whole_game)
+        self.assertNotIn("panel_prompt", kinds(self.s.take_events()))
+        self.assertEqual(self.records("read:rejoined"), [])
+
+    def test_room_then_menu_not_rejoined(self):
+        """第 6 轮时先认出一次组队房间、1.5 秒后认出主菜单：按主菜单结束本局，但先认出的那一次是房间（结束之前已经离开过
+        这一局），之后连续两次读到离开时的第 6 轮也不接着记，开新的一局（可撤销）。"""
+        self.playing()
+        self.assertIsNone(self.s.on_out_of_game(screen("team_room", "噩梦")))
+        self.tick(1.5)
+        ev = self.s.on_out_of_game(self.MENU)
+        self.assertEqual((ev.kind, ev.why), ("game_over", "检测到主菜单"))
+        self.s.take_events()
+        first, ev = self.round_twice(6)
+        self.assertIsNone(first)
+        self.assertEqual((ev.kind, ev.cause, ev.undo), ("newgame", "round", True))
+        self.assertEqual(self.s.settings.owned, [])
+        self.assertEqual(self.records("read:rejoined"), [])
+
+    def test_round1_menu_rejoins(self):
+        """第 1 轮就回到主菜单，没截到房间和选角界面又读到两次第 1 轮：当成同一局接着记（已知代价：第 1 轮退出、马上开了
+        新的一局时会这样，新一局开头的筹码记进上一局；第 1 轮最多拿一两个筹码，之后认出别的角色照常判新的一局）。"""
+        self.end_by_menu(last=1)
+        first, ev = self.round_twice(1)
+        self.assertEqual((ev.kind, ev.cause), ("status", "rejoined"))
+        self.assertEqual(self.s.settings.owned, [OFFER_A[1]])
+        self.assertFalse(self.s.game.game_over)
+
+    def test_lower_round_starts_new_game(self):
+        """主菜单结束时第 6 轮，之后连续两次读到第 2 轮：比离开时小，是新的一局，从开局看起、不请用户打开面板。"""
+        self.end_by_menu()
+        first, ev = self.round_twice(2)
+        self.assertEqual((ev.kind, ev.cause, ev.undo), ("newgame", "round", True))
+        self.assertEqual(self.s.settings.owned, [])
+        self.assertFalse(self.s.game.panel_needed)
+        self.assertTrue(self.s.game.whole_game)
+        self.assertNotIn("panel_prompt", kinds(self.s.take_events()))
+
+    def test_too_late_starts_new_game(self):
+        """离开超过 REJOIN_MAX_S（同推荐日志两次三选一隔这么久就算新一局的 GAME_GAP）：照常开新的一局。"""
+        from advisor import logbook
+        from advisor.session import offgame
+
+        self.assertEqual(offgame.REJOIN_MAX_S, logbook.GAME_GAP.total_seconds())
+        self.end_by_menu()
+        first, ev = self.round_twice(7, gap=offgame.REJOIN_MAX_S + 1)
+        self.assertEqual((ev.kind, ev.cause), ("newgame", "round"))
+        self.assertTrue(self.s.game.panel_needed)  # 第 7 轮：开局后可能已经拿过筹码
+
+    def test_result_after_menu_not_rejoined(self):
+        """主菜单结束以后又读到了结算画面（那一局确实打完了）：之后的轮次不再接着记，开新的一局（不可撤销）。"""
+        self.end_by_menu()
+        self.tick()
+        self.assertIsNone(self.s.on_out_of_game(screen("result", None, None, 6)))
+        first, ev = self.round_twice(7)
+        self.assertEqual((ev.kind, ev.cause, ev.undo), ("newgame", "round", False))
+
+    def test_menu_cancels_match_found(self):
+        """读到「匹配成功」画面以后回到了主菜单：那次匹配没有开始，它上面的难度和地图作废（同房间）。"""
+        self.end_by_menu()
+        self.s.on_out_of_game(screen("match_found", "噩梦", "水乡古镇"))
+        self.assertEqual(self.s.pending._next_map, ("水乡古镇", "match"))
+        self.s.on_out_of_game(self.MENU)
+        self.assertEqual((self.s.pending._next_difficulty, self.s.pending._next_map), ({}, None))
+        self.assertTrue(self.records("read:match_cancelled"))
+
+
 # ====================================================================== 地图专属筹码和加载画面的地图冲突
 
 
@@ -1212,7 +1386,7 @@ class FlowBase(unittest.TestCase):
         patches = [
             mock.patch.object(pipeline, "looks_like_overlay_screen", side_effect=lambda img: self.seen is not None),
             mock.patch.object(pipeline, "read_chip_select", side_effect=lambda img, db, **kw: self.seen),
-            mock.patch.object(pipeline, "read_hud", side_effect=lambda img, db, full: Hud(round=self.round)),
+            mock.patch.object(pipeline, "read_hud", side_effect=lambda img, db, full, **kw: Hud(round=self.round)),
             mock.patch.object(pipeline, "read_progress", return_value=Progress()),
             mock.patch.object(pipeline, "is_select_screen", side_effect=fake_pick),
             mock.patch.object(pipeline, "read_hero", side_effect=lambda img, db: SimpleNamespace(hero="凛")),
@@ -1265,25 +1439,30 @@ class ConsecutiveSelectFlowTest(FlowBase):
 
 
 class RoomRecheckFlowTest(FlowBase):
-    """下方区域认出的房间（静止画面）：本局还没结束时不沿用「不是选角界面」的结论，hud_ms 后再认一次，第二次结束本局。"""
+    """下方区域认出的房间（静止画面）：本局还没结束时不沿用「不是选角界面」的结论，hud_ms 后再认一次，第二次结束本局。
+    看见轮次标记（第 8 秒）以后第一次读不到（第 12 秒）照认；第二次（第 15 秒）离那次标记不到 pick_grace_ms（10 秒），先不认，
+    第 18 秒起照认。"""
 
     def test_static_room_read_again(self):
+        self.assertEqual(self.proc.pick_grace_s, 10.0)  # 下面的时刻按默认时限排
         self.round, self.stars = 12, SimpleNamespace(stars=3, confidence=0.9)
         for t in (0.0, 4.0, 8.0):
             self.step(t)
         self.round, self.stars = None, None
         room = np.full((1080, 1920, 3), 200, np.uint8)
         self.step(12.0, room)  # 静止画面：这一次还没认出来
+        self.step(15.0, room)  # 第二次读不到、离第 8 秒不到 pick_grace_ms：先不认下方区域
+        self.assertEqual([t for t in self.pick_at if t >= 12.0], [12.0])
         self.bottom = OutOfGame(TEAM_ROOM, "噩梦")
-        events = self.step(15.0, room)  # 认出了组队房间：只记下第一次
+        events = self.step(18.0, room)  # 认出了组队房间：只记下第一次（同样的画面，这一局还没结束，不沿用第 12 秒的结论）
         self.assertNotIn("game_over", kinds(events))
         self.assertFalse(self.session.game.game_over)
-        events = self.step(18.0, room)  # 同样的画面再认一次
+        events = self.step(21.0, room)  # 同样的画面再认一次
         self.assertEqual([e.why for e in events if e.kind == "game_over"], ["检测到组队房间"])
-        self.assertEqual([t for t in self.pick_at if t >= 12.0], [12.0, 15.0, 18.0])
-        for t in (21.0, 24.0, 27.0):
+        self.assertEqual([t for t in self.pick_at if t >= 12.0], [12.0, 18.0, 21.0])
+        for t in (24.0, 27.0, 30.0):
             self.step(t, room)
-        self.assertEqual([t for t in self.pick_at if t >= 12.0], [12.0, 15.0, 18.0, 21.0])  # 结束以后照旧沿用结论
+        self.assertEqual([t for t in self.pick_at if t >= 12.0], [12.0, 18.0, 21.0, 24.0])  # 结束以后照旧沿用结论
 
 
 if __name__ == "__main__":

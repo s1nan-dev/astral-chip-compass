@@ -1,7 +1,7 @@
 """生成 review/ 下的两份审查清单：适配表审查清单（synergy-review.md）和横向检查（synergy-audit.md）。
 
-适配表审查清单列出每个角色分数最高和最低的筹码及理由，供人工审查：分数 = 游戏内置推荐分 + 适配分 + 推荐流派分，
-不含前瞻（前瞻取决于当时的筹码池）。横向检查由 tools/audit_synergy.py 生成，慢得多（要把每个角色、每个筹码都算一遍）。
+适配表审查清单列出每个角色分数最高和最低的筹码及理由，供人工审查：分数 = 适配分 + 推荐流派分
+（游戏内置推荐分不计入总分），不含前瞻（前瞻取决于当时的筹码池）。横向检查由 tools/audit_synergy.py 生成，慢得多（要把每个角色、每个筹码都算一遍）。
 
 两份清单都是生成的，不要手改：改了数据或推荐代码以后重新生成。清单开头记着「生成依据」的指纹，
 tools/check_data.py 对一下就知道是不是最新的，不必每次重算横向检查。
@@ -57,10 +57,11 @@ FINGERPRINT_LINE = FINGERPRINT_PREFIX + "{fp}；" + REGEN_HINT + FINGERPRINT_SUF
 FINGERPRINT_SOURCES = ("data/**/*.json", "data/**/*.toml", "advisor/engine/**/*.py", "advisor/data.py",
                        "advisor/pool.py", "advisor/schemes.py", "tools/make_review.py", "tools/audit_synergy.py")
 # data/ 下和清单无关、不算进指纹的文件（改了它们清单不变，算进来会误报过期）：下载识别图片用的清单、分享筹码方案用的
-# 编号表、认角色用的斜着摆的角色照表、从卡面现裁角色照的裁法、首次运行不下载的健全版名单。meta.json 要算：清单里的「今天」
-# 按它的 data_date 算
+# 编号表、认角色用的斜着摆的角色照表、从卡面现裁角色照的裁法、首次运行不下载的健全版名单、界面文字的简繁对照表和
+# 人补的词组（tools/hant_table.py 生成和维护）。meta.json 要算：清单里的「今天」按它的 data_date 算
 FINGERPRINT_EXCLUDE = frozenset(("data/assets_manifest.json", "data/chip_codes.json", "data/photo_tilt.json",
-                                 "data/card_crops.json", "data/sfw_skip.json"))
+                                 "data/card_crops.json", "data/sfw_skip.json", "data/zh_hant.json",
+                                 "data/zh_hant_extra.toml"))
 # 资料日期读不到时报错退出的提示（pinned_today）
 DATE_ERROR = ("读不到资料日期：data/meta.json 的 data_date 应为 YYYY-MM-DD 的日期。清单里的「今天」按它算（限时地图按那天"
               "是否现役），不按运行当天算；请先改好 meta.json（python tools/check_data.py 会报出哪里不对），再重新生成。")
@@ -155,23 +156,29 @@ def chip_kind(chip) -> str:
 
 
 def rows_for(db, hero_name: str):
+    """每个筹码一行：（总分，「内置」一栏的值，适配分，筹码，理由）。按总分从高到低。
+    「内置」一栏：内置分计入总分时（[official] scale 不为 0）是计入的值，不计入时是游戏公式的原值；
+    适配分都是总分减掉实际计入的内置分。"""
+    counts = bool(db.rules["official"].get("scale", 1.0))
     rows = []
     for chip in db.chips.values():
         if chip.granted:
             continue
         # 地图专属筹码按「正在那张地图」来算，这样限定地图的规则能生效
         st = State(hero=hero_name, star=1, map=chip.maps[0] if chip.maps else None, rerolls=3)
-        parts = Scorer(db, st).parts(chip.name, (), None)
+        scorer = Scorer(db, st)
+        parts = scorer.parts(chip.name, (), None)
         total = sum(p.score for p in parts)
-        official = sum(p.score for p in parts if p.label in OFFICIAL)
+        counted = sum(p.score for p in parts if p.label in OFFICIAL)
+        official = counted if counts else scorer.official_raw(chip.name, (), None)
         # 推荐流派的加分只说明筹码属于推荐流派，不列；推荐流派要保住时的扣分（keep_schools）照列
         reasons = sorted(
             (p for p in parts if p.reason and (p.label not in NOT_REASONS or (p.label == "推荐流派" and p.score < 0))),
             key=lambda p: -abs(p.score),
         )
         text = "；".join(f"{p.reason}（{p.score:+.0f}）" for p in reasons[:2]) or "—"
-        rows.append((total, official, chip, text))
-    rows.sort(key=lambda r: (-r[0], r[2].name))
+        rows.append((total, official, total - counted, chip, text))
+    rows.sort(key=lambda r: (-r[0], r[3].name))
     return rows
 
 
@@ -198,10 +205,10 @@ def keep_note(db, hero_name: str) -> str:
 
 def table(rows) -> list[str]:
     out = ["| 筹码 | 稀有度 | 归属 | 总分 | 内置 | 适配 | 适配理由 |", "|---|---|---|---|---|---|---|"]
-    for total, official, chip, text in rows:
+    for total, official, fit, chip, text in rows:
         out.append(
             f"| {chip.name} | {chip.rarity} | {chip_kind(chip)} | {total:.0f} | {official:.0f} "
-            f"| {total - official:+.0f} | {text} |"
+            f"| {fit:+.0f} | {text} |"
         )
     return out
 
@@ -340,12 +347,16 @@ def _write_review(out: str | None) -> None:
         "",
         "由 `tools/make_review.py` 生成，不要手改；要改请改 `data/synergy.toml`，再重新生成。",
         "",
-        f"- 总分 = 游戏内置推荐分 × {scale:g} + 适配分（含推荐流派的加分），不含前瞻。「内置」一栏是乘 {scale:g} 之后的值。",
+        (f"- 总分 = 游戏内置推荐分 × {scale:g} + 适配分（含推荐流派的加分），不含前瞻。「内置」一栏是乘 {scale:g} 之后的值。"
+         if scale else
+         "- 总分 = 适配分（含推荐流派的加分），不含前瞻；游戏内置推荐分不计入总分，「内置」一栏是游戏公式的原值。"),
         "- 假设：1 星、没有任何筹码、轮次未知；地图专属筹码按身处那张地图来算。"
         "循环往复按刷新模型估值（rules.toml [endless_cycle]），随星数、轮次、剩余刷新次数和三选一的来源（等待的回合数）变化，"
         "这里按 1 星、剩 3 次刷新、来源为升星计算。",
         "- 「特性」一行列出的是适配表里的特性名（审查用）；推荐理由里不显示特性名，显示的是特性说明。",
-        f"- 内置推荐的标签分（原值 +{db.rules['official']['tag']}，计入总分时 ×{scale:g}）只给角色所属的职业：职业分值（初始分值 + 已有筹码的分值）"
+        f"- 内置推荐的标签分（原值 +{db.rules['official']['tag']}"
+        + (f"，计入总分时 ×{scale:g}" if scale else "，不计入总分")
+        + "）只给角色所属的职业：职业分值（初始分值 + 已有筹码的分值）"
         f"≥ {db.rules['official']['class_threshold']} 才算属于该职业，可以属于几个，也可以一个都不属于。",
         f"- 每个角色列出分数最高的 {TOP} 个和最低的 {BOTTOM} 个筹码。",
         "- 标题后注明「默认推荐标了档位」的角色（synergy.toml 的 [[player]]，代码里的内部名字叫玩家思路，界面上不出现），"

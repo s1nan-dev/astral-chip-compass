@@ -657,8 +657,10 @@ class PreviewTest(Case):
         window = mock.MagicMock()
         window.check_assets.side_effect = lambda: order.append(("check_assets", window.previews))
         with mock.patch.object(app_mod, "build", return_value=(app, window, SimpleNamespace(
-                    eventlog=SimpleNamespace(recorder=None), save=lambda force=False: None), threading.Lock())), \
+                    eventlog=SimpleNamespace(recorder=None), save=lambda force=False: None,
+                    settings=SimpleNamespace(big_cores=False)), threading.Lock())), \
                 mock.patch.object(app_mod, "Watcher"), mock.patch.object(app_mod, "Hotkey"), \
+                mock.patch.object(app_mod, "QTimer"), \
                 mock.patch.object(app_mod, "expected_capture", return_value="window"), \
                 mock.patch.object(app_mod.Services, "load", return_value=None), \
                 mock.patch.object(app_mod, "declare_high_performance"), \

@@ -645,7 +645,7 @@ class RealGameFlowTest(ScenarioBase):
         play(self.game, "补录紫色飞星")
         self.assertEqual(self.game.session.settings.owned, ["“8面”骰子", "紫色飞星"])
         self.assertEqual(w.status.summary_plain, "已补录：紫色飞星。等待下一次筹码三选一")
-        self.assertEqual(self.logbook.picks[-1], (offer_id, "紫色飞星"))
+        self.assertEqual(self.logbook.picks[-1], (offer_id, "紫色飞星", "supplement"))  # 补录的另带 via
         self.assertFalse(w.panel.property("attention"))
         self.assertTrue(w.owned_card.isHidden())
         self.assertEqual(w.chip_grid.names(), ["“8面”骰子", "紫色飞星"])
@@ -678,7 +678,7 @@ class RealGameFlowTest(ScenarioBase):
         self.assertEqual(s.settings.owned, [
             "“8面”骰子", "紫色飞星", "银行卡-用不完", "ATM机", "银行卡-余额多", "医疗箱-紧急治疗", "金色飞星"])
         self.assertEqual(self.w.chip_grid.names(), s.settings.owned)
-        picks = [chip for _, chip in self.logbook.picks]
+        picks = [pick[1] for pick in self.logbook.picks]  # 补录的那一条另带 via（第三项）
         self.assertEqual([p for p in picks if p != "刷新"], s.settings.owned)
         self.assertEqual(picks.count("刷新"), 2)  # 第 6 轮、第 9 轮各刷新一次
         self.assertEqual(self.logbook.games_log, [])
@@ -1049,8 +1049,9 @@ class EveryStepTest(ScenarioBase):
                 checked.add("补录行")
             if w.advice.question_state() == "ask":
                 best = w.advice.pick["best"][1]
-                self.assert_prompts_visible([(f"未选择「{best}」的原因？", "advice", ["照顾队友", "地图因素", "推荐有误"])],
-                                            where=name)
+                self.assert_prompts_visible(
+                    [(f"未选择「{best}」的原因？", "advice", ["照顾队友", "地图因素", "推荐有误", "想试别的玩法", "×"])],
+                    where=name)
             for key, (_, text, level, btns) in w.notice_model.notices.items():
                 if level == "action":
                     area = w.notice_model.area(key)
@@ -1738,7 +1739,7 @@ class WeirdEventTest(unittest.TestCase):
                         w.handle(ev)
                         w.set_expanded(not expanded)
                         w.set_expanded(expanded)
-                        self.assertEqual(w.width(), 430)
+                        self.assertEqual(w.width(), 459)
                 with self.subTest(after="之后照常工作", live=live, expanded=expanded), no_slot_errors(self):
                     s.on_frame(None)
                     w.handle(s.on_frame(None) or Event("idle"))
@@ -1786,7 +1787,7 @@ class WeirdEventTest(unittest.TestCase):
             w.handle(Event("missed_pick", offer=list(s.game.missed_offer), raw=[None, LONG]))
             self.assertEqual([b.text() for b in visible_buttons(w, w.missed)], ["书签", "关闭本条提示"])
             self.assertIn(f"「{LONG}」无法识别", w.owned.missed_buttons_text())
-            self.assertEqual(w.width(), 430)
+            self.assertEqual(w.width(), 459)
             w.set_expanded(True)
             next(b for b in visible_buttons(w, w.missed) if b.text() == "关闭本条提示").click()
             self.assertTrue(w.missed.isHidden())
@@ -1805,7 +1806,7 @@ class WeirdEventTest(unittest.TestCase):
             w.handle(ev)
             self.assertIn("候选筹码 第 1、2、3 个无法识别", w.status.status_text())
             self.assertEqual(len(visible_buttons(w, w.body)), 3)
-            self.assertEqual(w.width(), 430)
+            self.assertEqual(w.width(), 459)
             # 改正栏里输入很长的名字：提示不在筹码表中；输入正确的筹码名后照常改正
             visible_buttons(w, w.body)[0].click()
             w.fix_box.setEditText(LONG)

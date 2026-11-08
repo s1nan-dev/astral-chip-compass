@@ -621,6 +621,78 @@ class RoundSanityTest(unittest.TestCase):
             self.assertIsNone(hud_module.read_round(img))
             rec.assert_not_called()
 
+    def test_covered_by_portrait(self):
+        """玩家列表第一行的头像挡住轮次数字（2560×1600 笔记本上的实机截图，上下有黑边，先去掉）：繁体截图上兔耳朵顶到
+        「03」下沿、耳朵和「Round」连成「ARound」，照样认出标记，在它左边裁一小块读出 3；简体截图上天线插进「04」，
+        读不出可以、不能读错。两张都看得见标记，只做一遍带找字的识别。大厅左上角的活动日期、通行证名不当成轮次，也不重读。"""
+        from advisor.vision.hud import read_round_info
+        from advisor.vision.pipeline import trim_borders
+
+        cases = (
+            ("20261106_211543_hud_round3_ears_hant_*", (3,), True),
+            ("20261018_164911_hud_round4_antenna_*", (None, 4), True),
+            ("20261106_211618_lobby_dates_hant_*", (None,), False),
+        )
+        for pattern, want, mark in cases:
+            img, _ = trim_borders(load(sample(pattern)))
+            got = read_round_info(img)
+            with self.subTest(file=pattern):
+                self.assertIn(got.value, want)
+                self.assertEqual(got.mark, mark)
+                self.assertEqual(got.passes, 1)
+                self.assertEqual(got.crop is not None, mark)
+
+    def test_covered_digits_not_misread(self):
+        """贴一条白块挡住「04」的下沿两成（模拟头像顶上来）：放大 1.5 倍重读会读成「10」；看见了标记就先裁小块只认字，
+        读出 4（或读不出），不换大小重读，不读错。白块按第一遍读到的数字框放（界面单位，量自这张 2560×1057 截图）。"""
+        from advisor.vision.chip_select import ui_scale
+        from advisor.vision.hud import read_round_info
+
+        img = load(sample("20261002_144715_*"))
+        u = ui_scale(img.shape[1], img.shape[0])
+        x0, y1, x1, y2 = 70.5, 54.9, 157.7, 67.3  # 数字框 x 70.5~157.7、y 5.3~67.3 的下面两成
+        cv2.rectangle(img, (int(x0 * u), int(y1 * u)), (int(x1 * u), int(y2 * u)), (250, 250, 250), -1)
+        got = read_round_info(img)
+        self.assertIn(got.value, (None, 4))
+        self.assertEqual((got.mark, got.passes), (True, 1))
+
+    def test_first_pass_checked_by_crop(self):
+        """第一遍靠标记读到的数用标记左边那一块只认字核对：这张截图是「04 轮」，带找字的第一遍换成读成「10」（数字被
+        挡住一部分时会这样读错，贴白块挡住下沿一成半时实测读成过「10」），标记左边那一块只认字读出 4，两边对不上，
+        按读不出处理（宁可读不出，也不读错）；第一遍读成「04」时两边一致，照用。只换掉第一遍的文字识别，裁小块那一遍
+        用真的。文字框是这张 3840×2054 截图第一遍读到的位置（界面单位：数字 x 78.1~153.8、y 6.3~64.1，
+        「轮」x 153.5~185.1、y 29.2~57.6）。"""
+        from unittest import mock
+
+        from advisor.vision import hud as hud_module, io
+        from advisor.vision.chip_select import Line, ui_scale
+
+        img = load(sample("20261002_020436_*"))
+        u = ui_scale(img.shape[1], img.shape[0])
+
+        def box(text, x0, y0, x1, y1):
+            return Line(text, (x0 + x1) / 2 * u, (y0 + y1) / 2 * u, (x1 - x0) * u, (y1 - y0) * u)
+
+        mark = box("轮", 153.5, 29.2, 185.1, 57.6)
+        for text, want in (("04", 4), ("10", None)):
+            first = [box(text, 78.1, 6.3, 153.8, 64.1), mark]
+            with self.subTest(text=text), mock.patch.object(io, "ocr", return_value=first) as ocr:
+                got = hud_module.read_round_info(img)
+                self.assertEqual((got.value, got.mark, got.passes, ocr.call_count), (want, True, 1, 1))
+                self.assertEqual(hud_module.read_round_crop(img, got.crop), 4)
+
+    def test_crop_reread_with_menu_prefix(self):
+        """21:9 梦想号截图上，标记左边那一块读成「109」（菜单按钮的边缘连带读成「1」）：去掉前缀读出 9。
+        read_round_info 交回的那一块交给 read_round_crop（隔一会儿只认字再看一眼）也读得出。"""
+        from advisor.vision.hud import read_round_crop, read_round_info
+
+        img = load(sample("20261002_145427_*"))
+        got = read_round_info(img)
+        self.assertEqual((got.value, got.mark), (9, True))
+        self.assertEqual(read_round_crop(img, got.crop), 9)
+        h, w = img.shape[:2]
+        self.assertIsNone(read_round_crop(img, (w + 10, 0, w + 50, 40)))  # 裁到画面外：读不出，不报错
+
     def test_round_far_above_progress_is_ignored(self):
         db = load_db()
         s = ready(db)

@@ -1,13 +1,14 @@
 """读对局画面上方的文字：轮次，以及（任务栏点开时）用任务文字判断地图；另外在对局外的画面上找地图名和畸变组件。
 
 和三选一一样靠文字识别找元素，不写死位置：
-  轮次     画面左上「03 轮」，数字在「轮」字左边或同一段里；「轮」字认不出时取左上角单独的两位数；
-           读到「轮」字、数字却检测不出时，在「轮」字左边裁一小块只做识别
+  轮次     画面左上「03 轮」（繁体是「03 Round」），数字在标记左边或同一段里；标记认不出时取左上角单独的两位数；
+           看见标记（连成一段的也算）、数字却读不出时（被头像挡住、检测不出），在标记左边裁一小块只做识别；
+           靠标记读到的数也在这一小块上核对一次，读出另一个数时按读不出处理
   任务栏   点开后列出若干条任务，如「击倒魔法茶壶 0\\3」
   地图标记  某些地图常驻的文字，如异变图书馆右上的「线索：0/5」
   地图名   加载画面上的完整地图名（还没有实机样本，只做保守的精确匹配）
   畸变组件  选角前公布的本局组件（还没有实机样本，只认整段文字恰好是组件名的，见 read_pregame）
-  对局外画面 结算页、匹配成功页、房间、奖励页的种类和上面的难度、地图（解析在 screens.py，复用这里的文字识别结果）
+  对局外画面 结算页、匹配成功页、房间、奖励页、主菜单的种类和上面的难度、地图（解析在 screens.py，复用这里的文字识别结果）
 
 窗口长宽比不固定：看的范围都以「界面单位」（1080p 窗口里的 1 像素，见 chip_select.ui_scale）计，
 不按窗口宽高的比例划；文字识别前按界面缩放折算（chip_select.ocr_scale），字的大小和窗口比例无关。
@@ -21,12 +22,13 @@ from dataclasses import dataclass, field
 import cv2
 import numpy as np
 
+from .. import perfstats
 from ..data import DB, _norm, task_key
 from .anchors import (
-    FULL_DOWN, MARK_CROP, MENU_RIGHT, NOT_LOADING, OCR_WIDTH, PROGRESS_CELL_H, PROGRESS_CELL_W, PROGRESS_DOWN,
-    PROGRESS_HALF_WIDTH, PROGRESS_MERGE_GAP, PROGRESS_PITCH, PROGRESS_ROW_SLACK, PROGRESS_STRIP_H, ROUND_DOWN,
-    ROUND_MIN_HEIGHT, ROUND_RIGHT, ROUND_X, ROUND_Y, SELECT_DOWN, SELECT_REGION, TASK_BAR_MIN_W, TASK_DOWN,
-    TASK_SMALL_UNIT,
+    FULL_DOWN, MARK_CROP, MENU_RIGHT, NOT_LOADING, OCR_WIDTH, PROGRESS_CELL_H, PROGRESS_CELL_W, PROGRESS_DET_SIDE,
+    PROGRESS_DOWN, PROGRESS_HALF_WIDTH, PROGRESS_MERGE_GAP, PROGRESS_PITCH, PROGRESS_ROW_SLACK, PROGRESS_STRIP_H,
+    ROUND_DOWN, ROUND_MARK, ROUND_MARK_HEAD, ROUND_MARK_W_HAN, ROUND_MARK_W_LATIN, ROUND_MIN_HEIGHT, ROUND_RIGHT,
+    ROUND_TEXT, ROUND_X, ROUND_Y, SELECT_DET_SIDE, SELECT_DOWN, SELECT_REGION, TASK_BAR_MIN_W, TASK_DOWN, TASK_SMALL_UNIT,
 )
 from . import io
 from .chip_select import Line, ocr_scale, recognize_only, ui_range, ui_scale
@@ -52,13 +54,29 @@ class Hud:
     # 匹配度：high 高（对上的任务条数领先）/ medium 中（条数打平，但只有这张的任务全读到了）/
     # low 低（打平，或只对上一条任务）。高和中直接采用；低时由 Session 请用户选。没读到任何线索时为 None
     map_confidence: str | None = None
+    # 读轮次时在数字那一行看见了轮次标记（RoundRead.mark）：在对局画面上；round 为 None 时多半是数字被头像挡住了
+    round_mark: bool = False
+    # 标记左边数字那一小块（RoundRead.crop，这张图上的像素 x0, y0, x1, y1），没看见标记时为 None
+    round_crop: tuple[float, float, float, float] | None = None
+
+
+@dataclass(frozen=True)
+class RoundRead:
+    """读一次左上角轮次的结果（read_round_info）。"""
+
+    value: int | None  # 读到的轮次（同 read_round）
+    # 这一次在数字那一行看见了轮次标记（简体「轮」、繁体「Round」，含和数字、头像连成一段的写法，见 _round_mark）
+    mark: bool
+    # 标记左边那一小块（这张图上的像素 x0, y0, x1, y1），read_round_crop 用；没看见标记时为 None
+    crop: tuple[float, float, float, float] | None
+    passes: int  # 这一次做了几遍带找字的文字识别（统计用；只认字的那几次不算）
 
 
 @dataclass
 class Pregame:
     """对局外的画面（加载画面、选角前公布畸变组件的画面）上读到的东西。
 
-    screen 是结算页、匹配成功页、房间、奖励页的读数（screens.OutOfGame），不是这几种画面时为 None。"""
+    screen 是结算页、匹配成功页、房间、奖励页、主菜单的读数（screens.OutOfGame），不是这几种画面时为 None。"""
 
     map: str | None = None
     mutators: list[str] = field(default_factory=list)
@@ -167,6 +185,74 @@ def _pitch(cells: list[tuple[int, float, float]], unit: float) -> float:
     return pitch
 
 
+def progress_box(w: int, h: int) -> tuple[float, float, float, float]:
+    """进度条那一块（原图像素 x0, y0, x1, y1）：画面顶部居中。读进度条（read_progress）和看那一块变没变（progress_look）共用。"""
+    unit = ui_scale(w, h)
+    return w / 2 - PROGRESS_HALF_WIDTH * unit, 0.0, w / 2 + PROGRESS_HALF_WIDTH * unit, PROGRESS_DOWN * unit
+
+
+# 进度条的「样子」（progress_look）：只取进度条本体，缩成每个点约 PROGRESS_LOOK_U 个界面单位见方的彩色小图，连同蓝色当前格
+# （在整个 progress_box 里找）的位置。本体是 progress_box 里从顶边往下 PROGRESS_LOOK_TOP～PROGRESS_LOOK_BOTTOM、两头各让
+# PROGRESS_LOOK_INSET 的那一块：进度条上下、左端「任务」按钮和右端圆头的圆角外露着对局场景（水面、地板、走动的角色），
+# 场景一直在动，算进来的话进度条没变也几乎每次都算变了。
+# 两次的样子比（same_progress_look）：蓝色当前格的块数相同、每块挪动不超过 PROGRESS_LOOK_SHIFT 个界面单位（相邻两格隔约
+# 73），小图上三个颜色通道里差得最多的那个差过 PROGRESS_LOOK_DIFF 的点不到 PROGRESS_LOOK_POINTS 个，才算没变。
+# 用两段 3840x2160 对局录像按时刻抽的帧量（读数没变的 33 对，相隔 0.5～100 秒；读数变了的 5 对）：
+#   - 比整个 progress_box 时，没变的 33 对差 3～651 个点（中位 353），只有 1 对算没变；
+#   - 只比本体时，30 对一个点都不差；另外 3 对差 51～197 个点，是录像里叠在进度条右段上的悬浮窗（截游戏窗口时没有它）；
+#   - 读数变了的 5 对，只比本体差 188～217 个点（比整块差 442～612）。这 5 对蓝色当前格都没挪，变的是各格的编号。
+# 用 samples 里带进度标注的截图量：2560x1369 的五张（进度第 1、4、8、11、12 格）两两比，只比本体差 256～1165 个点（编号换了、
+# 当前格挪了）；把蓝色当前格和右边一格对调（合成「当前格往前挪一格」）差 305～315 个，蓝色块的位置也挪了一格；这五张和
+# 3840x2054 的三张加录像压缩那种程度的噪声（高斯噪声 σ=3、4、6，JPEG 质量 80、70、60 重新压缩，缩到 0.75、0.5 倍再放大）
+# 一个点都不过门槛。一个点是约 4x4 个界面单位的平均，噪声在平均里抵掉大半
+PROGRESS_LOOK_U = 4
+PROGRESS_LOOK_SHIFT = 8
+PROGRESS_LOOK_DIFF = 40
+PROGRESS_LOOK_POINTS = 4
+PROGRESS_LOOK_TOP = 4  # 进度条本体的上沿约在顶边往下 2 个界面单位
+PROGRESS_LOOK_BOTTOM = 40  # 下沿约 41，再往下是场景
+PROGRESS_LOOK_INSET = 40  # 两头的圆角外露着场景的地方各约 20～30 宽
+
+
+@dataclass(frozen=True)
+class ProgressLook:
+    """进度条那一块的样子（progress_look）。"""
+
+    small: np.ndarray  # 进度条本体缩成的小图（BGR，int16），大小只跟本体的界面单位数有关
+    # 像当前格的蓝色块（_blue_cells，第 10 格以后左右两头的蓝色也可能算进来）的中心（界面单位，相对那一块的左上角），从左到右
+    blues: tuple[tuple[float, float], ...]
+
+
+def progress_look(img) -> ProgressLook:
+    """进度条的样子：小图只取本体（progress_box 里去掉上下和两头露着场景的地方，见 PROGRESS_LOOK_TOP 等），蓝色当前格在
+    整个 progress_box 里找。不做文字识别，只缩小一次、找一次蓝色当前格（read_progress 不用认字的那一步），4K 画面约 1 毫秒。
+    收 Frame 或 ndarray。"""
+    img = as_frame(img).image
+    h, w = img.shape[:2]
+    unit = ui_scale(w, h)
+    box = progress_box(w, h)
+    x0, y0 = (int(round(v)) for v in box[:2])
+    ix0, iy0 = (int(round(v)) for v in (box[0] + PROGRESS_LOOK_INSET * unit, box[1] + PROGRESS_LOOK_TOP * unit))
+    ix1, iy1 = (int(round(v)) for v in (box[2] - PROGRESS_LOOK_INSET * unit, box[1] + PROGRESS_LOOK_BOTTOM * unit))
+    crop = img[max(0, iy0):max(iy1, iy0 + 1), max(0, ix0):max(ix1, ix0 + 1)]
+    size = (max(1, round((2 * PROGRESS_HALF_WIDTH - 2 * PROGRESS_LOOK_INSET) / PROGRESS_LOOK_U)),
+            max(1, round((PROGRESS_LOOK_BOTTOM - PROGRESS_LOOK_TOP) / PROGRESS_LOOK_U)))
+    small = cv2.resize(crop, size, interpolation=cv2.INTER_AREA).astype(np.int16)
+    blues = tuple(((x - max(0, x0)) / unit, (y - max(0, y0)) / unit) for x, y in _blue_cells(img, box))
+    return ProgressLook(small, blues)
+
+
+def same_progress_look(a: ProgressLook | None, b: ProgressLook | None) -> bool:
+    """两次进度条那一块的样子一样（门槛见 PROGRESS_LOOK_DIFF 等）。有一边看不到蓝色当前格时一律不算一样：当前格读不出，
+    沿用也没有读数可交（被挡住、不在对局画面上时照常认字）。"""
+    if a is None or b is None or not a.blues or len(a.blues) != len(b.blues) or a.small.shape != b.small.shape:
+        return False
+    if any(abs(p[0] - q[0]) > PROGRESS_LOOK_SHIFT or abs(p[1] - q[1]) > PROGRESS_LOOK_SHIFT for p, q in zip(a.blues, b.blues)):
+        return False
+    diff = np.abs(a.small - b.small).max(axis=2)
+    return int((diff > PROGRESS_LOOK_DIFF).sum()) < PROGRESS_LOOK_POINTS
+
+
 def read_progress(img: np.ndarray) -> Progress:
     """读对局画面上方的进度条：当前所在的格和红叉所在的格（进度上限）。
 
@@ -175,13 +261,14 @@ def read_progress(img: np.ndarray) -> Progress:
     img = as_frame(img).image
     h, w = img.shape[:2]
     unit = ui_scale(w, h)
-    box = (w / 2 - PROGRESS_HALF_WIDTH * unit, 0, w / 2 + PROGRESS_HALF_WIDTH * unit, PROGRESS_DOWN * unit)
+    box = progress_box(w, h)
     marks = _red_marks(img, box)
     blues = _blue_cells(img, box)
     if not marks and not blues:
         return Progress()
     cells = []
-    for ln in io.ocr(img, box):
+    # 细长条找字时不补边、不放大到引擎默认的 736（见 anchors.PROGRESS_DET_SIDE）
+    for ln in io.ocr(img, box, det_side=PROGRESS_DET_SIDE, pad=False):
         text = ln.text.strip()
         if re.fullmatch(r"\d{1,2}", text):
             cells.append((int(text), ln.cx, ln.cy))
@@ -254,7 +341,7 @@ def _round_value(text: str) -> int | None:
     return value if ROUND_MIN <= value <= ROUND_MAX else None
 
 
-# 左上角菜单按钮的右边缘、在「轮」字左边裁来只做识别的那一小块见 anchors.MENU_RIGHT / anchors.MARK_CROP
+# 左上角菜单按钮的右边缘、在标记左边裁来只做识别的那一小块见 anchors.MENU_RIGHT / anchors.MARK_CROP
 MARK_REC_MIN = 0.8  # 识别置信度至少这么多
 
 
@@ -273,22 +360,32 @@ def _parse_round(lines: list[Line], width: int, height: int) -> int | None:
     return _parse_round_ex(lines, width, height)[0]
 
 
+def _is_mark(ln: Line, unit: float) -> bool:
+    """这一段文字里有没有轮次标记（读数字时用；裁图、判断「看见了标记」用的是只认数字那一行的 _round_mark）。
+    unit 是界面缩放（像素 / 界面单位）。
+
+    简体的「轮」照旧在整个轮次框里都认；繁体界面上的写法（「Round」，也认「輪」，见 anchors.ROUND_MARK）只在数字那一行认
+    （中心离上边不超过 ROUND_Y）：轮次框的下边盖到玩家列表第一行的名牌（繁体截图上名牌中心离上边约 128 个界面单位，
+    「Round」约 50），昵称里带这几个字时不当成标记。简体界面上认出的标记和只认「轮」字时一样。"""
+    return "轮" in ln.text or (ROUND_MARK.search(ln.text) is not None and ln.cy < ROUND_Y * unit)
+
+
 def _covers(ln: Line, mark: Line) -> bool:
-    """ln 的文字框在纵向上盖住了「轮」字的中心。轮次数字比「轮」字大，数字框总是盖住「轮」字中心
-    （实测「轮」字中心在数字框里的相对高度 0.54~0.67，0 为顶边、1 为底边）；怪物名牌下方的红色血量
-    （如「17/17」读成「17」）在「轮」字的左下方，「轮」字中心在它的框外（相对高度在 0 以下）。"""
+    """ln 的文字框在纵向上盖住了「轮」字（繁体是「Round」）的中心。轮次数字比标记大，数字框总是盖住标记中心
+    （实测「轮」字中心在数字框里的相对高度 0.54~0.67，0 为顶边、1 为底边；量自繁体截图的「Round」中心在 0.66）；
+    怪物名牌下方的红色血量（如「17/17」读成「17」）在标记的左下方，标记中心在它的框外（相对高度在 0 以下）。"""
     return ln.cy - ln.height / 2 <= mark.cy <= ln.cy + ln.height / 2
 
 
 def _parse_round_ex(lines: list[Line], width: int, height: int) -> tuple[int | None, bool]:
-    """（轮次, 是否靠「轮」字定位）。靠「轮」字读到的可靠；「轮」字认不出、按位置兜底读到的（_round_by_position）
-    不太可靠：4:3 小窗口里整段「02轮」偶尔读成「20」，见 read_round。"""
+    """（轮次, 是否靠标记定位）。标记是简体的「轮」或繁体的「Round」（见 _is_mark）；靠标记读到的可靠；
+    标记认不出、按位置兜底读到的（_round_by_position）不太可靠：4:3 小窗口里整段「02轮」偶尔读成「20」，见 read_round。"""
     _, _, right, down = round_box(width, height)
     unit = ui_scale(width, height)
-    marks = [ln for ln in lines if "轮" in ln.text and ln.cx < right and ln.cy < down]
+    marks = [ln for ln in lines if _is_mark(ln, unit) and ln.cx < right and ln.cy < down]
     # 游戏里的轮次总是两位数（01、02 … 11）。只认两位数，免得把「11」漏读成「1」。
     for mark in marks:
-        m = re.search(r"(\d{2})\s*轮", mark.text)
+        m = ROUND_TEXT.search(mark.text)
         if m:
             value = _round_value(m.group(1))
             if value is not None:
@@ -311,11 +408,11 @@ def _parse_round_ex(lines: list[Line], width: int, height: int) -> tuple[int | N
 
 
 def _round_by_position(lines: list[Line], unit: float, marks=()) -> int | None:
-    """「轮」字认不出时的兜底：左上角单独成段、字很大的两位数。unit 是界面缩放（像素 / 界面单位）。
+    """标记认不出时的兜底：左上角单独成段、字很大的两位数。unit 是界面缩放（像素 / 界面单位）。
 
     园林中庭在「轮」字右边紧挨着显示进度（如「19/16」），「轮」字会和它糊成一团。
     进度的数字旁边总有「/」或另一个数字，轮次数字旁边没有，以此排除进度。
-    marks 是读到的「轮」字：读到了「轮」字、却没在它左边找到数字时，兜底读到的两位数也要纵向盖住某个「轮」字的中心
+    marks 是读到的标记：读到了标记、却没在它左边找到数字时，兜底读到的两位数也要纵向盖住某个标记的中心
     （排除名牌下方的血量，见 _covers）。
     """
     for ln in sorted(lines, key=lambda ln: ln.cx):
@@ -360,15 +457,20 @@ def retired_maps(db: DB) -> frozenset[str]:
 
 
 def _guess_map(db: DB, lines: list[Line]) -> Hud:
-    """按任务文字和地图标记给各地图打分。返回的 Hud 只填了地图相关的字段。"""
+    """按任务文字和地图标记给各地图打分。返回的 Hud 只填了地图相关的字段。
+
+    一条任务有简体、繁体几种写法（data.DB.map_task_keys）：读到的一行对上任一种写法，这条任务算对上一次，
+    得分和读到的比例都按任务数算（繁体任务栏读全时和简体读全时得分相同）。"""
     keys = [task_key(ln.text) for ln in lines]
     hits: dict[str, set[str]] = {}
     seen: list[str] = []
     for name, tasks in db.map_tasks.items():
+        groups = db.map_task_keys.get(name) or tuple((task,) for task in tasks)
         hit = set()
-        for task in tasks:
+        for task, spellings in zip(tasks, groups):
             for key, ln in zip(keys, lines):
-                if len(key) >= 4 and difflib.SequenceMatcher(None, key, task).ratio() >= TASK_MATCH:
+                if len(key) >= 4 and any(
+                        difflib.SequenceMatcher(None, key, spelling).ratio() >= TASK_MATCH for spelling in spellings):
                     hit.add(task)
                     if ln.text not in seen:
                         seen.append(ln.text)
@@ -449,29 +551,36 @@ def task_panel_visible(img: np.ndarray) -> bool:
 
 
 def _exact_map_name(db: DB, lines: list[Line], width: int, height: int) -> str | None:
-    """整段文字恰好是某张地图的完整名称（忽略空格和「·」）时返回地图名。"""
+    """整段文字恰好是某张地图的完整名称（忽略空格和「·」，简繁两种写法都认）时返回简体内部名（资料里的地图名）。"""
     if any(word in ln.text for ln in lines for word in NOT_LOADING):
         return None
     # 读得到轮次或任务文字：是对局画面或任务栏，不是加载画面
     if _parse_round(lines, width, height) is not None or _guess_map(db, lines).tasks_seen:
         return None
     names = {_norm(m): m for m in (*db.map_tasks, *db.maps)}
+    names.update({_norm(info.hant): m for m, info in db.map_info.items() if info.hant})
     found = {names[_norm(ln.text)] for ln in lines if _norm(ln.text) in names}
     # 同时出现两张以上地图名（例如选图界面）时不下结论
     return next(iter(found)) if len(found) == 1 else None
 
 
-def mutator_catalog(db: DB) -> tuple[tuple[str, str], ...]:
-    """全部畸变组件（组件名, 效果说明），取自资料库（data.DB.mutators，由 data/mutators.json 载入）。"""
-    return tuple((name, m.effect) for name, m in db.mutators.items())
+def mutator_catalog(db: DB) -> tuple[tuple[str, str, str], ...]:
+    """全部畸变组件（组件名, 效果说明, 游戏繁体中文界面上的组件名），取自资料库（data.DB.mutators，由
+    data/mutators.json 载入）。名字用简体（内部名）；繁体名认出来也交回简体名。"""
+    return tuple((name, m.effect, m.hant) for name, m in db.mutators.items())
 
 
 def _find_mutators(lines: list[Line], catalog) -> list[str]:
-    """整段文字恰好是组件名的才算（组件名多是两个字，只按包含关系判断容易误认）。
+    """整段文字恰好是组件名的才算（组件名多是两个字，只按包含关系判断容易误认）；简体和繁体名字都认，交回简体名。
 
-    找到两个以上组件名才下结论；只找到一个时，画面上还要有和它的效果说明相近的文字。没有实机样本，未经验证。
+    找到两个以上组件名才下结论；只找到一个时，画面上还要有和它的效果说明相近的文字（效果说明只有简体写法，
+    繁体画面上只有一个组件时照旧不下结论）。没有实机样本，未经验证。
     """
-    names = {_norm(name): name for name, _ in catalog}
+    names = {}
+    for name, _, hant in catalog:
+        names[_norm(name)] = name
+        if hant:
+            names[_norm(hant)] = name
     found = []
     for ln in lines:
         name = names.get(_norm(ln.text))
@@ -480,7 +589,7 @@ def _find_mutators(lines: list[Line], catalog) -> list[str]:
     if len(found) >= 2:
         return found
     if len(found) == 1:
-        effect = _norm(dict(catalog).get(found[0], ""))
+        effect = _norm(next((e for n, e, _ in catalog if n == found[0]), ""))
         if effect and any(
             len(_norm(ln.text)) >= 6
             and (_norm(ln.text) in effect or difflib.SequenceMatcher(None, _norm(ln.text), effect).ratio() >= 0.6)
@@ -496,7 +605,7 @@ def read_pregame(img: np.ndarray, db: DB, width: int = 1280, catalog=None) -> Pr
     还没有这两种画面的样本，所以读整个画面，只认与地图名、组件名完全一致的整段文字。
     width 是识别前的缩放（相当于把参考比例的窗口缩到这么宽）：这两种多是大字，缩小一些可以省时间。
     catalog 是畸变组件清单（见 mutator_catalog），不传时不找组件。
-    同一次识别的结果顺带交给 screens.parse_out_of_game，填 screen（结算页、匹配成功页、房间、奖励页）。认出这几种画面时
+    同一次识别的结果顺带交给 screens.parse_out_of_game，填 screen（结算页、匹配成功页、房间、奖励页、主菜单）。认出这几种画面时
     不找加载画面的地图名：房间设置里的「游玩地图 星趴·梦想号」、结算页上一局的地图都不是下一局加载画面上的地图名。
     收 Frame 或 ndarray。
     """
@@ -518,17 +627,19 @@ SELECT_MIN_TITLES = 8
 
 
 def is_select_screen(img: np.ndarray, db: DB, info: dict | None = None) -> bool:
-    """是不是开局的选角界面：下方排着一大片角色的称号。
+    """是不是开局的选角界面：下方排着一大片角色的称号（简繁两种写法都认）。
 
     info 不为 None 时，同一次识别的结果顺带交给 screens.parse_out_of_game，读数写进 info["screen"]（不是对局外的
-    那几种画面、或是选角界面时为 None）。下方区域盖得住结算页的底栏和 16:9 附近窗口里组队房间的「选择难度」一栏；
-    房间设置、奖励页在画面中部，要靠 read_pregame 的整幅识别。不增加文字识别次数。收 Frame 或 ndarray。"""
+    那几种画面、或是选角界面时为 None）。下方区域盖得住结算页的底栏、主菜单的「开始游戏」和底下一排按钮，以及 16:9 附近
+    窗口里组队房间的「选择难度」一栏；房间设置、奖励页在画面中部，要靠 read_pregame 的整幅识别。不增加文字识别次数。
+    收 Frame 或 ndarray。"""
     img = as_frame(img).image
     h, w = img.shape[:2]
-    titles = {hero.title for hero in db.heroes.values() if len(hero.title) >= 2}
+    titles = {t for hero in db.heroes.values() for t in (hero.title, hero.hant_title) if len(t) >= 2}
     found = set()
     top = max(0.0, min(h * SELECT_REGION[1], h - SELECT_DOWN * ui_range(w, h)[1]))
-    lines = io.ocr(img, (0, top, w, h))
+    # 找字时短边只放大到 SELECT_DET_SIDE（默认 736）：这一块字够大，放大只是白花计算，见 anchors.SELECT_DET_SIDE
+    lines = io.ocr(img, (0, top, w, h), det_side=SELECT_DET_SIDE)
     for ln in lines:
         found.update(t for t in titles if t in ln.text)
     picking = len(found) >= SELECT_MIN_TITLES
@@ -537,91 +648,195 @@ def is_select_screen(img: np.ndarray, db: DB, info: dict | None = None) -> bool:
     return picking
 
 
+# 「像读错的两位数」最多带几个拉丁字母、几个汉字（见 _round_like）
+ROUND_LIKE_LETTERS = 2
+ROUND_LIKE_HAN = 1
+
+
+def _digit_like(text: str) -> bool:
+    """这段文字像不像读错的两位数：带着数字，或者只有一两个和数字形近的字母（「£O」「LO」「t0」）、一个形近的汉字
+    （「11」读成「以」）。两个以上汉字、三个以上字母的整段是别的字：大厅左上角活动通行证的名字（「晨暑驚眠通行證」）、
+    房间里的「返回」「MODE」，盖在数字上的怪物名牌（「茶壶」）；换大小重读也读不出轮次，不必重读。"""
+    text = re.sub(r"\s", "", text)
+    if re.search(r"\d", text):
+        return True
+    letters = len(re.findall(r"[A-Za-z]", text))
+    han = len(re.findall(r"[一-鿿]", text))
+    return letters <= ROUND_LIKE_LETTERS and han <= ROUND_LIKE_HAN
+
+
 def _round_like(lines: list[Line], unit: float) -> bool:
-    """轮次数字该在的地方有一段大小相近、却没读成合理轮次的文字（例如把「04」读成「t0」或「00」）。"""
+    """轮次数字该在的地方有一段大小相近、却没读成合理轮次、又像读错的两位数（_digit_like）的文字
+    （例如把「04」读成「t0」或「00」）。"""
     return any(
         ln.cx < ROUND_X * unit * 1.3 and ln.cy < ROUND_Y * unit and ln.height >= ROUND_MIN_HEIGHT * unit
-        and _round_value(ln.text) is None
+        and _round_value(ln.text) is None and _digit_like(ln.text)
         for ln in lines
     )
 
 
 def _round_mark(lines: list[Line], width: int, height: int) -> Line | None:
-    """轮次框里以「轮」字开头的第一段文字（园林中庭「轮」字和右边的进度糊成一段时也算，左边缘仍是「轮」字的）。"""
+    """轮次框里、数字那一行上带轮次标记的第一段文字（裁数字那一块、判断「看见了标记」都用它）。
+
+    标记在段首（园林中庭「轮」字和右边的进度糊成一段）、段中、段尾都算：头像挡在数字和标记之间时常和标记连成一段
+    （繁体截图上兔耳朵和「Round」读成「ARound」），数字也会和标记连成「03轮」。标记的左边缘按 _mark_left 推。
+    简体、繁体都只认数字那一行（中心离上边不超过 ROUND_Y）：轮次框的下边盖到玩家列表第一行的名牌，昵称里带这几个字时
+    不当成标记，免得在名牌左边裁图读出别的数。"""
     _, _, right, down = round_box(width, height)
-    return next((ln for ln in lines if re.match(r"\W*轮", ln.text.strip()) and ln.cx < right and ln.cy < down), None)
+    unit = ui_scale(width, height)
+    return next((ln for ln in lines if ROUND_MARK.search(ln.text) and ln.cy < ROUND_Y * unit
+                 and ln.cx < right and ln.cy < down), None)
 
 
-def _round_left_of_mark(img: np.ndarray, mark: Line) -> int | None:
-    """在「轮」字左边裁一小块（MARK_CROP，不带进左边的菜单按钮）只做识别，读轮次数字。
-    按两种大小各识别一次，两次都是置信度够高的两位数、合理且相同才采用（名牌压住一部分数字时两次常常不一致）。"""
-    h, w = img.shape[:2]
-    unit = ui_scale(w, h)
-    left = mark.cx - mark.width / 2
+def _mark_left(mark: Line, unit: float) -> float:
+    """标记的左边缘（原图像素）。标记在段首时就是这一段的左边缘；不在段首时按这一段的右端减去标记的宽度推
+    （anchors.ROUND_MARK_W_HAN / ROUND_MARK_W_LATIN）。标记右边还连着别的字时（段中）这样推出的位置偏右：裁出的那一块
+    带进标记的一部分，读不成两位数（宁可读不出），不会少裁数字的右半边而读错。"""
+    text = mark.text.strip()
+    if ROUND_MARK_HEAD.match(text):
+        return mark.cx - mark.width / 2
+    word = list(ROUND_MARK.finditer(text))[-1].group()
+    width = ROUND_MARK_W_HAN if word in ("轮", "輪") else ROUND_MARK_W_LATIN
+    return mark.cx + mark.width / 2 - width * unit
+
+
+def _mark_crop(mark: Line, width: int, height: int) -> tuple[float, float, float, float]:
+    """在标记左边裁数字的那一块（原图像素 x0, y0, x1, y1）：MARK_CROP 按标记的左边缘和中心算，左边到菜单按钮为止
+    （繁体「Round」字小、贴在数字右下方，同一组数照样盖得住数字，见 anchors.MARK_CROP）。
+    标记和数字连成一段时（「03轮」）这一段的中心偏上、下边就是数字的下边：上下至少放到这一段的上下边。"""
+    unit = ui_scale(width, height)
+    left = _mark_left(mark, unit)
     x0 = max(MENU_RIGHT * unit, left + MARK_CROP[0] * unit)
     x1 = left + MARK_CROP[2] * unit
-    y0 = max(0.0, mark.cy + MARK_CROP[1] * unit)
-    y1 = min(float(h), mark.cy + MARK_CROP[3] * unit)
-    crop = img[int(y0):int(round(y1)), int(x0):int(round(x1))]
-    if crop.shape[0] < 4 or crop.shape[1] < 4:
+    y0 = max(0.0, min(mark.cy + MARK_CROP[1] * unit, mark.cy - mark.height / 2))
+    y1 = min(float(height), max(mark.cy + MARK_CROP[3] * unit, mark.cy + mark.height / 2))
+    return x0, y0, x1, y1
+
+
+def _crop_digits(text: str, at_menu: bool) -> str:
+    """裁出那一块读到的文字里的轮次数字。裁剪的左边贴着菜单按钮时，按钮的边缘偶尔被连带读成「1」「3」「3.」
+    （21:9 梦想号的截图上「09」读成「109」，同 _round_digits）：去掉这个前缀后正好是两位数时去掉它。"""
+    text = re.sub(r"\s", "", text)
+    m = re.fullmatch(r"(?:1|3\.?)(\d{2})", text)
+    return m.group(1) if m and at_menu else text
+
+
+def read_round_crop(img: np.ndarray, crop: tuple[float, float, float, float]) -> int | None:
+    """只在 crop（read_round_info 交回的那一块，这张图上的像素 x0, y0, x1, y1）里只认字、不找字，读轮次数字。
+
+    按两种大小各识别一次，两次都是置信度够高（MARK_REC_MIN）的两位数、合理且相同才采用（名牌、头像压住一部分数字时
+    两次常常不一致）；第一次就不合格时不做第二次。两次只认字比一遍带找字的识别便宜得多，被挡住时隔一会儿再看一眼用。
+    crop 要是同样大小的画面上裁的（窗口大小变了先重新读一次 read_round_info）。收 Frame 或 ndarray。"""
+    img = as_frame(img).image
+    h, w = img.shape[:2]
+    x0, y0, x1, y1 = crop
+    piece = img[max(0, int(y0)):min(h, int(round(y1))), max(0, int(x0)):min(w, int(round(x1)))]
+    if piece.shape[0] < 4 or piece.shape[1] < 4:
         return None
+    at_menu = x0 <= MENU_RIGHT * ui_scale(w, h) + 1
     values = []
     for factor in (1.0, 0.75):
         scale = ocr_scale(w, h) * factor
         interp = cv2.INTER_AREA if scale < 1 else cv2.INTER_CUBIC
-        got = recognize_only(cv2.resize(crop, None, fx=scale, fy=scale, interpolation=interp))
+        got = recognize_only(cv2.resize(piece, None, fx=scale, fy=scale, interpolation=interp))
         if not got:
             return None
-        text, score = re.sub(r"\s", "", got[0][0]), got[0][1]
-        value = _round_value(text)
-        if value is None or score < MARK_REC_MIN:
+        value = _round_value(_crop_digits(got[0][0], at_menu))
+        if value is None or got[0][1] < MARK_REC_MIN:
             return None
         values.append(value)
     return values[0] if values[0] == values[1] else None
 
 
-def read_round(img: np.ndarray) -> int | None:
-    """只读左上角的轮次。轮次数字的位置上有文字却没读成合理的轮次时（读不出两位数，或读成「00」），
-    或者读到了「轮」字却没找到数字时（4:3 窗口缩到 1600×1200 时「11」「13」偶尔整段漏检），
-    放大 1.5 倍、缩小到 0.75 倍各再读一次（字小的窗口偶尔读错，笔画细的「11」换个大小才检测得到）。
-    靠「轮」字定位读到的直接采用；只按位置读到的两位数要有两次一致才采用（4:3 小窗口里整段「02轮」偶尔读成「20」）。
-    三遍都没读出、但读到过「轮」字时，最后在「轮」字左边裁一小块只做识别（_round_left_of_mark：文字检测切掉了
-    首位数字的描边，「03」「11」看得清却检测不出）。收 Frame 或 ndarray。"""
+def _round_left_of_mark(img: np.ndarray, mark: Line) -> tuple[int | None, tuple[float, float, float, float]]:
+    """在标记左边裁一小块只做识别读轮次数字（read_round_crop），交回（读数, 裁的那一块）。"""
+    h, w = img.shape[:2]
+    crop = _mark_crop(mark, w, h)
+    return read_round_crop(img, crop), crop
+
+
+def read_round_info(img: np.ndarray, retry: bool = True) -> RoundRead:
+    """读左上角的轮次，交回读数、看没看见标记、标记左边那一块和做了几遍带找字的识别（RoundRead）。收 Frame 或 ndarray。
+
+    retry 为假时，第一遍没看见标记、数字的位置上却像读错的两位数时（下面的 _round_like），不再放大 1.5 倍、缩小到 0.75 倍
+    各读一遍，直接交回读不出（passes 为 1）；第一遍只按位置读到的数也不采用（要两次一致才采用的规矩这一次凑不够）。
+    对决、换轮过场、黑白闪这类整屏画面上没有轮次，左上角却落进了别的白色大数字（对决画面左上角的 7、5、2 正好落在
+    轮次框里），三遍都读不出，一次从约 0.4 秒变成约 1.3 秒；这一局近一分钟内读到过轮次时，多认这两遍救不回什么（见
+    FrameProcessor._read_hud）。靠标记读到的、看见标记裁小块的各路不受影响。
+
+    第一遍靠标记读到的数，再在标记左边那一块只认字核对一次（read_round_crop）：读出另一个数时按读不出处理（value 为 None，
+    mark、crop 照旧），读不出或读出同一个数时照用。数字被头像挡住一部分时带找字的那一遍会读错，在样本上贴白块模拟遮挡，
+    挡住「04」的下沿一成半读成「10」、模拟天线插进「04」读成「01」，同样的画面裁小块读成「04」；样本里没挡住的截图上
+    （原图、各种缩小、4:3 的几种大小）裁小块和第一遍没有读出过不同的数，核对一次多两次只认字。
+    看见了标记、数字却没读出来时（数字被头像挡住；文字检测切掉了首位数字的描边，「03」「11」
+    看得清却检测不出；4:3 窗口缩到 1600×1200 时「11」「13」整段漏检），在标记左边裁一小块只做识别（_round_left_of_mark），
+    读不出就按读不出处理，不再换大小重读：挡住时重读慢，还会读错（在样本上贴白块模拟遮挡，挡住「04」的下沿两成时放大
+    1.5 倍重读读成「10」，模拟天线挡住时缩小到 0.75 倍重读读成过「01」；同样的画面裁小块读成「04」或读不出）；
+    样本里看得见标记的截图上，裁小块没有读错过。
+    没看见标记、轮次数字的位置上却有像读错的两位数的文字时（读不出两位数，或读成「00」，见 _round_like），
+    放大 1.5 倍、缩小到 0.75 倍各再读一次（字小的窗口偶尔读错，笔画细的「11」换个大小才检测得到）：靠标记读到的直接采用；
+    重读时才看见标记、数字仍没读出时照样裁小块；只按位置读到的两位数要有两次一致才采用（4:3 小窗口里整段「02轮」
+    偶尔读成「20」）。"""
     img = as_frame(img).image
     h, w = img.shape[:2]
     box = round_box(w, h)
+    unit = ui_scale(w, h)
     lines = io.ocr(img, box)
     rnd, strong = _parse_round_ex(lines, w, h)
-    if strong:
-        return rnd
-    # 「轮」字认不出、只按位置读到的数不太可靠（4:3 小窗口里整段「02轮」偶尔读成「20」）：换两个大小再读，
-    # 靠「轮」字读到的直接用；都只是按位置读到的，至少两次一致才用，否则按读不出处理
-    if rnd is None and not (_round_like(lines, ui_scale(w, h)) or any("轮" in ln.text for ln in lines)):
-        return None
     mark = _round_mark(lines, w, h)
+    crop = _mark_crop(mark, w, h) if mark is not None else None
+    if strong:
+        if crop is not None:
+            check = read_round_crop(img, crop)
+            if check is not None and check != rnd:
+                return RoundRead(None, True, crop, 1)
+        return RoundRead(rnd, mark is not None, crop, 1)
+    if mark is not None:
+        value, crop = _round_left_of_mark(img, mark)
+        return RoundRead(value, True, crop, 1)
+    if rnd is None and not (_round_like(lines, unit) or any(_is_mark(ln, unit) for ln in lines)):
+        return RoundRead(None, False, None, 1)
+    if not retry:
+        # 真的因为 retry 为假跳过了换大小重读：数一次，诊断包里看这一项省了多少。第一遍什么都不像时在上面的判断就返回了、
+        # 本来不会重读，不数
+        perfstats.count("round_no_retry")
+        return RoundRead(None, False, None, 1)
     weak = [rnd] if rnd is not None else []
+    passes = 1
     for factor in (1.5, 0.75):
         more = io.ocr(img, box, round(OCR_WIDTH * factor))
-        mark = mark or _round_mark(more, w, h)
+        passes += 1
         value, sure = _parse_round_ex(more, w, h)
+        mark = _round_mark(more, w, h)
         if value is not None and sure:
-            return value
+            return RoundRead(value, mark is not None, _mark_crop(mark, w, h) if mark is not None else None, passes)
+        if mark is not None:
+            value, crop = _round_left_of_mark(img, mark)
+            return RoundRead(value, True, crop, passes)
         if value is not None:
             weak.append(value)
             if weak.count(value) >= 2:
-                return value
-    return _round_left_of_mark(img, mark) if mark is not None else None
+                return RoundRead(value, False, None, passes)
+    return RoundRead(None, False, None, passes)
 
 
-def read_hud(img: np.ndarray, db: DB, full: bool = True) -> Hud:
-    """full=False 时只读左上角的轮次（快）；full=True 时还读任务栏和地图标记。收 Frame 或 ndarray。"""
+def read_round(img: np.ndarray) -> int | None:
+    """只读左上角的轮次（read_round_info 的读数）。收 Frame 或 ndarray。"""
+    return read_round_info(img).value
+
+
+def read_hud(img: np.ndarray, db: DB, full: bool = True, retry: bool = True) -> Hud:
+    """full=False 时只读左上角的轮次（快）；full=True 时还读任务栏和地图标记。读轮次时看没看见标记、标记左边那一块
+    照 read_round_info 填进 round_mark、round_crop；retry 原样交给 read_round_info（为假时第一遍读不出就不再换大小重读，
+    见那里）。收 Frame 或 ndarray。"""
     img = as_frame(img).image
     h, w = img.shape[:2]
     # 轮次单独裁左上角一小块来读：比在大图里一起读更稳
-    rnd = read_round(img)
+    info = read_round_info(img, retry=retry)
     if not full:
-        return Hud(round=rnd)
+        return Hud(round=info.value, round_mark=info.mark, round_crop=info.crop)
     lines = io.ocr(img, full_box(w, h))
     hud = _guess_map(db, lines)
-    hud.round = rnd if rnd is not None else _parse_round(lines, w, h)
+    hud.round = info.value if info.value is not None else _parse_round(lines, w, h)
+    hud.round_mark, hud.round_crop = info.mark, info.crop
     return hud

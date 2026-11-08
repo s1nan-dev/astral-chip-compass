@@ -10,9 +10,11 @@
   2 秒；按热键要求的那一帧不报「当前画面不是筹码三选一界面」，只报候选筹码没读出来；手动模式不因为这一帧接着跟随三选一。
   标记只认真的 True。识别流程置上、清掉这个标记见 SelectFailedFlagTest。
 - 识别流程留下的三选一读不全的那一帧（FrameProcessor.unread_shot）每帧换到识别线程身上，识别流程那边没有时照旧留着
-  （UnreadShotTest）；记下选中项用的那一帧、不采用的那一帧（pick_shot、covered_shot）同样。
+  （UnreadShotTest）；记下选中项用的那一帧、不采用的那一帧、对局中途像一局打完的那一帧（pick_shot、covered_shot、
+  finish_shot）同样。
 - 快速盯绿框的线程（vision.pick_watch.PickWatcher）跟着识别线程：开始时建、启动，识别流程建好以后接到它的交换上，识别线程
-  结束时停下；暂停、手动模式不跟着三选一时告诉识别流程不再盯；每分钟的识别统计带上它的统计（PickWatchWiringTest）。
+  结束时停下；运行中换端时换一个新的、接到同一个识别流程上；暂停、手动模式不跟着三选一时告诉识别流程不再盯；每分钟的识别
+  统计带上它的统计（PickWatchWiringTest）。
 
 识别线程真的起一个，取帧对象、识别流程都是假的（不截屏）；要等的时候记下等多久，不真的等，记够了就停下线程。
 """
@@ -362,30 +364,34 @@ class UnreadShotTest(unittest.TestCase):
         self.assertEqual(seen, [first, first, first, second])
 
     def test_pick_and_covered_shots(self):
-        """记下选中项用的那一帧、不采用的那一帧（FrameProcessor.pick_shot、covered_shot）同样每帧换过来，没有的时候照旧留着。"""
+        """记下选中项用的那一帧、不采用的那一帧、对局中途像一局打完的那一帧（FrameProcessor.pick_shot、covered_shot、
+        finish_shot）同样每帧换过来，没有的时候照旧留着。"""
         picks = iter([("时刻一", "整幅", {"slot": 1}), None, ("时刻二", "那一块", {"slot": 0, "watch": True})])
         covers = iter([None, ("时刻三", "盖住的", {"slots": [2]}), mock.MagicMock()])
+        finishes = iter([("时刻四", "对局中途", {"look": "coral"}), None, mock.MagicMock()])
 
         class Fake:
             chip_select_visible = True
 
             def __init__(self, *args):
                 self.errors, self.select_failed = [], False
-                self.pick_shot = self.covered_shot = None
+                self.pick_shot = self.covered_shot = self.finish_shot = None
 
             def process(self, img, now, force=False):
-                self.pick_shot, self.covered_shot = next(picks), next(covers)
+                self.pick_shot, self.covered_shot, self.finish_shot = next(picks), next(covers), next(finishes)
                 return []
 
         seen = []
         with mock.patch("advisor.vision.pipeline.FrameProcessor", Fake):
             watcher = Hooked(DB, Session(DB, Settings(hero="凛")), threading.Lock(), source=Source(), waits=3,
-                             on_sleep=lambda w, n: seen.append((w.pick_shot, w.covered_shot)))
-            self.assertEqual((watcher.pick_shot, watcher.covered_shot), (None, None))
+                             on_sleep=lambda w, n: seen.append((w.pick_shot, w.covered_shot, w.finish_shot)))
+            self.assertEqual((watcher.pick_shot, watcher.covered_shot, watcher.finish_shot), (None, None, None))
             watcher.start()
             self.assertTrue(watcher.wait(10000))
         first, cover = ("时刻一", "整幅", {"slot": 1}), ("时刻三", "盖住的", {"slots": [2]})
-        self.assertEqual(seen, [(first, None), (first, cover), (("时刻二", "那一块", {"slot": 0, "watch": True}), cover)])
+        finish = ("时刻四", "对局中途", {"look": "coral"})
+        self.assertEqual(seen, [(first, None, finish), (first, cover, finish),
+                                (("时刻二", "那一块", {"slot": 0, "watch": True}), cover, finish)])
 
 
 class PickWatchWiringTest(unittest.TestCase):
@@ -458,6 +464,32 @@ class PickWatchWiringTest(unittest.TestCase):
         self.assertEqual(seen, [self.made[0].pick_watch, self.made[1].pick_watch])
         self.assertTrue(self.made[0].pick_watch.closed)
 
+    def test_switch_platform_reattached(self):
+        """运行中换端（set_platform）：旧的盯绿框线程停下，新建的接到现在的识别流程的交换上；识别流程不重建，交换照旧开着。"""
+        from advisor.vision import capture
+
+        seen = []
+
+        def on_sleep(w, n):
+            seen.append((w._pick, w._pick._exchange, w._pick._thread.is_alive()))
+            if n == 1:
+                w.set_platform(capture.TAPTAP)
+
+        with mock.patch("advisor.vision.pipeline.FrameProcessor", self.fake()):
+            watcher = Hooked(DB, Session(DB, Settings(hero="凛")), threading.Lock(), source=Source(),
+                             band_source=self.band, waits=2, on_sleep=on_sleep)
+            watcher.start()
+            self.assertTrue(watcher.wait(10000))
+        (first, first_exchange, _), (second, second_exchange, alive) = seen
+        self.assertEqual(len(self.made), 1)
+        self.assertIsNot(second, first)
+        self.assertIs(first_exchange, self.made[0].pick_watch)
+        self.assertIs(second_exchange, self.made[0].pick_watch)
+        self.assertTrue(alive)
+        self.assertFalse(first._thread.is_alive())
+        self.assertFalse(self.made[0].pick_watch.closed)
+        self.assertEqual(self.made[0].platform, capture.TAPTAP)
+
     def test_no_pick_with_fake_source(self):
         """测试传入了假的取帧对象、没给 band_source：不建盯绿框的线程，照常识别。"""
         watcher = Watcher(DB, Session(DB, Settings(hero="凛")), threading.Lock(), source=Source())
@@ -474,6 +506,20 @@ class PickWatchWiringTest(unittest.TestCase):
             self.assertIsInstance(source, screen.BandSource)
             self.assertIs(source.main, watcher._active)
             self.assertIsNone(source.grab((0, 0, 10, 10), (100, 100)))  # 还没有截取方式：不截
+        finally:
+            self.assertTrue(pick.stop(5))
+
+    def test_band_source_waits_for_main_source(self):
+        """这个线程的取帧对象还没建成（换端时重建没成）：盯绿框的取帧对象先不建（返回 None，盯绿框的线程下次要查时再来取），
+        建成以后照常建、跟着它。"""
+        watcher = Watcher(DB, Session(DB, Settings(hero="凛")), threading.Lock())
+        pick = watcher._start_pick_watch()
+        try:
+            self.assertIsNone(pick._make_source())
+            watcher._active = SimpleNamespace(state=None)
+            source = pick._make_source()
+            self.assertIsInstance(source, screen.BandSource)
+            self.assertIs(source.main, watcher._active)
         finally:
             self.assertTrue(pick.stop(5))
 

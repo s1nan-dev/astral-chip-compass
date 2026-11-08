@@ -495,7 +495,7 @@ class TerminologyTest(unittest.TestCase):
             ("未检测到上一次筹码三选一选择的筹码", ui["MISSED_PROMPT"]),
             ("星数由 1 星增加为 2 星，未检测到对应的筹码三选一界面", ui["GAIN_TEXT"].format(why=self.gain_reason(), n="")),
             ("已判定为新的一局", ui["NEWGAME_TEXT"]),
-            ("「照顾队友」「地图因素」「推荐有误」", "".join(f"「{r}」" for r in ui["FEEDBACK_REASONS"])),
+            ("「照顾队友」「地图因素」「推荐有误」「想试别的玩法」", "".join(f"「{r}」" for r in ui["FEEDBACK_REASONS"])),
         )
         for quote, shown in pairs:
             with self.subTest(quote=quote):
@@ -579,20 +579,27 @@ class TerminologyTest(unittest.TestCase):
         状态标签。"""
         ui = self.ui
         dialog = module_constants(UI_DIR / "settings" / "dialog.py")
-        items = (dialog["MODE_TITLE"], dialog["HOTKEY_TITLE"], dialog["LOWEND_TITLE"],
+        # 繁体界面的总开关（advisor/ui/lang.py 的 HANT_ENABLED）：关着时窗口里没有「界面语言」，悬停说明、使用说明都不写它
+        hant = module_constants(UI_DIR / "lang.py")["HANT_ENABLED"]
+        items = (dialog["PLATFORM_TITLE"], dialog["MODE_TITLE"], dialog["HOTKEY_TITLE"], dialog["LOWEND_TITLE"],
                  "悬浮窗背景", dialog["EXPORT_BUTTON"], dialog["UPDATE_BUTTON"], dialog["ABOUT_TITLE"])
-        self.assertTrue(dialog["OPAQUE_TITLE"].startswith(items[3]))
+        self.assertTrue(dialog["OPAQUE_TITLE"].startswith(items[4]))
         self.assertEqual(ui["SETTINGS_TIP"], f"打开「{dialog['SETTINGS_TITLE']}」窗口：" + "、".join(items))
+        with_lang = (*items[:5], dialog["UI_LANG_TITLE"], *items[5:])
+        self.assertEqual(ui["SETTINGS_TIP_HANT"], f"打开「{dialog['SETTINGS_TITLE']}」窗口：" + "、".join(with_lang))
         self.assertTrue(ui["EXPAND_ALL_TIP"].endswith("以及底栏的「设置」按钮"))
         # 使用说明的「设置」一节：在哪里打开，分哪几组，各项的名字（含只在截取屏幕时有的「识别画面」）
         settings_part = section(self.manual, "### 设置")
         self.assertIn(f"再点击底栏的「设置」按钮，打开「{dialog['SETTINGS_TITLE']}」窗口", settings_part)
-        groups = "".join(f"「{dialog[name]}」" for name in ("GROUP_RECOG", "GROUP_LOOK", "GROUP_DIAG"))
-        self.assertIn(f"窗口里的项分{groups}三组", settings_part)
-        for name in ("MODE_TITLE", "HOTKEY_TITLE", "CAPTURE_TITLE", "LOWEND_TITLE", "OPAQUE_TITLE", "EXPORT_TITLE",
-                     "ABOUT_TITLE"):
+        groups = "".join(f"「{dialog[name]}」" for name in ("GROUP_RECOG", "GROUP_LOOK", "GROUP_DIAG", "GROUP_PRIVACY"))
+        self.assertIn(f"窗口里的项分{groups}四组", settings_part)
+        names = ("PLATFORM_TITLE", "MODE_TITLE", "HOTKEY_TITLE", "CAPTURE_TITLE", "LOWEND_TITLE", "OPAQUE_TITLE",
+                 *(("UI_LANG_TITLE",) if hant else ()), "EXPORT_TITLE", "ABOUT_TITLE", "REPORT_TITLE", "STATS_TITLE")
+        for name in names:
             with self.subTest(readme=name):
                 self.assertIn(f"- {dialog[name]}：", settings_part)
+        if not hant:
+            self.assertNotIn(dialog["UI_LANG_TITLE"], settings_part)
         # 低配模式一条照窗口里的说明写（开了以后识别隔得久、推荐晚一点出来），先后照窗口里的各项
         lowend = next(line for line in settings_part.splitlines() if line.startswith(f"- {dialog['LOWEND_TITLE']}："))
         self.assertIn(dialog["LOWEND_DESC"], lowend)
@@ -600,8 +607,7 @@ class TerminologyTest(unittest.TestCase):
             with self.subTest(readme_tip=line):
                 self.assertIn(line.removeprefix("· ").rstrip("；。"), lowend)
         heads = [line.split("：", 1)[0][2:] for line in settings_part.splitlines() if line.startswith("- ")]
-        order = [dialog[n] for n in ("MODE_TITLE", "HOTKEY_TITLE", "CAPTURE_TITLE", "LOWEND_TITLE", "OPAQUE_TITLE",
-                                     "EXPORT_TITLE", "ABOUT_TITLE")]
+        order = [dialog[n] for n in names]
         self.assertEqual([h for h in heads if h in order], order)
         # 「识别画面」只在截取屏幕时有：状态标签只会写「截取屏幕」
         self.assertIn(f"「{dialog['SETTINGS_METHOD']['screen']}」", settings_part)
@@ -917,7 +923,12 @@ class RecommendCardTest(unittest.TestCase):
         self.assertRegex(note, r"^畸变组件「暴雨」：.+（仅提示，未计入推荐度）$")
         hover = "畸变组件：{}（仅提示，未计入推荐度）"
         self.assertIn(hover, overlay_templates())
-        part = next(p for p in Scorer(self.db, State(hero="凛")).parts("书签", (), None) if p.label == "职业倾向")
+        # 职业倾向属于内置分（标签分）的行为，现在内置分不计入总分时不列：用内置分照旧计入的副本
+        import dataclasses
+        rules = {k: dict(v) if isinstance(v, dict) else v for k, v in self.db.rules.items()}
+        rules["official"]["scale"] = 0.5
+        db = dataclasses.replace(self.db, rules=rules)
+        part = next(p for p in Scorer(db, State(hero="凛")).parts("书签", (), None) if p.label == "职业倾向")
         self.assertEqual(part.short, "职业倾向：卡牌（暂不加分）")  # 与整句的「暂不加分」一致
         self.assertIn("本局不再出现的高适配度筹码：", self.engine_templates)
 
@@ -1089,7 +1100,7 @@ class DiagnosticsDocsTest(unittest.TestCase):
         # 诊断包里通常有导出时的画面和记下选中时的那一帧（diagnostics.export 的 select_picked），有时还有读不全、被遮挡的那一帧：
         # 写明另带的这几张，大小按整幅截图的张数说，不再是只带一张截图时的说法
         text = section(self.manual, "## 反馈问题")
-        for name in ("select-picked-时间.png", "select-covered-时间.png", "整幅截图"):
+        for name in ("select-picked-时间.png", "select-covered-时间.png", "finish-look-时间.png", "整幅截图"):
             with self.subTest(name=name):
                 self.assertIn(name, text)
         self.assertNotIn("多带一张截图时约大一倍", text)
@@ -1103,6 +1114,11 @@ class DiagnosticsDocsTest(unittest.TestCase):
                 self.assertIn(keep, text)
                 self.assertIn("不可还原的代号", text)
                 self.assertIn("本局和上一局的识别记录与推荐日志", text)
+                # 识别记录里记着找到游戏窗口时对上的标题：写全会记的几个（winapi.GAME_TITLES，和 capture.WINDOW_TITLES 相同，
+                # tests/test_window_capture.py 核对），加了新的客户端时两处跟着补；别的窗口的标题不读、不记
+                for title in module_constants(UI_DIR / "winapi.py")["GAME_TITLES"]:
+                    self.assertIn(f"「{title}」", text)
+                self.assertIn("不读、不记别的窗口的标题", text)
                 # 筹码三选一有候选筹码没识别出来时的那一帧（vision.pipeline.FrameProcessor.unread_shot）：平时只留在内存里，
                 # 导出诊断时另带一张
                 self.assertIn("筹码三选一有候选筹码没识别出来时，最近一次的那一帧也只留在内存里", text)
@@ -1111,6 +1127,13 @@ class DiagnosticsDocsTest(unittest.TestCase):
         # 导出诊断时一并写进诊断包；「关于」窗口写「您点击」，使用说明这一节不写「您」
         self.assertIn(version.PRIVACY_SELECT_SHOTS.format(you=""), privacy)
         self.assertIn(version.PRIVACY_SELECT_SHOTS.format(you="您"), self.about)
+        # 对局中途像一局打完时的那一帧（FrameProcessor.finish_shot）：同上，缩小后只留在内存里，导出诊断时一并写进诊断包
+        self.assertIn(version.PRIVACY_FINISH_SHOT.format(you=""), privacy)
+        self.assertIn(version.PRIVACY_FINISH_SHOT.format(you="您"), self.about)
+        # 诊断包里另带识别记录里最近 12 小时的每分钟统计（gamelog.GameRecorder.collect_stats）
+        for name, text in (("使用说明 隐私", privacy), ("关于 隐私说明", self.about)):
+            with self.subTest(doc=name):
+                self.assertIn("识别记录里最近 12 小时的每分钟统计", text)
         for path in (PROJECT / "README.md", MANUAL, MAINTENANCE):  # 首页和两份说明里都没有旧说法
             with self.subTest(old=path.name):
                 self.assertNotIn("最近的识别事件", read(path))
@@ -1140,6 +1163,18 @@ class DiagnosticsDocsTest(unittest.TestCase):
         self.assertIn(f"- {release}", section(self.manual, "## 隐私"))
         self.assertIn(version.PRIVACY_STORAGE.format(logs=paths.shown("logs"), folder=paths.FOLDER_NAME), self.about)
         self.assertEqual(paths.shown("logs"), "logs")
+
+    def test_privacy_usage_sentence(self):
+        """每分钟一条的处理器占用记录存在哪（advisor/usage.py 存进程序目录 logs 里的 usage.FILE_NAME）：使用说明的「隐私」一节和
+        「关于」窗口的隐私说明逐字相同（version.PRIVACY_USAGE），写法同 PRIVACY_STORAGE（使用说明照发行版写「app\\logs」）；
+        文件名和 usage.py 里的一致，「文件夹说明」也写到这个文件。"""
+        from advisor import usage
+
+        release = version.PRIVACY_USAGE.format(logs=f"{paths.APP_SUBDIR}\\logs")
+        self.assertIn(f"app\\logs\\{usage.FILE_NAME}", release)
+        self.assertIn(f"- {release}", section(self.manual, "## 隐私"))
+        self.assertIn(version.PRIVACY_USAGE.format(logs=paths.shown("logs")), self.about)
+        self.assertIn(usage.FILE_NAME, section(self.manual, "### 文件夹说明"))
 
 
 class AssetsManifestTest(unittest.TestCase):
@@ -1246,16 +1281,18 @@ class SchemeCardWordingTest(unittest.TestCase):
                 self.assertIn(text, shown)
 
     def test_readme_wording(self):
-        """使用说明：「识别」卡片没有角色下拉框这一行，角色在下面的「筹码方案」卡片里；底栏只有「设置」，「导入/导出」在
-        「筹码方案」卡片里；角色待识别的提示。"""
+        """使用说明：「识别」卡片没有角色下拉框这一行，角色在下面的「筹码方案」卡片里；底栏只有「设置」，「导入/导出」
+        在「筹码方案」卡片里；「作业站」的入口由 hub.ENABLED 管，关着时不显示，说明里也不写；角色待识别的提示。"""
         ui = self.ui
         card = section(self.manual, "### 「识别」卡片")
         self.assertNotIn("第一行是角色下拉框", card)
         self.assertIn("下面的「筹码方案」卡片里", card)
         self.assertIn("「识别」「筹码方案」「推荐」「已有筹码」四张卡片", self.manual)
-        self.assertIn(f"底栏只有「设置」按钮（见「设置」）；「{ui['SHARE_BTN']}」按钮在「筹码方案」卡片里", self.manual)
-        self.assertIn(f"「{ui['SCHEME_EDIT']}」（笔形图标）", section(self.manual, "### 筹码方案的规则"))
-        self.assertIn(f"「{ui['SHARE_BTN']}」（左右双箭头图标）", section(self.manual, "### 筹码方案的规则"))
+        self.assertIn(f"底栏只有「设置」按钮（见「设置」）；「{ui['SHARE_BTN']}」按钮在「筹码方案」卡片里",
+                      self.manual)
+        self.assertIn(f"「{ui['SCHEME_EDIT']}」（笔形图标", section(self.manual, "### 筹码方案的规则"))
+        self.assertIn(f"「{ui['SHARE_BTN']}」（左右双箭头图标", section(self.manual, "### 筹码方案的规则"))
+        self.assertNotIn(ui["HUB_BTN"], self.manual)
         self.assertIn(f"「{ui['PROMPT_HERO']}」", self.manual)
 
     def test_table_wording(self):
@@ -1272,6 +1309,9 @@ class SchemeCardWordingTest(unittest.TestCase):
             "SHARE_BTN": "导入/导出",  # 在「筹码方案」卡片里
             "SHARE_TIP": "打开「导入/导出筹码方案」窗口：复制筹码方案的文字或短字符串，或粘贴方案文字、短字符串导入",
             "SCHEME_CARD": "筹码方案", "SCHEME_EDIT": "编辑方案", "SCHEME_GROUP": "── 我的方案 ──",
+            "HUB_BTN": "作业站",
+            "HUB_TIP": "在浏览器里打开作业站，看其他玩家分享的当前角色的筹码方案（资料库没收录这个角色时看全部角色的）；对局中"
+                       "认出了地图（或手动选了地图）时，只看这张地图能用的方案。看中的复制下来，点「导入/导出」粘贴导入",
             "SCHEME_SUMMARY": "{hero} · {scheme}",
             "HERO_BOX_TIP": "当前角色。根据游戏画面左下角的角色立绘自动识别；手动指定后不再被自动识别覆盖。",
             "SCHEME_BOX_TIP": "当前角色使用的筹码方案。方案规定哪些筹码必选、推荐、可选、不选，以及同一档里的顺位；"
@@ -1485,18 +1525,19 @@ class UiWordingTest(unittest.TestCase):
     """界面文字用书面语：悬浮窗、引擎和 Session 的文字常量里没有口语语气词，不用「我」「你」指代工具。按源码检查，
     覆盖所有分支里的文字。
 
-    例外：筹码方案的「我的方案」（用户自己建的方案，从用户的角度称呼，不是指代工具）和编辑窗口
-    列表行尾的「我的」。"""
+    例外：筹码方案的「我的方案」（用户自己建的方案，从用户的角度称呼，不是指代工具）、「我的统计」窗口的标题（看的是
+    玩家自己打出来的数字，同样从玩家的角度称呼）和编辑窗口列表行尾的「我的」。"""
 
     PARTICLES = re.compile(r"[吧呢啦哦呀嘛喔咯噢哟呗啊哇嘿嗯呐咧嘞哒呦]")
     PRONOUNS = re.compile(r"[我你俺咱]")
-    MINE_TERM, MINE_TAIL = "我的方案", "我的"  # 允许的说法：文字里的「我的方案」、整条文字就是「我的」
+    # 允许的说法：文字里的「我的方案」「我的统计」、整条文字就是「我的」
+    MINE_TERM, MINE_STATS, MINE_TAIL = "我的方案", "我的统计", "我的"
 
     def pronoun(self, text: str) -> bool:
         """去掉允许的说法以后还有「我」「你」等。"""
         if text == self.MINE_TAIL:
             return False
-        return bool(self.PRONOUNS.search(text.replace(self.MINE_TERM, "")))
+        return bool(self.PRONOUNS.search(text.replace(self.MINE_TERM, "").replace(self.MINE_STATS, "")))
 
     @classmethod
     def setUpClass(cls):
@@ -1516,8 +1557,9 @@ class UiWordingTest(unittest.TestCase):
         self.assertEqual(bad, [])
 
     def test_mine_term_is_narrow(self):
-        """「我的方案」的例外只放过这个说法本身：同一条文字里另有「我」「你」照样算。"""
+        """「我的方案」「我的统计」的例外只放过这两个说法本身：同一条文字里另有「我」「你」照样算。"""
         self.assertFalse(self.pronoun("── 我的方案 ──"))
+        self.assertFalse(self.pronoun("我的统计"))
         self.assertFalse(self.pronoun("我的"))
         self.assertTrue(self.pronoun("我的方案已保存，你可以关闭"))
         self.assertTrue(self.pronoun("我的推荐"))

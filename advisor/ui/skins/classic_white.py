@@ -50,6 +50,8 @@ def _classic_white() -> Skin:
         f"QPushButton#iconText {{ border-radius: 16px; border-bottom: 4px solid {p['pink_dark']}; }}\n"
         f"QPushButton#remove {{ border-bottom-width: 2px; border-radius: 9px; }}\n"
         f"QLabel#title {{ padding: 3px 16px 6px 46px; font-size: 13pt; $TITLE_FONT }}\n"
+        f"QLabel#laneTag {{ background: {p['ink']}; color: {p['pink_light']}; border: 1px solid {p['pink']}; "
+        f"border-radius: 7px; padding: 0px 8px; font-weight: bold; }}\n"
         f"QLabel#cardTitle {{ padding: 4px 14px 7px 14px; font-size: 11pt; $TITLE_FONT }}\n"
         f"QWidget#globalArea {{ background: {p['card']}; border-radius: 14px; }}\n"
         f"QWidget#bestBlock {{ background: rgba(255,255,255,190); border: 3px solid {p['orange']}; border-radius: 18px; }}\n"
@@ -78,8 +80,12 @@ def _classic_white() -> Skin:
         f"QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0px; }}\n"
         f"QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: none; }}\n"
     )
+    # 设置窗口的下拉框：白卡片上的白底胶囊，粉字，右端的三角由 ComboArrow 画（combo 去掉系统的箭头）
+    settings_combo = (f"QComboBox {{ background: {p['white']}; color: {p['pink']}; border: 2px solid #d6d6d6; "
+                      f"border-radius: 13px; padding: 4px 34px 4px 14px; font-weight: bold; }}\n"
+                      f"QComboBox:hover {{ border-color: {p['pink']}; }}\n" + combo)
     # 状态标签前面的「!」圆标给字让出的地方由 SettingsLook.CHIP_BADGE_ROOM 管（样式表里按 tone 改左内边距不起作用）
-    settings_extra = button + scroll + (
+    settings_extra = button + settings_combo + scroll + (
         f"QPushButton {{ min-height: 32px; padding: 4px 24px; font-size: 13pt; }}\n"
         f"QScrollArea, QWidget#qt_scrollarea_viewport {{ background: transparent; border: none; }}\n"
         f"QLabel#rowDesc, QLabel#rowNote, QLabel#tileDesc, QLabel#noGame {{ color: {p['gray']}; font-size: 9pt; "
@@ -116,6 +122,10 @@ def _classic_white() -> Skin:
         f"QPlainTextEdit {{ background: {p['ink']}; color: {p['white']}; border: none; border-radius: 16px; "
         f"padding: 6px 10px; font-weight: bold; }}\n"
         f"QPlainTextEdit#preview {{ color: {p['pink']}; font-size: 12pt; $NUMBER_FONT }}\n"
+        # 按编号导入的输入框：和粘贴框同一种黑底白字（高度跟着右边的胶囊按钮）
+        f"QLineEdit {{ background: {p['ink']}; color: {p['white']}; border: none; border-radius: 16px; "
+        f"padding: 0px 14px; font-weight: bold; }}\n"
+        f"QLineEdit:disabled {{ color: #8b8b95; background: #2a2a2e; }}\n"
     )
     dot_check = (f"stop:0 {p['pink']}, stop:0.5 {p['pink']}, stop:0.58 {p['white']}, stop:1 {p['white']}")
     editor_extra = button + combo + scroll + (
@@ -147,6 +157,7 @@ def _classic_white() -> Skin:
     return make_skin(
         CLASSIC_WHITE_KEY, CLASSIC_WHITE_LABEL, common=common, fonts=fonts, layouts=layouts,
         overlay=dict(
+            WIDTH=520,  # 比默认的 459 宽：最长的角色名、最长的方案名在「筹码方案」卡片的下拉框里要写得下
             PANEL_MARGINS=(14, 12, 14, 14), PANEL_SPACING=10, HEAD_SPACING=6,
             # 面板底色按不透明画，透出下方的游戏画面靠整个悬浮窗的透明度（WINDOW_ALPHA）：白卡片画在面板上，面板自己透明时
             # 卡片那里还是不透明
@@ -172,8 +183,8 @@ def _classic_white() -> Skin:
             TOGGLE_PRESSED_BG="#3a3a40",
             REMOVE_PADDING="0px 6px", REMOVE_RADIUS=9, SCROLL_WIDTH=8, SCROLL_HANDLE=p["pink"], SCROLL_RADIUS=4,
             SCROLL_HANDLE_MIN=24, CLOSE_PADDING="0px 4px",
-            SCHEME_TOOL_ICON_PX=19, SCHEME_TOOL_COLOR=p["white"], SCHEME_TOOL_DISABLED="#fbe3ee", SCHEME_TOOL_GAP=3,
-            SCHEME_TOOL_PADDING=(10, 6),
+            SCHEME_TOOL_ICON_PX=14, SCHEME_TOOL_COLOR=p["white"], SCHEME_TOOL_DISABLED="#fbe3ee", SCHEME_TOOL_GAP=2,
+            SCHEME_TOOL_PADDING=(10, 4),
             MARK_BEST_COLOR=p["pink"], MARK_COLOR="#d0d0d8",
             NAME_BORDER_ALPHA=255, UNREADABLE_BORDER_ALPHA=255, NAME_PADDING="2px 12px", NAME_WEIGHT_BEST=900,
             NAME_WEIGHT=700, PICKED_WEIGHT=700, GRID_DIAMETER=26,
@@ -268,11 +279,14 @@ def _classic_white() -> Skin:
             TONE_BOX={"ok": (p["lime"], p["lime_ink"]), "warn": (p["ink"], p["yellow"])},
         ),
         settings=dict(
-            # 高度：含低配模式一行（连同间距约 111 像素），「识别」页在各种截取状态下底下都留有空
-            WIDTH=860, HEIGHT=691, SCREEN_MARGIN=0, SHEET_EXTRA=settings_extra,
+            # 高度：含游戏平台、低配模式两行（连同间距约 113、111 像素），「识别」页在各种截取状态下底下都留有空；
+            # 「只用大核」一行的说明有两行（处理器名称、打开以后的效果），连同间距约 115 像素
+            WIDTH=860, HEIGHT=804, BIG_CORES_EXTRA=115, SCREEN_MARGIN=0, SHEET_EXTRA=settings_extra,
             TILE_BG="transparent", TILE_BORDER="transparent", TILE_HOVER_BORDER="rgba(255,61,143,90)",
             TILE_ON_BG="transparent", RADIO_SIZE=22, RADIO_GAP=10, RADIO_PEN=2, RADIO_DOT=6,
             RADIO_OFF_COLOR="#b8b8b8", SELECTED_COLOR=p["pink"],
+            LEVEL_COLOR={"easy": "#2b8a3e", "normal": "#1a6fd4", "danger": "#9a7b00",
+                         "critical": "#d9480f", "overload": "#9c1020"},
             KEYCAP_BG=p["ink"], KEYCAP_BORDER=p["ink"], KEYCAP_EDGE=p["ink"], KEYCAP_RADIUS=19, KEYCAP_EDGE_WIDTH=1,
             CHIP_OK=(p["pink"], p["ink"], p["ink"]), CHIP_WARN=(p["yellow"], p["ink"], p["ink"]), CHIP_RADIUS=19,
             CHIP_PADDING="9px 22px", CHIP_DOT=0, CHIP_DOT_X=20, CHIP_BADGE="!", CHIP_BADGE_ROOM=14,

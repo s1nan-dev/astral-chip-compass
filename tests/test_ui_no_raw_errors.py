@@ -14,8 +14,8 @@ QToolTip.showText 的文字（第二个参数）、托盘的 showMessage（标�
 "…" + str(e)、"%s" % e、x if … else str(e)、x or str(e)、e.args / e.args[0] / e.msg / e.strerror / e.reason、type(e).__name__、
 e.__class__.__name__、traceback.format_exc() 这类；经同一个函数里的变量中转的（text = f"…{e}"；self.say(text)），
 以及里面再定义的函数、lambda 用到外面这些变量的，也算。装在别的函数里的（例如 startup_summary(e)、log_error(…) 的返回值：
-那个函数自己写给玩家看的中文）不算；异常上专门放给玩家看的固定中文的属性（找不到游戏窗口、窗口最小化时
-vision/capture.py 的 WindowGone.notice，只从两句固定中文里取）也不算。认不出：存进对象的属性、换到别的函数里再显示的
+那个函数自己写给玩家看的中文）不算；异常上专门放给玩家看的固定中文的属性（找不到游戏窗口、窗口最小化、按游戏平台
+找时点明设置的那一句，vision/capture.py 的 WindowGone.notice，只从这几句固定中文里取）也不算。认不出：存进对象的属性、换到别的函数里再显示的
 （self._error = str(e)，别处 self.say(self._error)）。确实安全、放进允许名单的，每条写明理由。
 """
 from __future__ import annotations
@@ -213,7 +213,7 @@ _GOOD = (
     _in_except('where = log_error("出错", str(e))\nself.say(where)'),
     "def f(self):\n    try:\n        pass\n    except SystemExit as e:\n        self.say(f\"程序异常退出（退出码 {e.code}）\")\n",
     "def f(self, events):\n    for e in events:\n        self.say(e.text)\n",
-    _in_except("self.status.emit(e.notice)"),  # WindowGone.notice：两句固定中文
+    _in_except("self.status.emit(e.notice)"),  # WindowGone.notice：几句固定中文（找不到窗口、最小化、游戏平台）
     _in_except("QTimer.singleShot(0, lambda e: self.say(str(e)))"),
 )
 

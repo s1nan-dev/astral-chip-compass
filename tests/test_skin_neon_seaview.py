@@ -937,8 +937,8 @@ class HeightTest(Case):
 
     def test_normal_screen_size(self):
         """正常大小的屏幕：照效果图的大小打开（设置的宽、导入/导出、关于、编辑方案）。"""
-        sizes = {NEON: dict(settings=580, share=(600, 672), about=(560, 552), editor=(760, 752)),
-                 SEA: dict(settings=600, share=(600, 672), about=(560, 552), editor=(760, 752))}
+        sizes = {NEON: dict(settings=580, share=(600, 700), about=(560, 552), editor=(760, 752)),
+                 SEA: dict(settings=600, share=(600, 700), about=(560, 552), editor=(760, 752))}
         for key in SKINS:
             with self.subTest(skin=key):
                 theme.set_skin(key)

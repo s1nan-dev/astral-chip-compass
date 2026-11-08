@@ -25,7 +25,7 @@ class Dialogs(QObject):
 
     def __init__(self, *, db, store, session, lock, services, previews, show_window, make_settings, make_skins,
                  capture_view, values, game_found, reset_hotkey_note, on_schemes_changed, on_schemes_imported,
-                 on_scheme_added, on_use_requested) -> None:
+                 on_scheme_added, on_use_requested, open_hub) -> None:
         super().__init__()  # 外壳建好以后挂到悬浮窗下面（setParent）
         # 服务：资料库、方案存储（None 时不打开编辑、导入/导出窗口）、Session 和它的锁、可选模块（services() 每次现取）、
         # 皮肤预览图（previews()，悬浮窗建好以后才接上）
@@ -40,6 +40,9 @@ class Dialogs(QObject):
         self.reset_hotkey_note = reset_hotkey_note
         self.on_schemes_changed, self.on_schemes_imported = on_schemes_changed, on_schemes_imported
         self.on_scheme_added, self.on_use_requested = on_scheme_added, on_use_requested
+        # 打开作业站（参数是 page：home 首页、plans 当前角色的方案列表）：导入/导出窗口的「去作业站找方案」经 hub_requested
+        # 发过来
+        self.open_hub = open_hub
         # 编辑筹码方案窗口、导入/导出筹码方案窗口的类：为 None 时用 advisor/ui/scheme_editor/ 的 SchemeEditor、
         # scheme_share.py 的 SchemeShareWindow（测试里换成假的窗口类）
         self.editor_class = None
@@ -69,15 +72,16 @@ class Dialogs(QObject):
 
         return SchemeShareWindow
 
-    def open_editor(self) -> None:
+    def open_editor(self, checked: bool = False, *, hero: str | None = None) -> None:
         """「编辑方案」：打开编辑筹码方案窗口（SchemeEditor(db, store, hero)）。第一次点时才建，关了再开用同一个，角色换成
-        悬浮窗当前的角色（set_hero）。悬浮窗的角色资料库未收录（或没有角色）时：第一次建窗口时编辑窗口取它的角色下拉框里的
+        悬浮窗当前的角色（set_hero）；给了 hero 时换成它（第二张悬浮窗点「编辑方案」时用第二张当前的角色）。checked 是按钮
+        clicked 带来的选中状态，不用。悬浮窗的角色资料库未收录（或没有角色）时：第一次建窗口时编辑窗口取它的角色下拉框里的
         第一个，之后保持窗口里正在编辑的角色。方案文件只读时照样打开（编辑窗口自己处理只读）。窗口里改了方案时发
         schemes_changed，接到 on_schemes_changed；新建、复制了一套时另发 scheme_added，接到 on_scheme_added（窗口类没有这个
         信号时不接）。没有方案存储时（测试、预览）不打开。"""
         if self.store is None:
             return
-        hero = self.session.settings.hero
+        hero = self.session.settings.hero if hero is None else hero
         window = self.editor if _alive(self.editor) else None
         if window is None:
             window = self.editor = self.editor_type()(self.db, self.store, hero)
@@ -94,8 +98,9 @@ class Dialogs(QObject):
         """「筹码方案」卡片的「导入/导出」：打开导入/导出筹码方案窗口（SchemeShareWindow(db, store, hero)，角色筛选默认为全部角色：
         「全选 → 复制」就是导出全部方案）。第一次点时才建，关了再开用同一个；建好后导出格式设成上次选的（设置里的
         share_format，跨重启记住），换了格式时（format_changed）记进设置。导入了方案时发 schemes_imported，
-        接到 on_schemes_imported；导入以后点了一套的「使用这套方案」时发 use_requested，接到 on_use_requested（窗口类没有这个
-        信号时不接）。没有方案存储时（测试、预览）不打开。"""
+        接到 on_schemes_imported；导入以后点了一套的「使用这套方案」时发 use_requested，接到 on_use_requested；窗口里的
+        「去作业站找方案」发 hub_requested（page），接到 open_hub（窗口类没有这个信号时不接；「发到作业站」由窗口自己发方案，
+        不经过这里）。没有方案存储时（测试、预览）不打开。"""
         if self.store is None:
             return
         window = self.share if _alive(self.share) else None
@@ -105,6 +110,9 @@ class Dialogs(QObject):
             use = getattr(window, "use_requested", None)
             if use is not None:
                 use.connect(self.on_use_requested)
+            open_hub = getattr(window, "hub_requested", None)
+            if open_hub is not None:
+                open_hub.connect(self.open_hub)
             set_format = getattr(window, "set_format", None)
             if callable(set_format):
                 set_format(self.share_format())

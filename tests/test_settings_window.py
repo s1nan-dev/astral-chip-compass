@@ -1,34 +1,41 @@
 """「拾星助手设置」窗口（advisor/ui/settings/）和悬浮窗上跟着改的几处：窗口里有哪些项、怎么排（默认皮肤的单页分组卡片），
 识别模式的两块方块、识别热键的键帽和说明、悬浮窗背景不透明、「导出诊断」、「启动时自动检查更新」那一行（点了以后的反应在
 tests/test_update_ui.py）、「关于拾星助手」；标题栏、底栏上仅有的按钮，
-「筹码方案」卡片的「编辑方案」「导入/导出」两个图标按钮；新用户的卡片折叠；系统里没有图标字体时只写字；屏幕矮时窗口内滚动。
+「筹码方案」卡片的「编辑方案」「导入/导出」「作业站」三个图标按钮；新用户的卡片折叠；系统里没有图标字体时只写字；屏幕矮时
+窗口内滚动。
 
 用 Qt 的 offscreen 平台，不会弹出窗口；设置文件、方案文件都写在项目 .tmp 下的临时文件夹里。
 """
 import json
+import math
 import threading
 import unittest
 from pathlib import Path
 from unittest import mock
 
-from PySide6.QtCore import QPoint, Qt, Signal  # noqa: E402
-from PySide6.QtGui import QFont, QFontMetrics  # noqa: E402
+from PySide6.QtCore import QPoint, QRect, Qt, Signal  # noqa: E402
+from PySide6.QtGui import QColor, QFont, QFontMetrics  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
-from PySide6.QtWidgets import QLabel, QPushButton, QWidget  # noqa: E402
+from PySide6.QtWidgets import QLabel, QPushButton, QStyle, QStyleOptionComboBox, QWidget  # noqa: E402
 
+from advisor import hub  # noqa: E402
 from advisor.data import load_db  # noqa: E402
-from advisor.schemes import SchemeStore, get_catalog  # noqa: E402
+from advisor.schemes import NAME_MAX, SchemeStore, get_catalog  # noqa: E402
 from advisor.session import GAME_FIELDS  # noqa: E402
-from advisor.ui import glyphs, settings as st  # noqa: E402
+from advisor.ui import glyphs, lang, settings as st, theme  # noqa: E402
 from advisor.ui.hotkey import HOTKEY_PLACE  # noqa: E402
 from advisor.ui.overlay_parts import app as overlay_app
 from advisor.ui.overlay import Overlay
-from advisor.ui.overlay_parts.wording import AUTO_SWITCHED, EXPAND_ALL_TIP, GAME_OVER_TIP, MANUAL_SWITCHED, MANUAL_SWITCHED_NO_KEY, NEW_USER_COLLAPSED, SCHEME_EDIT_TIP, SETTINGS_TIP, SHARE_BTN, SHARE_TIP
+from advisor.ui.overlay_parts.wording import AUTO_SWITCHED, EXPAND_ALL_TIP, GAME_OVER_TIP, MANUAL_SWITCHED, MANUAL_SWITCHED_NO_KEY, NEW_USER_COLLAPSED, SCHEME_EDIT_TIP, SETTINGS_TIP, SETTINGS_TIP_HANT, SHARE_BTN, SHARE_TIP
+from advisor.ui.overlay_parts.wording import HUB_BTN, HUB_TIP, SCHEME_EDIT
 from advisor.ui.overlay_parts.factory import IconTextButton
 from advisor.ui.overlay_parts.app import OverlaySession, UiSettings, load_settings
 from advisor.ui.services import Services  # noqa: E402
 from advisor.ui.text import FONT_S, TIP_LINE, tip_lines, tip_paragraphs_html  # noqa: E402
+from advisor.ui.theme import WIDGETS as W  # noqa: E402
+from advisor.ui.widgets import ComboArrow, ComboRowDelegate  # noqa: E402
 from tests.support import qtenv, sandbox  # noqa: E402
+from tests.support.widgets import settle  # noqa: E402
 
 APP = qtenv.app()
 PROJECT = Path(__file__).resolve().parents[1]
@@ -54,6 +61,18 @@ def fits(widget) -> bool:
     if not widget.hasHeightForWidth():
         return widget.height() >= widget.sizeHint().height()
     return widget.height() >= widget.heightForWidth(widget.width())
+
+
+def text_room(combo) -> int:
+    """下拉框收起时写当前项的地方有多宽：编辑区左右各让 1 像素；皮肤自己画箭头（ComboArrow）时，字写到箭头左边 2 像素
+    为止（不压箭头）。"""
+    opt = QStyleOptionComboBox()
+    combo.initStyleOption(opt)
+    edit = combo.style().subControlRect(QStyle.CC_ComboBox, opt, QStyle.SC_ComboBoxEditField, combo)
+    left, right = edit.left() + 1, edit.right() - 1
+    if W.COMBO_ARROW:
+        right = min(right, math.floor(combo.width() - ComboArrow.CENTER - ComboArrow.HALF) - 2)
+    return right - left + 1
 
 
 class FakeWindow(QWidget):
@@ -116,8 +135,10 @@ class WordingTest(unittest.TestCase):
         self.assertTrue(GAME_OVER_TIP.endswith(
             "如需反馈本局的识别或推荐问题，可点击底栏的「设置」按钮，在打开的窗口中点击「导出诊断」按钮"
             "（一行显示时先点击标题栏的「全部展开」按钮），诊断包包含本局完整的识别记录。"))
-        self.assertEqual(SETTINGS_TIP, "打开「拾星助手设置」窗口：识别模式、识别热键、低配模式、悬浮窗背景、"
+        self.assertEqual(SETTINGS_TIP, "打开「拾星助手设置」窗口：游戏平台、识别模式、识别热键、低配模式、悬浮窗背景、"
                                        "导出诊断、检查更新、关于拾星助手")
+        self.assertEqual(SETTINGS_TIP_HANT, "打开「拾星助手设置」窗口：游戏平台、识别模式、识别热键、低配模式、悬浮窗背景、"
+                                            "界面语言、导出诊断、检查更新、关于拾星助手")  # 繁体界面打开时
         self.assertEqual(SHARE_BTN, "导入/导出")
         self.assertEqual(SHARE_TIP, "打开「导入/导出筹码方案」窗口：复制筹码方案的文字或短字符串，或粘贴方案文字、"
                                     "短字符串导入")
@@ -152,7 +173,7 @@ class WordingTest(unittest.TestCase):
         self.assertEqual((st.UPDATE_TITLE, st.UPDATE_BUTTON, st.UPDATE_BUTTON_TIP, st.UPDATE_CARD),
                          ("启动时自动检查更新", "检查更新", "立即检查有没有新版本", "更新"))
         self.assertEqual(st.UPDATE_DESC.format(version="1.0.0"),
-                         "启动后在后台检查有没有新版本，一天最多一次；有新版本时在对局外提示。当前版本 1.0.0")
+                         "每次启动时在后台检查有没有新版本；有新版本时在对局外提示。当前版本 1.0.0")
         self.assertEqual((st.ABOUT_TITLE, st.ABOUT_DESC),
                          ("关于拾星助手", "版本、资料日期、资料来源与授权、许可证、第三方许可证、免责声明和隐私说明"))
 
@@ -172,29 +193,47 @@ class LayoutTest(Base):
     没有「关闭」按钮。各段文字不被截掉，窗口高度等于内容的高度。"""
 
     def test_items(self):
-        # 「皮肤」在「悬浮窗背景不透明」下面；「低配模式」在「识别」一组最后；「启动时自动检查更新」在诊断包和「关于」之间
+        # 「皮肤」在「悬浮窗背景不透明」下面；「低配模式」「只用大核」在「识别」一组最后；「启动时自动检查更新」在诊断包和「关于」之间
         self.assertEqual([i.key for i in st.ITEMS],
-                         ["mode", "hotkey", "capture", "lowend", "opaque", "skin", "export", "update", "about"])
-        self.assertEqual([i.group for i in st.ITEMS], ["识别"] * 4 + ["外观"] * 2 + ["诊断与说明"] * 3)
+                         ["platform", "mode", "hotkey", "capture", "lowend", "big_cores", "opaque", "skin", "ui_lang",
+                          "export", "update", "about", "report"])
+        self.assertEqual([i.group for i in st.ITEMS],
+                         ["识别"] * 6 + ["外观"] * 3 + ["诊断与说明"] * 3 + ["隐私与数据"])
         self.assertEqual([i.kind for i in st.ITEMS],
-                         ["mode", "hotkey", "status", "switch", "switch", "skin", "button", "update", "link"])
+                         ["choice", "mode", "hotkey", "status", "switch", "switch", "switch", "skin", "choice", "button",
+                          "update", "link", "switch"])
         self.assertEqual([i.action for i in st.ITEMS],
-                         ["set_manual", "start_capture", None, "set_lowend", "set_opaque", "show_skins",
-                          "export_diagnostics", "set_update_auto", "show_about"])
-        for item in st.ITEMS:  # 改了以后调用的都是悬浮窗上有的方法
+                         ["set_platform", "set_manual", "start_capture", None, "set_lowend", "set_big_cores", "set_opaque",
+                          "show_skins", "set_ui_lang", "export_diagnostics", "set_update_auto", "show_about",
+                          "set_report_enabled"])
+        # 说明下面能点的字只有「隐私与数据」一组开关那一项有：「我的统计」，点了打开「我的统计」窗口
+        self.assertEqual([(i.key, i.link, i.link_action) for i in st.ITEMS if i.link or i.link_action],
+                         [("report", st.STATS_TITLE, "show_stats")])
+        self.assertEqual(st.STATS_TITLE, "我的统计")
+        for item in st.ITEMS:  # 改了以后、点了能点的字以后调用的都是悬浮窗上有的方法
             with self.subTest(item=item.key):
-                if item.action:
-                    self.assertTrue(callable(getattr(Overlay, item.action, None)), item.action)
+                for name in (item.action, item.link_action):
+                    if name:
+                        self.assertTrue(callable(getattr(Overlay, name, None)), name)
         self.assertTrue(callable(getattr(Overlay, st.UPDATE_CHECK_ACTION, None)))  # 「检查更新」按钮
+        self.assertTrue(callable(getattr(Overlay, st.RESTART_ACTION, None)))  # 「现在重开」按钮
         keys = [k for _, cards in st.CardsLayout.CARDS for card in cards for k in card]
         self.assertEqual(sorted(keys), sorted(i.key for i in st.ITEMS))  # 排法里每一项正好一次
         # 程序登记了两套以上皮肤：开发版「外观」一组里有「皮肤」一项；只有默认一套时不显示（tests/test_theme.py）。
-        # 「识别画面」只在截取屏幕时显示：直接截取（绝大多数电脑）和还没有截取状态时没有这一项
-        direct = ["mode", "hotkey", "lowend", "opaque", "skin", "export", "update", "about"]
-        self.assertEqual([i.key for i in st.shown_items()], direct)
-        self.assertEqual([i.key for i in st.shown_items(overlay_app.SimpleCapture("window"))], direct)
-        self.assertEqual([i.key for i in st.shown_items(overlay_app.SimpleCapture("screen", "unsupported"))],
-                         ["mode", "hotkey", "capture", "lowend", "opaque", "skin", "export", "update", "about"])
+        # 「识别画面」只在截取屏幕时显示：直接截取（绝大多数电脑）和还没有截取状态时没有这一项。「界面语言」只在繁体界面
+        # 打开（lang.HANT_ENABLED）时显示，在「皮肤」下面。「只用大核」只在有大小核的电脑上有（测试默认按没有算，见
+        # tests/test_lowend_settings.py）
+        with mock.patch.object(lang, "HANT_ENABLED", False):
+            direct = ["platform", "mode", "hotkey", "lowend", "opaque", "skin", "export", "update", "about", "report"]
+            self.assertEqual([i.key for i in st.shown_items()], direct)
+            self.assertEqual([i.key for i in st.shown_items(overlay_app.SimpleCapture("window"))], direct)
+            self.assertEqual([i.key for i in st.shown_items(overlay_app.SimpleCapture("screen", "unsupported"))],
+                             ["platform", "mode", "hotkey", "capture", "lowend", "opaque", "skin", "export",
+                              "update", "about", "report"])
+        with mock.patch.object(lang, "HANT_ENABLED", True):
+            self.assertEqual([i.key for i in st.shown_items()],
+                             ["platform", "mode", "hotkey", "lowend", "opaque", "skin", "ui_lang", "export", "update",
+                              "about", "report"])
         self.assertEqual((st.capture_shown(None), st.capture_shown(overlay_app.SimpleCapture("window")),
                           st.capture_shown(overlay_app.SimpleCapture("screen", "denied"))), (False, False, True))
 
@@ -204,20 +243,33 @@ class LayoutTest(Base):
         self.assertEqual(d.windowTitle(), "拾星助手设置")
         self.assertEqual(d.width(), st.WIDTH)
         texts = [lb.text() for lb in d.page.findChildren(QLabel) if lb.isVisibleTo(d)]
-        for text in ("设置", "改动即时生效", "识别", "外观", "诊断与说明", "识别模式", "识别热键", "低配模式",
-                     "悬浮窗背景不透明", "诊断包", "启动时自动检查更新", "关于拾星助手", "自动模式", "手动模式"):
+        for text in ("设置", "改动即时生效", "识别", "外观", "诊断与说明", "隐私与数据", "游戏平台", "识别模式", "识别热键",
+                     "低配模式", "悬浮窗背景不透明", "诊断包", "启动时自动检查更新", "关于拾星助手",
+                     "帮助拾星助手改善推荐准确度", "自动模式", "手动模式"):
             self.assertIn(text, texts)
+        self.assertNotIn("我的统计", texts)  # 不再是单独一行的标题，是开关说明下面能点的字（下面另查）
+        # 「界面语言」跟着繁体界面的总开关（lang.HANT_ENABLED）：打开时在「外观」一组里（下拉框和重开那一行见 UiLangTest）；
+        # 关着时没有这一项，也没有它下面重开那一行
+        if lang.HANT_ENABLED:
+            self.assertIn("界面语言", texts)
+            self.assertIn("ui_lang", d.rows)
+        else:
+            self.assertNotIn("界面语言", texts)
+            self.assertNotIn("ui_lang", d.rows)
+            self.assertIsNone(d.relaunch)
         # 直接截取（测试里的悬浮窗按直接截取预判）：没有「识别画面」一项（截取屏幕时才有，见 test_overlay_window）
         self.assertNotIn("识别画面", texts)
         self.assertNotIn("capture", d.rows)
         self.assertIsNone(d.capture_chip)
-        # 从上到下：识别模式、识别热键、低配模式、悬浮窗背景不透明、诊断包、启动时自动检查更新、关于拾星助手
-        tops = [d.rows[k].row.mapTo(d.page, QPoint(0, 0)).y() for k in ("mode", "hotkey", "lowend", "opaque",
-                                                                       "export", "update", "about")]
+        # 从上到下：识别模式、识别热键、低配模式、悬浮窗背景不透明、诊断包、启动时自动检查更新、关于拾星助手、帮助拾星助手
+        # 改善推荐准确度
+        tops = [d.rows[k].row.mapTo(d.page, QPoint(0, 0)).y() for k in ("platform", "mode", "hotkey", "lowend", "opaque",
+                                                                       "export", "update", "about", "report")]
         self.assertEqual(tops, sorted(tops))
         sections = {lb.text(): lb.mapTo(d.page, QPoint(0, 0)).y() for lb in d.page.findChildren(QLabel)
                     if lb.objectName() == "section"}
-        order = [sections["识别"], *tops[:3], sections["外观"], tops[3], sections["诊断与说明"], *tops[4:]]
+        order = [sections["识别"], *tops[:4], sections["外观"], tops[4], sections["诊断与说明"], *tops[5:8],
+                 sections["隐私与数据"], *tops[8:]]
         self.assertEqual(order, sorted(order))  # 分组小标题在各自那几行的上面
         # 识别模式：两块方块在那一行下面、并排等宽
         tiles = d.mode_tiles
@@ -225,20 +277,33 @@ class LayoutTest(Base):
         self.assertEqual(tiles[False].width(), tiles[True].width())
         self.assertLess(tiles[False].mapTo(d.page, QPoint(0, 0)).x(), tiles[True].mapTo(d.page, QPoint(0, 0)).x())
         # 右边的控件在说明的右边
-        for key, control in (("hotkey", d.change_btn), ("lowend", d.lowend_switch),
-                             ("skin", d.skin_row), ("opaque", d.opaque_switch), ("export", d.export_btn),
-                             ("update", d.update_switch)):
+        controls = [("platform", d.platform_combo), ("hotkey", d.change_btn), ("lowend", d.lowend_switch),
+                    ("skin", d.skin_row), ("opaque", d.opaque_switch),
+                    ("export", d.export_btn), ("update", d.update_switch), ("report", d.report_switch)]
+        if lang.HANT_ENABLED:
+            controls.append(("ui_lang", d.lang_combo))
+        for key, control in controls:
             with self.subTest(row=key):
                 desc = d.rows[key].desc
                 self.assertGreater(control.mapTo(d.page, QPoint(0, 0)).x(), desc.mapTo(d.page, QPoint(desc.width(), 0)).x())
+        # 「隐私与数据」一组只有开关一行：说明正下方是能点的「我的统计」，和说明左边对齐，字不被截掉；别的行没有能点的字
+        link, desc = d.stats_link, d.rows["report"].desc
+        self.assertIs(d.rows["report"].link, link)
+        self.assertEqual([k for k, parts in d.rows.items() if parts.link is not None], ["report"])
+        self.assertTrue(link.isVisibleTo(d))
+        self.assertEqual(link.text(), "我的统计")
+        self.assertEqual(link.mapTo(d.page, QPoint(0, 0)).x(), desc.mapTo(d.page, QPoint(0, 0)).x())
+        self.assertGreaterEqual(link.mapTo(d.page, QPoint(0, 0)).y(), desc.mapTo(d.page, QPoint(0, desc.height())).y())
+        self.assertGreaterEqual((link.width(), link.height()), (link.sizeHint().width(), link.sizeHint().height()))
         # 更新那一行：开关在左、「检查更新」在右，说明写当前版本号
         self.assertLess(d.update_switch.mapTo(d.page, QPoint(0, 0)).x(), d.update_btn.mapTo(d.page, QPoint(0, 0)).x())
         from advisor import version
 
         self.assertEqual(d.rows["update"].desc.text(), st.UPDATE_DESC.format(version=version.VERSION))
         self.assertIsInstance(d.about_row, st.RowButton)
-        # 没有「关闭」（「更换」是「皮肤」一行打开「皮肤」窗口的按钮）
-        self.assertEqual(sorted(b.text() for b in d.findChildren(QPushButton)), ["导出诊断", "更换", "更改", "检查更新"])
+        # 没有「关闭」（「更换」是「皮肤」一行打开「皮肤」窗口的按钮；「现在重开」是「界面语言」下面那一行的，繁体界面打开时才有）
+        self.assertEqual(sorted(b.text() for b in d.findChildren(QPushButton)),
+                         sorted(["导出诊断", "更换", "更改", "检查更新"] + (["现在重开"] if lang.HANT_ENABLED else [])))
         # 各段文字不被截掉、窗口高度等于内容的高度
         for label in d.page.findChildren(QLabel):
             if label.isVisibleTo(d):
@@ -255,18 +320,20 @@ class LayoutTest(Base):
         w = self.make()
         d = self.open(w)
         boxes = [b for b in d.page.findChildren(st.GlyphBox) if b.isVisibleTo(d)]
-        # 顶部一个、每项一个（含「皮肤」：程序登记了两套皮肤；直接截取时没有「识别画面」）
-        self.assertEqual(len(boxes), 9)
+        # 顶部一个、每项一个（含「皮肤」：程序登记了两套皮肤；直接截取时没有「识别画面」；「界面语言」只在繁体界面打开时有；
+        # 「我的统计」是开关说明下面的字，不是单独一行、没有图标）
+        self.assertEqual(len(boxes), 12 if lang.HANT_ENABLED else 11)
         codes = {b.code for b in boxes}
-        self.assertEqual(codes, {st.ICON_SETTINGS, st.ICON_MODE, st.ICON_HOTKEY, st.ICON_LOWEND,
-                                 st.ICON_SKIN, st.ICON_LOOK, st.ICON_DIAG, st.ICON_UPDATE, st.ICON_ABOUT})
+        self.assertEqual(codes, {st.ICON_SETTINGS, st.ICON_PLATFORM, st.ICON_MODE, st.ICON_HOTKEY, st.ICON_LOWEND,
+                                 st.ICON_SKIN, st.ICON_LOOK, st.ICON_DIAG, st.ICON_UPDATE, st.ICON_ABOUT}
+                         | ({st.ICON_LANG} if lang.HANT_ENABLED else set()))
         img = boxes[1].grab().toImage()
         bright = sum(img.pixelColor(x, y).lightness() > 150 for x in range(img.width()) for y in range(img.height()))
         self.assertGreater(bright, 10)  # 方块里画着浅色的图标
 
     def test_without_icon_font(self):
         """系统里两种图标字体都没有时不画图标、只写字：图标方块不显示（不占地方），「关于」右端写「›」；悬浮窗「筹码方案」卡片的
-        两个按钮只写字（高度相应变矮），照常可点。"""
+        「编辑方案」「导入/导出」只写字（高度相应变矮），「作业站」的书是程序自己画的、照样画，照常可点。"""
         with mock.patch.object(glyphs, "icon_family", return_value=None):
             w = self.make()
             d = self.open(w)
@@ -277,10 +344,10 @@ class LayoutTest(Base):
             self.assertFalse(d.about_row.grab().isNull())
             plain = w.edit_btn.sizeHint().height()
             self.assertFalse(w.edit_btn.grab().isNull())
-            self.assertEqual(w.edit_btn.text(), "编辑方案")
+            self.assertEqual(w.edit_btn.text(), SCHEME_EDIT)
         with_icon = self.make().edit_btn.sizeHint().height()
         if st.icon_family() is not None:
-            self.assertEqual(with_icon - plain, 18 + 3)  # 图标和图标下面的空隙
+            self.assertEqual(with_icon - plain, 14 + 2)  # 图标和图标下面的空隙
 
     def test_scroll_when_screen_short(self):
         """屏幕矮（例如 1366×768 缩放 125%）放不下整个窗口时：窗口高度按屏幕可用高度，内容在窗口内滚动，宽度不变。"""
@@ -297,12 +364,12 @@ class LayoutTest(Base):
             self.assertGreater(bar.value(), 0)  # 滚得到最下面的「关于拾星助手」
 
     def test_clickables(self):
-        """可点的都是手形光标：两块方块、「更改」、开关、「导出诊断」、「检查更新」、整行可点的「关于」；方块有底色和框线，
-        开关有框线。"""
+        """可点的都是手形光标：两块方块、「更改」、开关、「导出诊断」、「检查更新」、整行可点的「关于」、开关说明下面的
+        「我的统计」；方块有底色和框线，开关有框线。"""
         w = self.make()
         d = self.open(w)
         for widget in (*d.mode_tiles.values(), d.change_btn, d.opaque_switch, d.export_btn, d.update_switch,
-                       d.update_btn, d.about_row):
+                       d.update_btn, d.about_row, d.report_switch, d.stats_link):
             with self.subTest(widget=type(widget).__name__):
                 self.assertEqual(widget.cursor().shape(), Qt.PointingHandCursor)
         tile = d.mode_tiles[True].grab().toImage()
@@ -393,6 +460,352 @@ class ModeTest(Base):
         d = self.open(w)
         self.assertTrue(d.mode_tiles[True].isChecked())
         self.assertFalse(d.mode_tiles[False].isChecked())
+
+
+class FakeHost:
+    """设置窗口的悬浮窗（只记下按名字调用的方法和参数）。"""
+
+    def __init__(self):
+        self.calls = []
+        self.lowend_calls = []
+        self.started = []
+        self.cancelled = 0
+        self.missing = []
+
+    def set_platform(self, value):
+        self.calls.append(value)
+
+    def set_lowend(self, on):
+        self.lowend_calls.append(on)
+
+    def dual_missing(self):
+        return list(self.missing)
+
+    def start_dual_test(self, lowend, progress, done):
+        self.started.append((lowend, progress, done))
+
+    def cancel_dual_test(self):
+        self.cancelled += 1
+
+
+class PlatformTest(unittest.TestCase):
+    """「游戏平台」一项：文字、下拉框的几项（第一项是自动识别，字照上一次认出的端写）、七套皮肤里都在「识别」一组
+    最上面、下拉框放得下最长的一项；选了以后调用悬浮窗的 set_platform，刷新时不触发回调。"""
+
+    def setUp(self):
+        self.old_font = QFont(APP.font())
+        APP.setFont(theme.app_font())
+        self.addCleanup(APP.setFont, self.old_font)
+        self.addCleanup(theme.set_skin, theme.current_key())
+
+    def test_wording(self):
+        self.assertEqual((st.PLATFORM_TITLE, st.PLATFORM_DESC), ("游戏平台", "读取哪个客户端的游戏画面"))
+        self.assertEqual(st.PLATFORM_AUTO.format(name="Steam端"), "Steam端（自动识别）")
+        self.assertEqual(st.PLATFORM_TIP.split("\n"), [
+            "· 自动识别：认出正在运行的客户端；Steam 版和 TapTap 版都开着时，跟最后启动的那个。",
+            "· 选了「Steam端」或「TapTap端」以后，只认这个客户端的游戏窗口。",
+            "· 选「Steam端+TapTap端」以后，两个客户端同时识别，各一张悬浮窗；对性能有较大影响，开启前先做性能测试。",
+        ])
+
+    def test_choices(self):
+        from advisor.vision import capture
+
+        self.assertEqual(st.platform_choices("steam"),
+                         [(None, "Steam端（自动识别）"), ("steam", "Steam端"), ("taptap", "TapTap端"),
+                          ("both", "Steam端+TapTap端")])
+        self.assertEqual(st.platform_choices("taptap")[0], (None, "TapTap端（自动识别）"))
+        self.assertEqual(st.platform_choices("bogus")[0], (None, "Steam端（自动识别）"))  # 认不出的按 Steam
+        self.assertEqual([data for data, _ in st.platform_choices() if data],
+                         [capture.STEAM, capture.TAPTAP, capture.BOTH])  # 名字和先后都取 capture 的
+        self.assertEqual(st.platform_choices()[-1], (capture.BOTH, capture.BOTH_NAME))
+
+    def test_row_in_every_skin(self):
+        for skin in theme.skins():
+            with self.subTest(skin=skin.key):
+                theme.set_skin(skin.key)
+                d = st.SettingsDialog(None, values=st.SettingsValues(platform_seen="taptap"))
+                self.addCleanup(d.close)
+                d.show()
+                APP.processEvents()
+                self.assertEqual(d.platform_combo.count(), 4)
+                self.assertEqual([d.platform_combo.itemText(i) for i in range(4)],
+                                 ["TapTap端（自动识别）", "Steam端", "TapTap端", "Steam端+TapTap端"])
+                self.assertTrue(d.rows["platform"].row.isAncestorOf(d.platform_combo))
+                self.assertTrue(d.rows["platform"].row.isVisibleTo(d))
+                self.assertLess(d.rows["platform"].row.mapTo(d.page, QPoint(0, 0)).y(),
+                                d.rows["mode"].row.mapTo(d.page, QPoint(0, 0)).y())
+                # 最长的一项在七套皮肤里都写得下，不压箭头
+                fm = d.platform_combo.fontMetrics()
+                for text in ("TapTap端（自动识别）", "Steam端", "TapTap端", "Steam端+TapTap端"):
+                    self.assertLessEqual(fm.horizontalAdvance(text), text_room(d.platform_combo), text)
+
+    def test_select_calls_host(self):
+        host = FakeHost()
+        d = st.SettingsDialog(None, host=host)
+        self.addCleanup(d.close)
+        d.show()
+        APP.processEvents()
+        for index, want in ((1, "steam"), (2, "taptap"), (0, None)):
+            d.platform_combo.setCurrentIndex(index)
+            APP.processEvents()
+            self.assertEqual(host.calls[-1], want)
+        self.assertEqual(host.calls, ["steam", "taptap", None])
+
+    def test_third_item_asks_first(self):
+        """选第三项不立刻调用 set_platform：先弹性能测试对话框；取消时下拉框回到原来那一项。"""
+        host = FakeHost()
+        opened = []
+
+        def fake_exec(prompt):
+            opened.append(prompt)
+            return 0
+
+        d = st.SettingsDialog(None, host=host)
+        self.addCleanup(d.close)
+        d.show()
+        APP.processEvents()
+        with mock.patch.object(st.DualPromptDialog, "exec", fake_exec):
+            d.platform_combo.setCurrentIndex(3)
+            APP.processEvents()
+        self.assertEqual(len(opened), 1)  # 弹过对话框
+        self.assertEqual(opened[0].windowTitle(), st.PROMPT_TITLE)
+        self.assertEqual(host.calls, [])  # 没有改设置
+        self.assertIsNone(d.platform_combo.currentData())  # 取消：回到自动识别
+
+    def test_third_item_passes_test(self):
+        """测试通过（对话框 applied）时把 capture.BOTH 交给悬浮窗，下拉框停在这一项；以后不能再弹。"""
+        from advisor.vision import capture
+
+        host = FakeHost()
+
+        def fake_exec(prompt):
+            prompt._applied = True
+            host.set_platform(capture.BOTH)
+            return 1
+
+        d = st.SettingsDialog(None, host=host)
+        self.addCleanup(d.close)
+        d.show()
+        APP.processEvents()
+        with mock.patch.object(st.DualPromptDialog, "exec", fake_exec):
+            d.platform_combo.setCurrentIndex(3)
+            APP.processEvents()
+            self.assertEqual(host.calls, [capture.BOTH])
+            self.assertEqual(d.platform_combo.currentData(), capture.BOTH)
+            d.platform_combo.setCurrentIndex(3)  # 已经是第三项：再选不弹
+            APP.processEvents()
+        self.assertEqual(host.calls, [capture.BOTH])
+
+    def test_already_both_does_not_ask(self):
+        host = FakeHost()
+        opened = []
+        d = st.SettingsDialog(None, host=host, values=st.SettingsValues(platform="both"))
+        self.addCleanup(d.close)
+        d.show()
+        APP.processEvents()
+        with mock.patch.object(st.DualPromptDialog, "exec", lambda prompt: opened.append(prompt) or 0):
+            d.platform_combo.setCurrentIndex(3)
+            APP.processEvents()
+        self.assertEqual(opened, [])
+        self.assertEqual(host.calls, [])
+        self.assertEqual(d.platform_combo.currentData(), "both")
+
+    def test_third_item_without_host_keeps_selection(self):
+        """没有悬浮窗（预览工具）：选了第三项不弹、也不留在第三项，回到原来那一项。"""
+        d = st.SettingsDialog(None)
+        self.addCleanup(d.close)
+        d.platform_combo.setCurrentIndex(3)
+        APP.processEvents()
+        self.assertIsNone(d.platform_combo.currentData())
+
+    def test_wheel_does_not_switch(self):
+        """滚轮停在下拉框上不切换选项（设置页会滚动，不能顺手改掉游戏平台），也不调用悬浮窗的 set_platform；点开选择照常
+        （test_select_calls_host）。"""
+        from PySide6.QtCore import QPointF
+        from PySide6.QtGui import QWheelEvent
+
+        host = FakeHost()
+        d = st.SettingsDialog(None, host=host)
+        self.addCleanup(d.close)
+        d.show()
+        APP.processEvents()
+        for delta in (-120, 120, -120):
+            event = QWheelEvent(QPointF(5, 5), QPointF(5, 5), QPoint(0, 0), QPoint(0, delta), Qt.NoButton,
+                                Qt.NoModifier, Qt.ScrollUpdate, False)
+            APP.sendEvent(d.platform_combo, event)
+            APP.processEvents()
+            self.assertEqual(d.platform_combo.currentIndex(), 0)
+        self.assertEqual(host.calls, [])
+
+    def test_set_values_does_not_call_back(self):
+        host = FakeHost()
+        d = st.SettingsDialog(None, host=host)
+        self.addCleanup(d.close)
+        d.set_values(st.SettingsValues(platform="taptap", platform_seen="taptap"))
+        self.assertEqual(host.calls, [])
+        self.assertEqual(d.platform_combo.currentData(), "taptap")
+        self.assertEqual(d.platform_combo.itemText(0), "TapTap端（自动识别）")
+        d.set_values(st.SettingsValues(platform=None, platform_seen="steam"))
+        self.assertEqual(host.calls, [])
+        self.assertIsNone(d.platform_combo.currentData())
+        self.assertEqual(d.platform_combo.itemText(0), "Steam端（自动识别）")
+        # 认出的端变了、选的值还是自动识别：第一项的字跟着变
+        d.set_values(st.SettingsValues(platform=None, platform_seen="taptap"))
+        self.assertIsNone(d.platform_combo.currentData())
+        self.assertEqual(d.platform_combo.itemText(0), "TapTap端（自动识别）")
+
+    def test_tip(self):
+        d = st.SettingsDialog(None)
+        self.addCleanup(d.close)
+        self.assertEqual(d.platform_combo.toolTip(), tip_paragraphs_html(st.PLATFORM_TIP))
+        self.assertEqual(d.platform_combo.cursor().shape(), Qt.ArrowCursor)  # 下拉框本身是箭头光标
+
+
+class LangHost:
+    """只记下「界面语言」那一项调用的悬浮窗方法（set_ui_lang、restart_app）。"""
+
+    def __init__(self):
+        self.calls = []
+
+    def set_ui_lang(self, value):
+        self.calls.append(("set_ui_lang", value))
+
+    def restart_app(self):
+        self.calls.append(("restart_app", None))
+
+    def show_about(self, section):
+        self.calls.append(("show_about", section))
+
+
+class UiLangTest(unittest.TestCase):
+    """「界面语言」一项：下拉框两项各用自己的字；选了调用悬浮窗的 set_ui_lang；选的值和这次启动的语言不同时，这一项下面
+    显示重开那一行，相同就收起；「现在重开」调用 restart_app；七套皮肤里都显示得出来、在「皮肤」下面，下拉框和「游戏平台」
+    同一种画法（皮肤自己画的箭头也有），重开那一行显示出来时不被截掉。"""
+
+    def setUp(self):
+        saved = lang.CURRENT
+        self.addCleanup(setattr, lang, "CURRENT", saved)
+        lang.CURRENT = lang.HANS
+        # 讲的是繁体界面打开以后的样子；关着时没有这一项，见 LayoutTest
+        switch = mock.patch.object(lang, "HANT_ENABLED", True)
+        switch.start()
+        self.addCleanup(switch.stop)
+        self.addCleanup(theme.set_skin, theme.current_key())
+        self.old_font = QFont(APP.font())
+        APP.setFont(theme.app_font())
+        self.addCleanup(APP.setFont, self.old_font)
+
+    def test_wording(self):
+        self.assertEqual(st.UI_LANG_TITLE, "界面语言")
+        self.assertIn("重新打开", st.UI_LANG_DESC)
+        self.assertEqual([value for value, _ in st.LANG_CHOICES], [lang.HANS, lang.HANT])
+        self.assertEqual([text for _, text in st.LANG_CHOICES], ["简体中文", "繁體中文"])
+        self.assertEqual((st.RELAUNCH_HINT, st.RELAUNCH_BUTTON), ("重新打开拾星助手后生效", "现在重开"))
+
+    def test_note_buttons_in_hant(self):
+        """繁体界面下「说明」卡片的四个按钮写繁体、悬停说明里的节名也是繁体，点了照旧传简体的节名。"""
+        lang.CURRENT = lang.HANT
+        host = LangHost()
+        d = st.SettingsDialog(None, host=host, layout="side_tabs")  # 这一种排法有「说明」卡片的四个按钮
+        self.addCleanup(d.close)
+        labels = {lang.to_hant(section): section for section in st.NOTE_SECTIONS}
+        buttons = d.findChildren(QPushButton, "noteButton")
+        self.assertEqual(sorted(b.text() for b in buttons), sorted(labels))
+        for btn in buttons:
+            with self.subTest(button=btn.text()):
+                self.assertIn(f"「{btn.text()}」", tip_text(btn.toolTip()))
+                btn.click()
+                self.assertIn(("show_about", labels[btn.text()]), host.calls)
+
+    def test_select_and_relaunch(self):
+        host = LangHost()
+        d = st.SettingsDialog(None, host=host)
+        self.addCleanup(d.close)
+        d.show()
+        APP.processEvents()
+        self.assertEqual([d.lang_combo.itemData(i) for i in range(d.lang_combo.count())], [lang.HANS, lang.HANT])
+        self.assertEqual([d.lang_combo.itemText(i) for i in range(d.lang_combo.count())], ["简体中文", "繁體中文"])
+        self.assertTrue(d.relaunch.isHidden())  # 和这次启动的语言相同：收起
+        d.lang_combo.setCurrentIndex(1)
+        APP.processEvents()
+        self.assertEqual(host.calls, [("set_ui_lang", lang.HANT)])
+        self.assertFalse(d.relaunch.isHidden())
+        d.relaunch.button.click()
+        self.assertEqual(host.calls[-1], ("restart_app", None))
+        d.lang_combo.setCurrentIndex(0)
+        APP.processEvents()
+        self.assertEqual(host.calls[-1], ("set_ui_lang", lang.HANS))
+        self.assertTrue(d.relaunch.isHidden())
+
+    def test_set_values(self):
+        host = LangHost()
+        d = st.SettingsDialog(None, host=host)
+        self.addCleanup(d.close)
+        d.show()
+        APP.processEvents()
+        d.set_values(st.SettingsValues(ui_lang=lang.HANT))
+        self.assertEqual(host.calls, [])  # 刷新不触发「选了」
+        self.assertEqual(d.lang_combo.currentData(), lang.HANT)
+        self.assertFalse(d.relaunch.isHidden())
+        d.set_values(st.SettingsValues(ui_lang=lang.HANS))
+        self.assertTrue(d.relaunch.isHidden())
+        # 空串、不认识的值按这次启动的语言
+        d.set_values(st.SettingsValues(ui_lang=""))
+        self.assertEqual(d.lang_combo.currentData(), lang.HANS)
+        self.assertTrue(d.relaunch.isHidden())
+        d.set_values(st.SettingsValues(ui_lang="zh-TW"))
+        self.assertEqual(d.lang_combo.currentData(), lang.HANS)
+
+    def test_row_in_every_skin(self):
+        for skin in theme.skins():
+            with self.subTest(skin=skin.key):
+                theme.set_skin(skin.key)
+                d = st.SettingsDialog(None)
+                self.addCleanup(d.close)
+                d.show()
+                APP.processEvents()
+                self.assertIn("ui_lang", d.rows)
+                if st.TAB_LOOK in getattr(d, "tabs", {}):  # 分页的排法：「外观」一页要先选中
+                    d.tabs[st.TAB_LOOK].setChecked(True)
+                    APP.processEvents()
+                self.assertTrue(d.rows["ui_lang"].row.isVisibleTo(d))
+                self.assertEqual(d.lang_combo.count(), 2)
+                top = {key: d.rows[key].row.mapTo(d.page, QPoint(0, 0)).y()
+                       for key in ("opaque", "ui_lang", "skin") if key in d.rows}
+                # 同一页里排在「皮肤」下面；碳纤流光两两并排、一屏放下全部设置，和「悬浮窗背景不透明」并排
+                self.assertLessEqual(top["opaque"], top["ui_lang"])
+                if "skin" in top and top["ui_lang"] != top["opaque"]:
+                    self.assertLess(top["skin"], top["ui_lang"])
+                if not getattr(d, "tabs", {}):  # 单页的排法：在「诊断包」上面（分页的排法两页的坐标不能比）
+                    self.assertLess(d.rows["ui_lang"].row.mapTo(d.page, QPoint(0, 0)).y(),
+                                    d.rows["export"].row.mapTo(d.page, QPoint(0, 0)).y())
+                # 下拉框和「游戏平台」同一种画法：下拉列表每一行自己画；皮肤自己画箭头时（样式表去掉了系统的箭头）右端画着
+                # 箭头；两项都整项写得下、不压箭头
+                self.assertIsInstance(d.lang_combo.itemDelegate(), ComboRowDelegate)
+                if W.COMBO_ARROW:
+                    self.assertGreater(self.arrow_pixels(d.lang_combo), 0)
+                fm = d.lang_combo.fontMetrics()
+                for _, text in st.LANG_CHOICES:
+                    self.assertLessEqual(fm.horizontalAdvance(text), text_room(d.lang_combo), text)
+                # 选了另一种语言：重开那一行显示出来，提示整句写得下、按钮整个在窗口的可见范围里
+                d.set_values(st.SettingsValues(ui_lang=lang.HANT))
+                APP.processEvents()
+                line = d.relaunch
+                self.assertTrue(line.isVisibleTo(d))
+                self.assertGreaterEqual(line.label.width(), line.label.sizeHint().width())
+                view = d.scroll.viewport()
+                shown = QRect(view.mapTo(d, QPoint(0, 0)), view.size())
+                for part in (line.label, line.button, d.lang_combo):
+                    self.assertTrue(shown.contains(QRect(part.mapTo(d, QPoint(0, 0)), part.size())), part)
+
+    @staticmethod
+    def arrow_pixels(combo) -> int:
+        """下拉框右端（ComboArrow 画箭头的地方）颜色接近皮肤的 COMBO_ARROW 的像素有几个。"""
+        want = QColor(W.COMBO_ARROW)
+        img = combo.grab().toImage()
+        left = max(0, img.width() - int(ComboArrow.CENTER + ComboArrow.HALF) - 2)
+        return sum(1 for x in range(left, img.width()) for y in range(img.height())
+                   if sum(abs(a - b) for a, b in zip(img.pixelColor(x, y).getRgb()[:3], want.getRgb()[:3])) < 60)
 
 
 class HotkeyRowTest(unittest.TestCase):
@@ -537,7 +950,7 @@ class NewUserTest(Base):
 
 
 class TitleAndToolbarTest(Base):
-    """标题栏（全部展开时）只有标题、「全部折叠」、×；底栏只有「设置」；托盘菜单里有「关于」。设置窗口的「关于拾星助手」整行可点，
+    """标题栏（全部展开时）只有标题、「全部折叠」、×；底栏只有「设置」。设置窗口的「关于拾星助手」整行可点，
     打开「关于」窗口；「导出诊断」导出诊断包。"""
 
     def test_bars(self):
@@ -570,23 +983,32 @@ class TitleAndToolbarTest(Base):
 
 
 class SchemeButtonsTest(Base):
-    """「筹码方案」卡片右边的两个按钮：图标在上、字在下（笔形 + 「编辑方案」，左右双箭头 + 「导入/导出」），都跨两行；
-    点了分别打开编辑窗口和导入/导出窗口；两个下拉框变窄后最长的角色名仍完整显示。"""
+    """「筹码方案」卡片右边的三个按钮：图标在上、字在下（笔形 + 「编辑方案」，左右双箭头 + 「导入/导出」，翻开的书 +
+    「作业站」，字都写一行），一样宽，都跨两行；点了分别打开编辑窗口、导入/导出窗口和当前角色的方案列表；七套皮肤里
+    最长的角色名、最长的方案名都在下拉框里写得下。"""
 
     def setUp(self):
         super().setUp()
+        self.enterContext(mock.patch.object(hub, "ENABLED", True))
         self.store = SchemeStore(self.folder / "schemes.json", catalog=get_catalog(self.db))
 
     def test_buttons_open_windows(self):
         w = self.make(store=self.store)
         w.dialogs.editor_class = w.dialogs.share_class = FakeWindow
         w.set_expanded(True)
+        opened = []
+        w.open_url = lambda url: opened.append(url) or True
         self.assertIsInstance(w.edit_btn, IconTextButton)
         self.assertIsInstance(w.share_btn, IconTextButton)
-        self.assertEqual((w.edit_btn.code, w.share_btn.code), (0xE70F, 0xE8AB))
-        self.assertEqual((w.edit_btn.text(), w.share_btn.text()), ("编辑方案", "导入/导出"))
+        self.assertIsInstance(w.hub_btn, IconTextButton)
+        self.assertEqual((w.edit_btn.code, w.share_btn.code, w.hub_btn.code), (0xE70F, 0xE8AB, st.ICON_BOOK))
+        self.assertEqual((w.edit_btn.text(), w.share_btn.text(), w.hub_btn.text()),
+                         (SCHEME_EDIT, SHARE_BTN, HUB_BTN))
         self.assertEqual(tip_text(w.edit_btn.toolTip()), SCHEME_EDIT_TIP)
         self.assertEqual(tip_text(w.share_btn.toolTip()), SHARE_TIP)
+        self.assertEqual(tip_text(w.hub_btn.toolTip()), HUB_TIP)
+        self.assertEqual((w.edit_btn.property("tool"), w.share_btn.property("tool"), w.hub_btn.property("tool")),
+                         ("edit", "share", "hub"))
         w.edit_btn.click()
         self.assertIsInstance(w.dialogs.editor, FakeWindow)
         self.assertEqual(w.dialogs.editor.args, (self.db, self.store, "凛"))
@@ -594,6 +1016,8 @@ class SchemeButtonsTest(Base):
         w.share_btn.click()
         self.assertIsInstance(w.dialogs.share, FakeWindow)
         self.assertEqual(w.dialogs.share.args, (self.db, self.store, None))
+        w.hub_btn.click()
+        self.assertEqual(opened, ["https://astral-chip-compass.com/app/plans?hero=121"])
         for window in (w.dialogs.editor, w.dialogs.share):
             self.assertTrue(window.isVisible())
             window.close()
@@ -604,7 +1028,7 @@ class SchemeButtonsTest(Base):
         w.set_expanded(True)
         w.show()
         APP.processEvents()
-        for btn in (w.edit_btn, w.share_btn):
+        for btn in (w.edit_btn, w.share_btn, w.hub_btn):
             with self.subTest(button=btn.text()):
                 btn.ensurePolished()
                 self.assertEqual(btn.font().pointSizeF(), FONT_S)
@@ -618,25 +1042,147 @@ class SchemeButtonsTest(Base):
                     self.assertGreater(top, 10)
 
     def test_longest_hero_name(self):
-        """两个下拉框跟着变窄：最长的角色名（「称号 · 角色名」）在角色下拉框里仍完整显示（框宽够放下文字加箭头和内边距），
-        两个按钮都在卡片里。"""
-        old = APP.font()
-        APP.setFont(QFont("Microsoft YaHei UI", 10))  # 和 overlay_app.build() 一样
-        self.addCleanup(APP.setFont, old)
-        w = self.make(store=self.store)
-        w.set_expanded(True)
-        w.show()
+        """七套皮肤、各自的程序字体下：三个按钮一样宽（都取最宽的一个）；最长的角色名（「称号 · 角色名」）选中时在角色
+        下拉框里写得下（写字的地方放得下，不压皮肤自己画的箭头），最长的方案名（NAME_MAX 个字）在方案下拉框里也写得下；
+        三个按钮都在卡片里。放不下的皮肤加宽悬浮窗（皮肤的 WIDTH）。新建的悬浮窗和一直开着、跟着换皮肤的悬浮窗都看。"""
+        self.addCleanup(APP.setFont, APP.font())
+        self.addCleanup(theme.set_skin, theme.current_key())
+        live = self.make(store=self.store)  # 一直开着、跟着换皮肤
+        live.set_expanded(True)
+        live.show()
+        name = "方" * NAME_MAX
+        for skin in theme.skins():
+            theme.set_skin(skin.key)
+            APP.setFont(theme.app_font())  # 和 overlay_app.build() 一样
+            fresh = self.make(store=self.store)
+            fresh.set_expanded(True)
+            fresh.show()
+            settle()
+            for which, w in (("新建", fresh), ("换皮肤", live)):
+                with self.subTest(skin=skin.key, overlay=which):
+                    self.assertEqual(w.width(), theme.OVERLAY.WIDTH)
+                    buttons = (w.edit_btn, w.share_btn, w.hub_btn)
+                    self.assertEqual([b.width() for b in buttons], [max(b.natural_width() for b in buttons)] * 3)
+                    fm = QFontMetrics(w.hero_box.font())
+                    longest = max((h.label for h in self.db.heroes.values()), key=fm.horizontalAdvance)
+                    w.hero_box.setCurrentIndex(w.hero_box.findText(longest))
+                    self.assertEqual(w.hero_box.currentText(), longest)
+                    self.assertLessEqual(fm.horizontalAdvance(longest), text_room(w.hero_box), longest)
+                    self.assertEqual(w.hero_box.width(), w.scheme_box.width())
+                    self.assertLessEqual(QFontMetrics(w.scheme_box.font()).horizontalAdvance(name),
+                                         text_room(w.scheme_box))
+                    right = w.hub_btn.mapTo(w.scheme_card, QPoint(w.hub_btn.width(), 0)).x()
+                    self.assertLessEqual(right, w.scheme_card.width())
+            fresh.hide()
+
+
+class PrivacyTest(unittest.TestCase):
+    """「隐私与数据」一组：只有开关一行，说明下面是能点的「我的统计」；七套皮肤都排得出、字不被截掉，「我的统计」是链接颜色、
+    带下划线、和说明左边对齐；开关交给悬浮窗；「我的统计」鼠标点、Tab 键走到按空格都打开统计窗口（开关关着也能点）；
+    繁体界面的写法。"""
+
+    def setUp(self):
+        self.addCleanup(theme.set_skin, theme.current_key())
+
+    def dialog(self, skin: str, values=None, host=None):
+        theme.set_skin(skin)
+        dialog = st.SettingsDialog(overlay_app.SimpleCapture("window"), found=True, host=host,
+                                   values=values or st.SettingsValues())
+        self.addCleanup(dialog.close)
+        dialog.show()
+        settle()
+        if getattr(dialog, "tabs", None) and st.TAB_PRIVACY in dialog.tabs:
+            dialog.tabs[st.TAB_PRIVACY].setChecked(True)
+            settle()
+        return dialog
+
+    @staticmethod
+    def link_pixels(link) -> list[int]:
+        """「我的统计」画出来以后每一行像素里接近链接颜色（Common.LINK_COLOR）的有几个。"""
+        want = QColor(theme.COMMON.LINK_COLOR).getRgb()[:3]
+        img = link.grab().toImage()
+        return [sum(1 for x in range(img.width())
+                    if sum(abs(a - b) for a, b in zip(img.pixelColor(x, y).getRgb()[:3], want)) < 60)
+                for y in range(img.height())]
+
+    def test_all_skins(self):
+        for skin in [item.key for item in theme.skins()]:
+            with self.subTest(skin=skin), mock.patch.object(st.SettingsDialog, "max_height", lambda d: 5000):
+                d = self.dialog(skin)
+                self.assertIn("report", d.rows)
+                self.assertNotIn("stats", d.rows)  # 没有单独一行，也没有「查看我的统计」按钮
+                self.assertEqual([b for b in d.findChildren(QPushButton) if "统计" in b.text()], [])
+                self.assertIsNotNone(d.report_switch)
+                self.assertIn(st.REPORT_TITLE, [lb.text() for lb in d.page.findChildren(QLabel)])
+                self.assertIn(st.REPORT_DESC, [lb.text() for lb in d.page.findChildren(QLabel)])
+                report = d.rows["report"]
+                for label in (report.title, report.desc):
+                    if label.isVisibleTo(d) and label.text():
+                        self.assertTrue(fits(label), (skin, label.text()))
+                # 说明正下方的「我的统计」：和说明左边对齐，整个露在窗口里，字不被截掉；字号、粗细同说明，带下划线
+                link, desc = d.stats_link, report.desc
+                self.assertIs(report.link, link)
+                self.assertEqual(link.text(), st.STATS_TITLE)
+                self.assertTrue(link.isVisible())
+                at, below = link.mapTo(d, QPoint(0, 0)), desc.mapTo(d, QPoint(0, desc.height()))
+                self.assertEqual(at.x(), desc.mapTo(d, QPoint(0, 0)).x())
+                self.assertGreaterEqual(at.y(), below.y())
+                view = d.scroll.viewport()
+                shown = QRect(view.mapTo(d, QPoint(0, 0)), view.size())
+                self.assertTrue(shown.contains(QRect(at, link.size())), (skin, QRect(at, link.size()), shown))
+                self.assertGreaterEqual((link.width(), link.height()), (link.sizeHint().width(), link.sizeHint().height()))
+                font = link.text_font()
+                self.assertTrue(font.underline())
+                self.assertEqual((font.pointSizeF(), font.bold()), (desc.font().pointSizeF(), desc.font().bold()))
+                # 画出来是链接颜色：字的笔画，加一整行的下划线（几乎和字一样宽）
+                rows = self.link_pixels(link)
+                self.assertGreater(sum(rows), 40)
+                self.assertGreaterEqual(max(rows), QFontMetrics(font).horizontalAdvance(link.text()) * 0.8)
+                self.assertEqual(link.cursor().shape(), Qt.PointingHandCursor)
+                self.assertTrue(link.focusPolicy() & Qt.TabFocus)
+
+    def test_switch_and_stats_go_to_host(self):
+        """开关交给悬浮窗的 set_report_enabled；「我的统计」鼠标点、Tab 键从开关走过去按空格，都调用悬浮窗的 show_stats，
+        开关关着时也一样。用 Tab 键走到时画焦点框，Shift+Tab 回到开关。"""
+        calls = []
+
+        class Host:
+            def set_report_enabled(self, on):
+                calls.append(("report", on))
+
+            def show_stats(self):
+                calls.append(("stats",))
+
+        d = self.dialog("cards", values=st.SettingsValues(report_enabled=True), host=Host())
+        QTest.mouseClick(d.report_switch, Qt.LeftButton)
         APP.processEvents()
-        fm = QFontMetrics(w.hero_box.font())
-        longest = max((h.label for h in self.db.heroes.values()), key=fm.horizontalAdvance)
-        self.assertGreaterEqual(w.hero_box.width(), fm.horizontalAdvance(longest) + 34, longest)
-        self.assertGreaterEqual(w.hero_box.width(), w.hero_box.sizeHint().width())
-        self.assertEqual(w.hero_box.width(), w.scheme_box.width())
-        right = w.share_btn.mapTo(w.scheme_card, QPoint(w.share_btn.width(), 0)).x()
-        self.assertLessEqual(right, w.scheme_card.width())
-        # 选中最长的角色：下拉框显示的文字完整
-        w.hero_box.setCurrentIndex(w.hero_box.findText(longest))
-        self.assertEqual(w.hero_box.currentText(), longest)
+        self.assertEqual(calls, [("report", False)])
+        d.set_values(st.SettingsValues(report_enabled=False))  # 悬浮窗关掉以后刷新窗口
+        QTest.mouseClick(d.stats_link, Qt.LeftButton)
+        APP.processEvents()
+        self.assertEqual(calls, [("report", False), ("stats",)])
+        self.assertFalse(d.stats_link.key_focused)  # 鼠标点的不画焦点框
+        d.activateWindow()
+        d.report_switch.setFocus(Qt.TabFocusReason)
+        settle()
+        QTest.keyClick(d.report_switch, Qt.Key_Tab)
+        settle()
+        self.assertIs(APP.focusWidget(), d.stats_link)
+        self.assertTrue(d.stats_link.key_focused)
+        QTest.keyClick(d.stats_link, Qt.Key_Space)
+        APP.processEvents()
+        self.assertEqual(calls, [("report", False), ("stats",), ("stats",)])
+        QTest.keyClick(d.stats_link, Qt.Key_Backtab)
+        settle()
+        self.assertIs(APP.focusWidget(), d.report_switch)
+
+    def test_hant_wording(self):
+        """新加的字经 lang.to_hant：开关、说明、组名、「我的统计」（繁体界面下窗口里写的，见 tests/test_hant_table.py）。"""
+        self.assertEqual(lang.to_hant(st.REPORT_TITLE), "幫助拾星助手改善推薦準確度")
+        self.assertEqual(lang.to_hant(st.GROUP_PRIVACY), "隱私與資料")
+        self.assertEqual(lang.to_hant(st.STATS_TITLE), "我的統計")
+        self.assertEqual(lang.to_hant(st.REPORT_DESC),
+                         "開啟會向拾星助手官方傳送對局中籌碼選擇偏好（匿名）。關閉則不會傳送任何資料，也無法提交反饋。")
 
 
 if __name__ == "__main__":

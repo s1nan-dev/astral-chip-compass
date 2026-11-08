@@ -366,7 +366,7 @@ class PersistentRowsTest(OverlayCase):
         model.recog_stopped, model.folder_unwritable = True, True
         model.dpi_notice = DPI_CHANGED.format(exe="app\\ACC.exe")
         model.storage_reason, model.free_notice = "x", "免费"
-        view = SimpleNamespace(game_over=False, unsupported=[], unrecorded=0)
+        view = SimpleNamespace(game_over=False, unsupported=[], unrecorded=0, map_switched=False)
         rows = model.rows(view, live=False, reverted_chip="", capture=None, unlocked=[], schemes="",
                           assets=("downloading", 1, 2, ""), calibrate_games=20, folder="AstralChipCompass")
         self.assertEqual([k for k, *_ in rows], ["stopped", "dpi", "folder", "storage", "assets", "free"])
@@ -873,10 +873,12 @@ class MainWiringTest(unittest.TestCase):
         watcher = mock.MagicMock()
         watcher.recog_stopped.connect.side_effect = lambda slot: order.append("connect recog_stopped")
         watcher.finished.connect.side_effect = lambda slot: order.append("connect finished")
-        session = SimpleNamespace(eventlog=SimpleNamespace(recorder=None), save=lambda force=False: None)
+        session = SimpleNamespace(eventlog=SimpleNamespace(recorder=None), save=lambda force=False: None,
+                                  settings=SimpleNamespace(big_cores=False))
         with mock.patch.object(app_mod, "build", return_value=(app, window, session, threading.Lock())), \
                 mock.patch.object(app_mod, "Watcher", return_value=watcher), \
                 mock.patch.object(app_mod, "Hotkey", return_value=mock.MagicMock()), \
+                mock.patch.object(app_mod, "QTimer"), \
                 mock.patch.object(app_mod, "expected_capture", return_value="window"), \
                 mock.patch.object(app_mod.Services, "load", return_value=None), \
                 mock.patch.object(si, "listen", return_value=mock.MagicMock()), \

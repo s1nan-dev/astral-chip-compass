@@ -2,9 +2,10 @@
 （notices.py 的 update_rows）、设置窗口里「启动时自动检查更新」那一行，以及启动时交给换版本的程序（advisor/ui/__init__.py
 的 hand_over_update）。
 
-- 设置文件里的三项（自动检查的开关、上次检查的日期、跳过的版本）：默认值、旧设置文件没有这三项、存了再读、类型不对；
+- 设置文件里的两项（自动检查的开关、跳过的版本）：默认值、旧设置文件没有这两项、存了再读、类型不对；旧设置文件里上次
+  检查的日期（update_checked）读的时候忽略、保存以后消失；
 - 文字逐字核对；各种状态排出的提示行（键、文字、级别、按钮和动作）；
-- 控制模块：开发版不查、不下、不换（「检查更新」只说一句）；自动检查一天最多一次、带上跳过的版本、查不到不出声；手动检查
+- 控制模块：开发版不查、不下、不换（「检查更新」只说一句）；每次启动都自动检查、带上跳过的版本、查不到不出声；手动检查
   （跳过的版本照样提示；已经是最新、连不上、程序出错各说一句）；跳过、以后再说；对局中攒着；下载（update.obtain）的几步：
   比对本机的文件、只下变了的部分（要下载的是 0 时写用本机的文件拼出新版本）、下整包、只下变了的部分没走通改下整包（进度
   从 0 重新数）、解压核对，进度每多 1 MB 交回一次，停止、下好了；下载前的检查给了原因、下载和核对出错、程序出错；
@@ -15,8 +16,9 @@
   （复刻的改版）时「手动下载」一律开发布页面、镜像上的地址一概不开，源代码地址推不出查更新的地址时手动检查说一句；
   退出时叫停下载；
 - 启动（run）：发行版里有下好的新版本时交给换版本的程序、本进程直接返回；没有、起不来、出错时照常启动；开发版不查；
-- 悬浮窗：按钮接到控制模块上，按钮多的排在文字下面，对局中不显示，放在标题栏下方、排在「免费软件」声明前面；设置窗口的
-  开关和「检查更新」；退出时下载没停下记一笔；main() 里悬浮窗出来以后才读结果、排自动检查；
+- 悬浮窗：按钮接到控制模块上，按钮多的排在文字下面，对局中不显示，下好以后自动重启看各张悬浮窗在不在对局中（两张时另一张
+  在对局中也不重启），放在标题栏下方、排在「免费软件」声明前面；设置窗口的开关和「检查更新」；退出时下载没停下记一笔；
+  main() 里悬浮窗出来以后才读结果、排自动检查；
 - 设置窗口：七套皮肤都有这一行（开关和「检查更新」在这一行里、看得见，分页的在「关于」页），检查的结果代替说明显示，
   忙的时候「检查更新」不能点。
 
@@ -30,6 +32,7 @@ import threading
 import time
 import unittest
 from dataclasses import dataclass
+from datetime import date
 from types import SimpleNamespace
 from unittest import mock
 
@@ -46,12 +49,13 @@ from advisor import version as app_version  # noqa: E402
 from advisor import winhttp  # noqa: E402
 from advisor.data import load_db  # noqa: E402
 from advisor.session import GAME_FIELDS  # noqa: E402
-from advisor.ui import chrome, glyphs, startup, theme  # noqa: E402
+from advisor.ui import chrome, glyphs, lang, startup, theme  # noqa: E402
 from advisor.ui import overlay as overlay_module  # noqa: E402
 from advisor.ui import settings as st  # noqa: E402
 from advisor.ui import single_instance as si  # noqa: E402
 from advisor.ui.overlay import Overlay  # noqa: E402
 from advisor.ui.overlay_parts import app as overlay_app  # noqa: E402
+from advisor.ui.overlay_parts import lanes as overlay_lanes  # noqa: E402
 from advisor.ui.overlay_parts import updates  # noqa: E402
 from advisor.ui.overlay_parts import wording as W  # noqa: E402
 from advisor.ui.overlay_parts.app import OverlaySession, SimpleCapture, UiSettings  # noqa: E402
@@ -69,7 +73,6 @@ MB = W.MB
 MIRROR = "https://dl.astral-chip-compass.com/"  # 下载镜像（advisor/update.py 的 MIRROR_BASE）
 PAGE = f"{app_version.SOURCE_URL}/releases/tag/v{NEW}"
 NOTES = f"{MIRROR}notes/{NEW}.txt"
-TODAY = "2030-01-20"  # 测试里的「今天」（本地日期）
 SIZE = 89_000_000  # 压缩包的大小：约 85 MB
 
 
@@ -131,6 +134,7 @@ class FakeNet:
 
     def __init__(self):
         self.calls = []
+        self.manual = None
         self.result = CheckResult()
         self.check_error = None
         self.reason = None  # preflight 给的原因
@@ -143,8 +147,9 @@ class FakeNet:
         self.download_error = None
         self.prepare_error = None
 
-    def check(self, current, skipped=None, *, session=None):
+    def check(self, current, skipped=None, *, session=None, manual=False):
         self.calls.append(("check", current, skipped))
+        self.manual = manual
         if self.check_error is not None:
             raise self.check_error
         return self.result
@@ -239,8 +244,12 @@ class Harness:
         self.settings = settings if settings is not None else UiSettings()
         self.lock = threading.Lock()
         self.session = SimpleNamespace(settings=self.settings, save=self._save)
-        self.saved = []  # 每次存设置时的三项
-        self.day = TODAY
+        self.saved = []  # 每次存设置时的两项
+        self.in_game = False  # 悬浮窗那一边说的对局中没有（UpdateControl 的 playing）
+        self.playing_error = None  # 问对局中没有时抛的错
+        self.windows = False  # 开着拾星助手的其他窗口没有（UpdateControl 的 windows_open）
+        self.windows_error = None  # 问的时候抛的错
+        self.hidden = ()  # 收在托盘里的几张（UpdateControl 的 hidden_lanes）
         self.defer = defer
         self.queue = []
         self.timers = []
@@ -254,13 +263,24 @@ class Harness:
         self.ctl = UpdateControl(
             session=self.session, lock=self.lock, run_background=self._run, later=self._later, refresh=self._refresh,
             update_settings=lambda: self.log.append("settings"), trace_user=self._trace,
-            quit_app=lambda: self.log.append("quit"), open_url=self._open, frozen=lambda: frozen,
-            today=lambda: self.day, root=lambda: self.root, net=self.net, apply=self.apply)
+            quit_app=lambda: self.log.append("quit"), playing=self._playing, windows_open=self._windows,
+            hidden_lanes=lambda: self.hidden, open_url=self._open, frozen=lambda: frozen,
+            root=lambda: self.root, net=self.net, apply=self.apply)
+
+    def _windows(self):
+        if self.windows_error is not None:
+            raise self.windows_error
+        return self.windows
 
     def _save(self):
         self.test.assertTrue(self.lock.locked(), "改设置、存设置要在锁里")
         s = self.settings
-        self.saved.append((s.update_auto, s.update_checked, s.update_skipped))
+        self.saved.append((s.update_auto, s.update_skipped))
+
+    def _playing(self):
+        if self.playing_error is not None:
+            raise self.playing_error
+        return self.in_game
 
     def _run(self, fn):
         if self.defer:
@@ -284,7 +304,7 @@ class Harness:
 
     def _refresh(self):
         self.log.append("refresh")
-        self.shown.append(tuple(n.kind for n in self.ctl.notices()))
+        self.shown.append(tuple(n.kind for n in self.ctl.notices(self.in_game)))
 
     def _trace(self, action, **data):
         self.test.assertFalse(self.lock.locked(), "记识别记录时不能拿着锁")
@@ -334,33 +354,45 @@ class ErrorsCase(unittest.TestCase):
         self.errors.clear()
 
 
-# ------------------------------------------------------------ 设置文件里的三项
+# ------------------------------------------------------------ 设置文件里的两项
 
 
 class SettingsFieldsTest(unittest.TestCase):
     def test_defaults_and_old_file(self):
-        """默认开着自动检查、没查过、没跳过；旧设置文件没有这三项时照默认、不记警告；存了再读一样。三项都跨对局沿用。"""
+        """默认开着自动检查、没跳过；旧设置文件没有这两项时照默认、不记警告；存了再读一样。两项都跨对局沿用。"""
         s = UiSettings()
-        self.assertEqual((s.update_auto, s.update_checked, s.update_skipped), (True, "", ""))
+        self.assertEqual((s.update_auto, s.update_skipped), (True, ""))
         path = sandbox.temp_dir(self, "test-update-ui-") / "state.json"
         path.write_text(json.dumps({"hero": "芬妮", "lowend": True}), encoding="utf-8")
         with self.assertNoLogs("advisor", level="WARNING"):
             old = UiSettings.load(path)
-        self.assertEqual((old.hero, old.update_auto, old.update_checked, old.update_skipped), ("芬妮", True, "", ""))
-        old.update_auto, old.update_checked, old.update_skipped = False, TODAY, NEW
+        self.assertEqual((old.hero, old.update_auto, old.update_skipped), ("芬妮", True, ""))
+        self.assertFalse(hasattr(old, "update_checked"))
+        old.update_auto, old.update_skipped = False, NEW
         self.assertEqual(old.save(path), path)
         saved = json.loads(path.read_text(encoding="utf-8"))
-        self.assertEqual((saved["update_auto"], saved["update_checked"], saved["update_skipped"]), (False, TODAY, NEW))
+        self.assertEqual((saved["update_auto"], saved["update_skipped"]), (False, NEW))
+        self.assertNotIn("update_checked", saved)
         again = UiSettings.load(path)
-        self.assertEqual((again.update_auto, again.update_checked, again.update_skipped), (False, TODAY, NEW))
-        for name in ("update_auto", "update_checked", "update_skipped"):
+        self.assertEqual((again.update_auto, again.update_skipped), (False, NEW))
+        for name in ("update_auto", "update_skipped"):
             self.assertNotIn(name, GAME_FIELDS)
+
+    def test_old_checked_date_dropped(self):
+        """旧设置文件里上次检查更新记的日期：读的时候忽略（不影响自动检查），下次保存时去掉。"""
+        path = sandbox.temp_dir(self, "test-update-ui-") / "state.json"
+        path.write_text(json.dumps({"update_checked": date.today().isoformat(), "update_skipped": NEW}),
+                        encoding="utf-8")
+        with self.assertNoLogs("advisor", level="WARNING"):
+            s = UiSettings.load(path)
+        self.assertEqual((s.update_auto, s.update_skipped), (True, NEW))
+        s.save(path)
+        self.assertNotIn("update_checked", path.read_text(encoding="utf-8"))
 
     def test_bad_values(self):
         """类型不对的按默认（自动检查按开）。"""
         self.assertIs(UiSettings(update_auto="no").update_auto, True)
         self.assertIs(UiSettings(update_auto=0).update_auto, True)
-        self.assertEqual(UiSettings(update_checked=20300120).update_checked, "")
         self.assertEqual(UiSettings(update_skipped=None).update_skipped, "")
 
 
@@ -465,6 +497,10 @@ class WordingTest(unittest.TestCase):
         self.assertEqual(W.UPDATE_DEV, "开发版不检查更新。")
         self.assertEqual(W.UPDATE_FOUND.format(version=NEW), "有新版本 99.0.0，悬浮窗上有更新的提示（对局中不显示）。")
         self.assertEqual(W.UPDATE_READY_NOTE.format(version=NEW), "新版本 99.0.0 已下好，下次启动拾星助手时自动换上。")
+        self.assertEqual(W.UPDATE_READY_WINDOWS.format(version=NEW),
+                         "新版本 99.0.0 已下好，关掉拾星助手的其他窗口后自动重启换上。")
+        self.assertEqual(lang.to_hant(W.UPDATE_READY_WINDOWS.format(version=NEW)),
+                         "新版本 99.0.0 已下好，關掉拾星助手的其他視窗後自動重啟換上。")
         self.assertEqual(W.UPDATE_DONE.format(version="1.2.3"), "拾星助手已更新到 1.2.3。")
         self.assertEqual(W.UPDATE_ERROR.format(err_file="app\\.tmp\\overlay_err.txt"),
                          "出了意外的错误，详细信息已写入错误记录（app\\.tmp\\overlay_err.txt）")
@@ -475,17 +511,26 @@ class WordingTest(unittest.TestCase):
             self.assertTrue(text.endswith(tail), text)
         self.assertIn(st.UPDATE_BUTTON, W.SETTINGS_TIP)
 
+    def test_news_version(self):
+        """换上新版本以后列的主要改动是这一版的：定版本号时这几项要跟着改，忘了改时这里先报出来。"""
+        self.assertEqual(W.UPDATE_NEWS_VERSION, VERSION,
+                         "定版本号时照软件维护说明「版本号」一节，把换上新版本以后列的主要改动（wording.py 的 UPDATE_NEWS）"
+                         "和它的版本号 UPDATE_NEWS_VERSION 一起改好")
+
 
 # ------------------------------------------------------------ 提示行
 
 
 class RowsTest(unittest.TestCase):
     def test_available(self):
-        """有新版本：四个按钮（「更新」是主按钮）；这一版只能手动下载时「更新」换成「手动下载」；没有资料同步日期时不写那一段。"""
+        """有新版本：四个按钮（「更新」是主按钮），下好后自动重启换上；这一版只能手动下载时「更新」换成「手动下载」；没有
+        资料同步日期时不写那一段。"""
         note = UpdateNotice("available", version=NEW, data_date="2030-01-15", size=SIZE)
         self.assertEqual(update_rows([note]), [(
-            "update", "拾星助手有新版本 99.0.0（资料同步到 2030-01-15）。点击「更新」开始下载（约 85 MB），下载期间照常使用。",
-            "info", [("更新", "primary", "update_start", "下载新版本（约 85 MB），下好后点击「重启更新」换上"),
+            "update", "拾星助手有新版本 99.0.0（资料同步到 2030-01-15）。点击「更新」开始下载（约 85 MB），下载期间照常使用，"
+                      "下好后自动重启换上。",
+            "info", [("更新", "primary", "update_start",
+                      "下载新版本（约 85 MB），下好后自动重启换上；对局中下好的，等对局结束再重启"),
                      ("看看改了什么", "", "update_notes", "在浏览器中打开这一版的更新说明；没有更新说明时打开发布页面"),
                      ("跳过这个版本", "", "update_skip", "不更新到 99.0.0：自动检查不再提示这一版，有更新的版本时照常提示"),
                      ("以后再说", "", "update_later", "关闭本条提示，下次自动检查时再提示")])])
@@ -500,9 +545,10 @@ class RowsTest(unittest.TestCase):
         """这一版有文件清单（只下变了的部分）：那一句和「更新」的悬停说明里大小写成上限。"""
         row = update_rows([UpdateNotice("available", version=NEW, data_date="2030-01-15", delta=True, size=SIZE)])[0]
         self.assertEqual(row[1], "拾星助手有新版本 99.0.0（资料同步到 2030-01-15）。点击「更新」开始下载（最多约 85 MB，只下载"
-                                 "变了的部分时更少），下载期间照常使用。")
+                                 "变了的部分时更少），下载期间照常使用，下好后自动重启换上。")
         self.assertEqual(row[3][0], ("更新", "primary", "update_start",
-                                     "下载新版本（最多约 85 MB，只下载变了的部分时更少），下好后点击「重启更新」换上"))
+                                     "下载新版本（最多约 85 MB，只下载变了的部分时更少），下好后自动重启换上；对局中下好的，"
+                                     "等对局结束再重启"))
 
     def test_downloading_steps(self):
         """下载中的几步：比对本机的文件、只下变了的部分、用本机的文件拼出新版本（要下载的是 0）、下整包，都带「停止」。"""
@@ -518,12 +564,16 @@ class RowsTest(unittest.TestCase):
                 self.assertEqual(update_rows([note]), [("update", text, "info", [STOP])])
 
     def test_other_kinds(self):
-        """下载中、解压核对中、下好了、已经是最新、出错（⚠ 橙色，「手动下载」打开压缩包或发布页面）、刚换上新版本；都不让边框
-        变色；刚换上的那一条在前。"""
+        """下载中、解压核对中、下好了（自动重启的两种没有按钮、上次已下好的带「重启更新」）、已经是最新、出错（⚠ 橙色，
+        「手动下载」打开压缩包或发布页面）、刚换上新版本；都不让边框变色；刚换上的那一条在前。"""
         cases = [
             (UpdateNotice("downloading", version=NEW, done=34 * MB + 5, size=SIZE), "正在下载新版本 99.0.0（34 / 85 MB）",
              "info", [STOP]),
             (UpdateNotice("preparing", version=NEW), "正在解压、核对新版本 99.0.0…", "info", []),
+            (UpdateNotice("ready", version=NEW, restart=updates.RESTART_SOON), "新版本 99.0.0 已下好，马上重启换上。",
+             "info", []),
+            (UpdateNotice("ready", version=NEW, restart=updates.RESTART_WAIT),
+             "新版本 99.0.0 已下好，对局结束后自动重启换上。", "info", []),
             (UpdateNotice("ready", version=NEW), "新版本 99.0.0 已下好：点击「重启更新」马上换上；不点的话，下次启动拾星助手"
                                                  "时自动换上。", "info",
              [("重启更新", "primary", "update_restart", "关闭拾星助手，换上新版本后自动重新打开"), CLOSE]),
@@ -541,7 +591,31 @@ class RowsTest(unittest.TestCase):
         self.assertEqual(rows[0], ("updated", "拾星助手已更新到 1.2.3。", "info",
                                    [("关闭本条提示", "", "update_close_done", "关闭本条提示")]))
         self.assertEqual([r[0] for r in rows], ["updated", "update"])
-        self.assertEqual(STACKED_NOTICES, {"update"})
+        self.assertIn("update", STACKED_NOTICES)
+
+    def test_updated_news(self):
+        """刚换上新版本：换上的正是 UPDATE_NEWS_VERSION 这一版时列出这一版的主要改动；版本号对不上、列表空着时只写第一句；
+        繁体界面上显示时对着改动按繁体转。"""
+        def row(version=W.UPDATE_NEWS_VERSION):
+            return update_rows([UpdateNotice("updated", version=version)])[0]
+
+        expected = [W.UPDATE_DONE.format(version=W.UPDATE_NEWS_VERSION),
+                    *(W.UPDATE_NEWS_ITEM.format(item=item) for item in W.UPDATE_NEWS)]
+        if W.UPDATE_NEWS_SOON:
+            expected.append(W.UPDATE_NEWS_SOON)
+        self.assertEqual(row()[1], "\n".join(expected))
+        other = "0.0.1"
+        self.assertEqual(row(other)[1], W.UPDATE_DONE.format(version=other))
+        with mock.patch.object(W, "UPDATE_NEWS", ()):
+            self.assertEqual(row()[1], W.UPDATE_DONE.format(version=W.UPDATE_NEWS_VERSION))
+        # 逐字核对排法：一条一行、前面加「· 」，即将上线的写在最后一行
+        with mock.patch.object(W, "UPDATE_NEWS", ("甲", "乙")), mock.patch.object(W, "UPDATE_NEWS_SOON", "即将上线：丙"):
+            self.assertEqual(row()[1], f"拾星助手已更新到 {W.UPDATE_NEWS_VERSION}。\n· 甲\n· 乙\n即将上线：丙")
+        hant = lang.to_hant(row()[1])
+        changed = [item for item in W.UPDATE_NEWS if lang.to_hant(item) != item]
+        self.assertTrue(changed, "繁简对照表里应有要转的改动")
+        for item in changed:
+            self.assertIn(lang.to_hant(item), hant)
 
 
 # ------------------------------------------------------------ 控制模块
@@ -564,9 +638,9 @@ class DevTest(ErrorsCase):
 
 
 class AutoCheckTest(ErrorsCase):
-    def test_once_a_day(self):
-        """发行版启动时读结果、后台收尾，过十几秒自动查一次（记下今天查过了）；同一天不再查，换了一天再查；日期往回调了也算
-        没查过；关了自动检查不查。"""
+    def test_every_start(self):
+        """发行版启动时读结果、后台收尾，过十几秒自动查一次（不记日期）；查过以后再启动（再调用 schedule_auto）照样排；
+        旧设置文件里记着上次检查的日期时也照排；关了自动检查不查。"""
         h = Harness(self)
         h.ctl.startup()
         self.assertEqual(h.apply.calls, [("take_result", h.root), ("after_start", h.root)])
@@ -574,22 +648,21 @@ class AutoCheckTest(ErrorsCase):
         self.assertEqual(h.net.calls, [])
         h.fire(updates.AUTO_CHECK_DELAY_MS)
         self.assertEqual(h.net.calls, [("check", VERSION, None)])
-        self.assertEqual((h.settings.update_checked, h.saved), (TODAY, [(True, TODAY, "")]))
+        self.assertIs(h.net.manual, False)
+        self.assertEqual(h.saved, [])  # 自动检查不写设置
         self.assertEqual((h.ctl.state, h.notices(), h.ctl.settings_note()), ("idle", [], ""))  # 已经是最新：不出声
         self.assertEqual(h.traces, [])
         h.ctl.schedule_auto()
-        self.assertEqual(h.timers, [])
-        h.day = "2030-01-21"
-        h.ctl.schedule_auto()
-        self.assertEqual(len(h.timers), 1)
-        h.timers.clear()
-        h.day, h.settings.update_checked = TODAY, "2030-02-01"
-        h.ctl.schedule_auto()
-        self.assertEqual(len(h.timers), 1)
-        h.timers.clear()
+        self.assertEqual([ms for ms, _ in h.timers], [updates.AUTO_CHECK_DELAY_MS])
+        # 旧设置文件里记着上次检查的日期（今天）：照样排上自动检查
+        path = sandbox.temp_dir(self, "test-update-ui-") / "state.json"
+        path.write_text(json.dumps({"update_checked": date.today().isoformat()}), encoding="utf-8")
+        old = Harness(self, settings=UiSettings.load(path))
+        old.ctl.schedule_auto()
+        self.assertEqual([ms for ms, _ in old.timers], [updates.AUTO_CHECK_DELAY_MS])
         h.settings.update_auto = False
         h.ctl.schedule_auto()
-        self.assertEqual(h.timers, [])
+        self.assertEqual(len(h.timers), 1)
 
     def test_found_and_skipped(self):
         """自动检查带上跳过的版本；查到新版本时悬浮窗上一条、设置窗口写一句。"""
@@ -598,6 +671,7 @@ class AutoCheckTest(ErrorsCase):
         h.ctl.schedule_auto()
         h.fire(updates.AUTO_CHECK_DELAY_MS)
         self.assertEqual(h.net.calls, [("check", VERSION, "98.0.0")])
+        self.assertIs(h.net.manual, False)
         self.assertEqual(h.notices(), [UpdateNotice("available", version=NEW, data_date="2030-01-15", auto=True, size=SIZE)])
         self.assertEqual(h.ctl.settings_note(), "有新版本 99.0.0，悬浮窗上有更新的提示（对局中不显示）。")
         self.assertFalse(h.ctl.busy)
@@ -610,13 +684,12 @@ class AutoCheckTest(ErrorsCase):
         h.ctl.schedule_auto()
         h.fire(updates.AUTO_CHECK_DELAY_MS)
         self.assertEqual((h.ctl.state, h.notices(), h.ctl.settings_note()), ("idle", [], ""))
-        h.day = "2030-01-21"
         h.net.check_error = RuntimeError("测试造的错")
         h.ctl.schedule_auto()
         h.fire(updates.AUTO_CHECK_DELAY_MS)
         self.assertEqual((h.ctl.state, h.notices()), ("idle", []))
         self.expect_errors("检查更新出错（拾星助手仍在运行）")
-        h.day, h.net.check_error = "2030-01-22", None
+        h.net.check_error = None
         h.ctl.schedule_auto()
         h.available()
         calls = len(h.net.calls)
@@ -638,7 +711,7 @@ class AutoCheckTest(ErrorsCase):
 
 class ManualCheckTest(ErrorsCase):
     def test_check_now(self):
-        """「检查更新」：马上在后台查，跳过的版本照样提示，也记下今天查过了；检查中、下载中、解压核对中、下好了时不再查。"""
+        """「检查更新」：马上在后台查，跳过的版本照样提示（不写设置）；检查中、下载中、解压核对中、下好了时不再查。"""
         h = Harness(self, defer=True, settings=UiSettings(update_skipped=NEW))
         h.net.result = CheckResult(release=REL, latest=NEW)
         h.ctl.check_now()
@@ -647,7 +720,9 @@ class ManualCheckTest(ErrorsCase):
         h.ctl.check_now()
         h.drain()
         self.assertEqual(h.net.calls, [("check", VERSION, None)])
-        self.assertEqual((h.ctl.state, h.settings.update_checked), ("available", TODAY))
+        self.assertIs(h.net.manual, True)
+        self.assertEqual(h.ctl.state, "available")
+        self.assertEqual(h.saved, [])
         self.assertEqual(h.traces, [("update_check", {})] * 2)
         for state in ("downloading", "preparing", "ready"):
             h.ctl.state = state
@@ -730,9 +805,8 @@ class ManualCheckTest(ErrorsCase):
         h.available()
         h.ctl.skip()
         self.assertEqual((h.ctl.state, h.ctl.release, h.notices()), ("idle", None, []))
-        self.assertEqual((h.settings.update_skipped, h.saved[-1]), (NEW, (True, TODAY, NEW)))
+        self.assertEqual((h.settings.update_skipped, h.saved[-1]), (NEW, (True, NEW)))
         self.assertIn(("update_skip", {"version": NEW}), h.traces)
-        h.day = "2030-01-21"
         h.ctl.schedule_auto()
         h.fire(updates.AUTO_CHECK_DELAY_MS)
         self.assertEqual(h.net.calls[-1], ("check", VERSION, NEW))
@@ -743,14 +817,16 @@ class ManualCheckTest(ErrorsCase):
         self.assertIn(("update_later", {}), h.traces)
 
     def test_held_in_game(self):
-        """对局中什么都不给（先攒着），下载在后台照常进行；对局结束后照常显示。"""
+        """对局中什么都不给（先攒着），下载在后台照常进行；对局结束后提示马上重启。"""
         h = Harness(self)
         h.available()
+        h.in_game = True
         self.assertEqual(h.ctl.notices(True), ())
         h.ctl.start_download()
         self.assertEqual(h.ctl.state, "ready")
         self.assertEqual(h.ctl.notices(True), ())
-        self.assertEqual(h.notices(), [UpdateNotice("ready", version=NEW)])
+        h.in_game = False
+        self.assertEqual(h.notices(), [UpdateNotice("ready", version=NEW, restart=updates.RESTART_SOON)])
         h.ctl.updated = VERSION
         self.assertEqual(h.ctl.notices(True), ())
 
@@ -760,11 +836,11 @@ class ManualCheckTest(ErrorsCase):
         self.assertTrue(h.ctl.auto_on())
         h.ctl.set_auto(False)
         self.assertFalse(h.ctl.auto_on())
-        self.assertEqual((h.saved, h.traces, h.log), ([(False, "", "")], [("update_auto", {"on": False})], ["settings"]))
+        self.assertEqual((h.saved, h.traces, h.log), ([(False, "")], [("update_auto", {"on": False})], ["settings"]))
         h.ctl.set_auto(False)
         self.assertEqual(len(h.saved), 1)
         h.ctl.set_auto(True)
-        self.assertEqual(h.saved[-1], (True, "", ""))
+        self.assertEqual(h.saved[-1], (True, ""))
 
     def test_already_prepared(self):
         """查到的这一版已经下好、核对过（update_apply.pending 给的就是它：上次没换上、下次启动还会再换）：直接提示「重启更新」，
@@ -801,7 +877,7 @@ class ManualCheckTest(ErrorsCase):
 class DownloadTest(ErrorsCase):
     def test_progress_and_ready(self):
         """「更新」（这一版没有文件清单）：先看程序文件夹写不写得进、空间够不够，再在后台下载、备好（只调 update.obtain：下整包，
-        每多 1 MB 交回一次进度，进度那一句变了才刷新）、解压核对，下好了提示「重启更新」；这时设置窗口的「检查更新」不能点。"""
+        每多 1 MB 交回一次进度，进度那一句变了才刷新）、解压核对，下好了提示马上重启换上；这时设置窗口的「检查更新」不能点。"""
         h = Harness(self, defer=True)
         h.available()
         h.net.chunks = (MB // 2, MB, MB + 10, 2 * MB, 3 * MB, SIZE)
@@ -819,8 +895,8 @@ class DownloadTest(ErrorsCase):
         self.assertEqual(h.net.calls[-1], ("obtain", NEW, h.root))
         self.assertEqual(h.shown[start:], [("downloading",)] * 5 + [("preparing",), ("ready",)])
         self.assertEqual(h.ctl.progress, (SIZE, SIZE))
-        self.assertEqual(h.notices(), [UpdateNotice("ready", version=NEW)])
-        self.assertEqual(h.ctl.settings_note(), "新版本 99.0.0 已下好，下次启动拾星助手时自动换上。")
+        self.assertEqual(h.notices(), [UpdateNotice("ready", version=NEW, restart=updates.RESTART_SOON)])
+        self.assertEqual(h.ctl.settings_note(), W.UPDATE_RESTARTING.format(version=NEW))
         self.assertTrue(h.ctl.busy)
         self.assertTrue(h.ctl.dl_done.is_set())
         self.assertTrue(h.ctl.shutdown(0.1))
@@ -1057,11 +1133,323 @@ class DownloadTest(ErrorsCase):
         settle()
 
 
+class AutoRestartTest(ErrorsCase):
+    """点了「更新」、下好以后不用再点：在对局外自动重启换上（UpdateControl._arm_restart、_auto_restart）。"""
+
+    SOON = "新版本 99.0.0 已下好，马上重启换上。"
+    WAIT = "新版本 99.0.0 已下好，对局结束后自动重启换上。"
+
+    def download(self, in_game: bool = False) -> Harness:
+        h = Harness(self)
+        h.available()
+        h.in_game = in_game
+        h.ctl.start_download()
+        self.assertEqual(h.ctl.state, "ready")
+        return h
+
+    def test_out_of_game(self):
+        """下好时在对局外：提示行写马上重启（没有按钮），设置窗口那一行也写这一句；过 RESTART_NOTICE_MS 才起换版本的程序
+        （不在刷新的半路上退出），起来了再照常退出；识别记录里那一笔另带 auto。"""
+        h = self.download()
+        self.assertEqual(h.notices(), [UpdateNotice("ready", version=NEW, restart=updates.RESTART_SOON)])
+        self.assertEqual(h.rows(), [("update", self.SOON, "info", [])])
+        self.assertEqual(h.ctl.settings_note(), self.SOON)
+        self.assertEqual(sorted(ms for ms, _ in h.timers), [0, updates.RESTART_NOTICE_MS])
+        self.assertNotIn("launch", h.log)
+        h.notices()  # 每次刷新都会问：已经排上的不再排
+        self.assertEqual(len(h.timers), 2)
+        h.fire(updates.RESTART_NOTICE_MS)
+        self.assertEqual(h.apply.calls[-1], ("launch", h.root, os.getpid()))
+        self.assertEqual(h.log[-2:], ["launch", "quit"])
+        self.assertIn(("update_restart", {"version": NEW, "auto": True}), h.traces)
+
+    def test_ready_in_game(self):
+        """下好时在对局中：不排（提示行照旧不显示，设置窗口写等对局结束）；回到对局外的那次刷新才排上，到点重启。"""
+        h = self.download(in_game=True)
+        self.assertEqual(h.timers, [])
+        self.assertEqual(h.notices(True), [])
+        self.assertEqual(h.ctl.settings_note(), self.WAIT)
+        h.in_game = False
+        self.assertEqual(h.rows(), [("update", self.SOON, "info", [])])
+        self.assertEqual(sorted(ms for ms, _ in h.timers), [0, updates.RESTART_NOTICE_MS])
+        h.fire(updates.RESTART_NOTICE_MS)
+        self.assertEqual(h.log[-2:], ["launch", "quit"])
+
+    def test_back_in_game_when_due(self):
+        """到点时又进了对局：不重启，接着等；这一张在对局外、另一张还在对局中时写等对局结束、不排。都回到对局外再排，到点才重启。"""
+        h = self.download()
+        h.in_game = True
+        h.fire(updates.RESTART_NOTICE_MS)
+        self.assertNotIn("launch", h.log)
+        self.assertEqual((h.ctl.state, h.ctl.restart_due, h.ctl.settings_note()), ("ready", False, self.WAIT))
+        h.timers.clear()
+        self.assertEqual(h.rows(), [("update", self.WAIT, "info", [])])  # playing 说还有一张在对局中
+        self.assertEqual(h.timers, [])
+        h.in_game = False
+        h.notices()
+        h.fire(updates.RESTART_NOTICE_MS)
+        self.assertEqual(h.log[-2:], ["launch", "quit"])
+
+    def test_launch_failed(self):
+        """自动重启时起不来换版本的程序：同「重启更新」起不来，提示原因、带「手动下载」，不退出，也不再自动重启。"""
+        h = self.download()
+        h.apply.result = {"status": "not_applied", "version": NEW, "reason": "新版本的程序核对没有通过", "attempts": 1}
+        h.apply.launched = False
+        h.fire(updates.RESTART_NOTICE_MS)
+        self.assertNotIn("quit", h.log)
+        self.assertEqual(h.notices(), [UpdateNotice("failed", version=NEW, failure="launch")])
+        self.assertEqual(h.rows()[0][3], [MANUAL, CLOSE])
+        self.assertFalse(h.ctl.auto_restart)
+
+    def test_playing_error(self):
+        """问对局中没有时出错：按在对局中算，不重启；错误记录只记一次。"""
+        h = Harness(self)
+        h.available()
+        h.playing_error = RuntimeError("测试造的错")
+        h.ctl.start_download()
+        h.notices()
+        self.assertEqual((h.ctl.state, h.timers, h.ctl.settings_note()), ("ready", [], self.WAIT))
+        self.expect_errors("查是不是对局中出错，新版本先不自动重启（拾星助手仍在运行）")
+
+    def test_prepared_needs_click(self):
+        """上次已下好的那一版（检查时直接是下好了）：不自动重启，点一下「重启更新」就换。"""
+        h = Harness(self)
+        h.apply.ready = {"format": 1, "version": NEW}
+        h.net.result = CheckResult(release=REL, latest=NEW)
+        h.ctl.check_now()
+        self.assertEqual(h.notices(), [UpdateNotice("ready", version=NEW)])
+        self.assertEqual(h.timers, [])
+        self.assertEqual([b[0] for b in h.rows()[0][3]], ["重启更新", "关闭本条提示"])
+        h.ctl.restart()
+        self.assertEqual(h.log[-2:], ["launch", "quit"])
+        self.assertIn(("update_restart", {"version": NEW}), h.traces)
+
+    WINDOWS = "新版本 99.0.0 已下好，关掉拾星助手的其他窗口后自动重启换上。"
+
+    def test_windows_open(self):
+        """下好时开着拾星助手的其他窗口：不排，提示行和设置窗口那一行写等那些窗口关掉；隔 WINDOWS_POLL_MS 看一次，还开着就
+        接着等（不刷新）；都关掉了刷新一次，照常排上（提示 3 秒），到点才重启。"""
+        h = Harness(self)
+        h.available()
+        h.windows = True
+        h.ctl.start_download()
+        self.assertEqual(h.notices(), [UpdateNotice("ready", version=NEW, restart=updates.RESTART_WINDOWS)])
+        self.assertEqual(h.rows(), [("update", self.WINDOWS, "info", [])])
+        self.assertEqual(h.ctl.settings_note(), self.WINDOWS)
+        self.assertNotIn(updates.RESTART_NOTICE_MS, [ms for ms, _ in h.timers])
+        self.assertEqual([ms for ms, _ in h.timers].count(updates.WINDOWS_POLL_MS), 1)  # 刷新几次也只排一个
+        refreshes = h.log.count("refresh")
+        h.fire(updates.WINDOWS_POLL_MS)  # 还开着
+        self.assertEqual(h.log.count("refresh"), refreshes)
+        self.assertEqual([ms for ms, _ in h.timers], [updates.WINDOWS_POLL_MS])
+        h.windows = False
+        h.fire(updates.WINDOWS_POLL_MS)  # 关掉了：刷新一次（Harness 的刷新调 notices），照常排上
+        self.assertEqual(h.log.count("refresh"), refreshes + 1)
+        self.assertEqual(h.shown[-1], ("ready",))
+        self.assertEqual(sorted(ms for ms, _ in h.timers), [0, updates.RESTART_NOTICE_MS])
+        self.assertEqual(h.rows(), [("update", self.SOON, "info", [])])
+        self.assertNotIn("launch", h.log)
+        h.fire(updates.RESTART_NOTICE_MS)
+        self.assertEqual(h.log[-2:], ["launch", "quit"])
+
+    def test_windows_opened_when_due(self):
+        """排上以后、到点以前开了别的窗口：到点不重启，改写等窗口关掉；关掉以后照常排上、到点重启。"""
+        h = self.download()
+        h.windows = True
+        h.fire(updates.RESTART_NOTICE_MS)
+        self.assertNotIn("launch", h.log)
+        self.assertEqual((h.ctl.restart_due, h.ctl.settings_note()), (False, self.WINDOWS))
+        self.assertEqual(h.rows(), [("update", self.WINDOWS, "info", [])])
+        self.assertNotIn(updates.RESTART_NOTICE_MS, [ms for ms, _ in h.timers])
+        h.windows = False
+        h.fire(updates.WINDOWS_POLL_MS)
+        h.fire(updates.RESTART_NOTICE_MS)
+        self.assertEqual(h.log[-2:], ["launch", "quit"])
+
+    def test_game_before_windows(self):
+        """在对局中又开着其他窗口：照旧写等对局结束（提示行、设置窗口那一行），不看窗口。"""
+        h = Harness(self)
+        h.available()
+        h.windows = True
+        h.in_game = True
+        h.ctl.start_download()
+        self.assertEqual(h.ctl.settings_note(), self.WAIT)
+        self.assertEqual(h.rows(), [("update", self.WAIT, "info", [])])  # playing 说还有一张在对局中
+        self.assertEqual(h.timers, [])
+
+    def test_windows_error(self):
+        """问开着哪些窗口时出错：按开着算，不重启；错误记录只记一次。"""
+        h = Harness(self)
+        h.available()
+        h.windows_error = RuntimeError("测试造的错")
+        h.ctl.start_download()
+        h.notices()
+        self.assertEqual(h.ctl.settings_note(), self.WINDOWS)
+        self.assertNotIn(updates.RESTART_NOTICE_MS, [ms for ms, _ in h.timers])
+        self.expect_errors("查拾星助手开着哪些窗口出错，新版本先不自动重启（拾星助手仍在运行）")
+
+    def test_stop_then_ready(self):
+        """点了「停止」、下载线程看到停止标志以前刚好备好了：照旧是下好了，但不自动重启，要玩家点「重启更新」。"""
+        h = Harness(self, defer=True)
+        h.available()
+        h.drain()
+        h.ctl.start_download()
+        self.assertEqual(h.ctl.state, "downloading")
+        h.ctl.stop_download()
+        self.assertFalse(h.ctl.auto_restart)
+        h.ctl._on_phase("ready", None)  # 下载线程刚好做完
+        self.assertEqual(h.notices(), [UpdateNotice("ready", version=NEW)])
+        self.assertEqual([b[0] for b in h.rows()[0][3]], ["重启更新", "关闭本条提示"])
+        self.assertEqual(h.timers, [])
+
+    def test_launched_once(self):
+        """换版本程序起来了：不再自动重启，也不再起第二次（照常退出期间的刷新、再点「重启更新」）；提示行和设置窗口写马上重启。"""
+        h = self.download()
+        h.fire(updates.RESTART_NOTICE_MS)
+        self.assertEqual(h.log[-2:], ["launch", "quit"])
+        self.assertFalse(h.ctl.auto_restart)
+        h.timers.clear()
+        self.assertEqual(h.rows(), [("update", self.SOON, "info", [])])
+        self.assertEqual(h.ctl.settings_note(), self.SOON)
+        h.ctl.restart()
+        h.ctl.restart(auto=True)
+        self.assertEqual((h.log.count("launch"), h.timers), (1, []))
+
+    def test_hidden_marker(self):
+        """自动重启时有悬浮窗收在托盘里：起换版本程序之前写记号（要换上的版本、换之前的版本、收着的几张）；起不来时删掉；没有
+        收着的、手动点「重启更新」的不写。"""
+        from advisor.ui import hidden_start
+
+        seen = []
+
+        def launch_seeing(h):
+            real = h.apply.launch
+
+            def launch(root, *, old_pid):
+                path = hidden_start.marker_path(root)
+                seen.append(json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None)
+                return real(root, old_pid=old_pid)
+            h.apply.launch = launch
+
+        h = self.download()
+        h.hidden = ("secondary", "primary", "别的")
+        launch_seeing(h)
+        h.fire(updates.RESTART_NOTICE_MS)
+        self.assertEqual(seen[-1]["hidden"], ["primary", "secondary"])
+        self.assertEqual((seen[-1]["version"], seen[-1]["from"], seen[-1]["format"]), (NEW, VERSION, 1))
+        self.assertLess(abs(time.time() - seen[-1]["time"]), 60)
+        marker = hidden_start.marker_path(h.root)
+        self.assertTrue(marker.is_file())  # 新版本启动时读走
+        # 起不来：删掉
+        h = self.download()
+        h.hidden = ("primary",)
+        h.apply.launched = False
+        launch_seeing(h)
+        h.fire(updates.RESTART_NOTICE_MS)
+        self.assertEqual(seen[-1]["hidden"], ["primary"])
+        self.assertFalse(hidden_start.marker_path(h.root).exists())
+        # 没有收着的：不写
+        h = self.download()
+        launch_seeing(h)
+        h.fire(updates.RESTART_NOTICE_MS)
+        self.assertIsNone(seen[-1])
+        # 手动「重启更新」（上次已下好的那一版）：不写
+        h = Harness(self)
+        h.hidden = ("primary",)
+        h.apply.ready = {"format": 1, "version": NEW}
+        h.net.result = CheckResult(release=REL, latest=NEW)
+        h.ctl.check_now()
+        launch_seeing(h)
+        h.ctl.restart()
+        self.assertIsNone(seen[-1])
+        self.assertEqual(h.log[-2:], ["launch", "quit"])
+
+    def test_hidden_marker_error(self):
+        """记号写不进：记进错误记录，照常重启（新版本照常显示）。"""
+        h = self.download()
+        h.hidden = ("primary",)
+        (h.root / "update").write_text("挡着文件夹的文件", encoding="utf-8")
+        h.fire(updates.RESTART_NOTICE_MS)
+        self.assertEqual(h.log[-2:], ["launch", "quit"])
+        self.expect_errors("写「更新后收在托盘里启动」的记号出错，新版本启动时照常显示（拾星助手仍在运行）")
+
+
+class HiddenStartTest(ErrorsCase):
+    """收在托盘里启动的记号（advisor/ui/hidden_start.py）：写、读走（读了就删）、认不出的一律照常显示。"""
+
+    def setUp(self):
+        super().setUp()
+        from advisor.ui import hidden_start
+
+        self.hs = hidden_start
+        self.root = sandbox.temp_dir(self, "test-hidden-start-")
+
+    def put(self, **fields) -> None:
+        record = {"format": 1, "version": VERSION, "from": "1.0.0", "time": time.time(), "hidden": ["primary"]}
+        record.update(fields)
+        path = self.hs.marker_path(self.root)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(record), encoding="utf-8")
+
+    def test_round_trip(self):
+        """写了以后新版本读走：拿到收着的几张，记号删掉，再读是空的。"""
+        self.assertTrue(self.hs.write(self.root, version=VERSION, current="1.0.0", hidden=["secondary", "primary"]))
+        self.assertEqual(self.hs.take(self.root, VERSION), frozenset({"primary", "secondary"}))
+        self.assertFalse(self.hs.marker_path(self.root).exists())
+        self.assertEqual(self.hs.take(self.root, VERSION), frozenset())
+
+    def test_nothing_hidden(self):
+        """没有收着的：不写，旧的删掉。"""
+        self.put()
+        self.assertFalse(self.hs.write(self.root, version=VERSION, current="1.0.0", hidden=()))
+        self.assertFalse(self.hs.marker_path(self.root).exists())
+
+    def test_rejected(self):
+        """版本对不上（退回旧版本）、过时了、格式认不出、内容坏了、太大：照常显示（空），记号照样删掉；不认的名字去掉。"""
+        cases = {
+            "version": dict(version="0.0.1"),
+            "stale": dict(time=time.time() - self.hs.TTL_S - 5),
+            "future": dict(time=time.time() + self.hs.TTL_S + 5),
+            "format": dict(format=2),
+            "format_bool": dict(format=True),
+            "time_text": dict(time="现在"),
+            "hidden_text": dict(hidden="primary"),
+        }
+        for name, fields in cases.items():
+            with self.subTest(name):
+                self.put(**fields)
+                self.assertEqual(self.hs.take(self.root, VERSION), frozenset())
+                self.assertFalse(self.hs.marker_path(self.root).exists())
+        for name, raw in {"broken": b"{", "big": b" " * (self.hs.LIMIT + 1), "bytes": b"\xff\xfe"}.items():
+            with self.subTest(name):
+                self.hs.marker_path(self.root).write_bytes(raw)
+                self.assertEqual(self.hs.take(self.root, VERSION), frozenset())
+                self.assertFalse(self.hs.marker_path(self.root).exists())
+        self.put(hidden=["primary", "第三张", 3])
+        self.assertEqual(self.hs.take(self.root, VERSION), frozenset({"primary"}))
+
+    def test_same_folder_as_update(self):
+        """记号放在更新的工作文件夹里（新版本起来以后的收尾会删掉整个文件夹，记号在那之前读走），收尾不把它当成别的下载。"""
+        self.assertEqual(self.hs.UPDATE_DIR, real_apply.UPDATE_DIR)
+        self.assertFalse(self.hs.NAME.lower().endswith(".part"))
+        self.assertNotEqual(self.hs.NAME.lower(), real_apply.READY_NAME)
+        self.assertNotEqual(self.hs.NAME.lower(), real_apply.RESULT_NAME)
+
+
 class RestartTest(ErrorsCase):
     def ready(self) -> Harness:
         h = Harness(self)
         h.available()
         h.ctl.start_download()
+        self.assertEqual(h.ctl.state, "ready")
+        return h
+
+    def prepared(self) -> Harness:
+        """上次已下好的那一版（检查时直接是下好了）：要点「重启更新」才换。"""
+        h = Harness(self)
+        h.apply.ready = {"format": 1, "version": NEW}
+        h.net.result = CheckResult(release=REL, latest=NEW)
+        h.ctl.check_now()
         self.assertEqual(h.ctl.state, "ready")
         return h
 
@@ -1141,9 +1529,8 @@ class RestartTest(ErrorsCase):
                                          "需要时请点击「设置」窗口中的「检查更新」按钮再试，或者点击「手动下载」。")
         self.assertEqual(h.rows()[0][3], [MANUAL, CLOSE])
         self.assertEqual(h.ctl.settings_note(), "没能启动换版本的程序，新版本没有换上。")
-        self.assertEqual((h.settings.update_skipped, h.saved[-1][2]), (NEW, NEW))
+        self.assertEqual((h.settings.update_skipped, h.saved[-1][1]), (NEW, NEW))
         self.assertNotIn("quit", h.log)
-        h.day = "2030-01-21"
         h.ctl.close()
         h.ctl.schedule_auto()
         h.fire(updates.AUTO_CHECK_DELAY_MS)
@@ -1168,11 +1555,11 @@ class RestartTest(ErrorsCase):
         self.assertEqual(([c[0] for c in h.apply.calls], h.ctl.state), (["pending"], "available"))
 
     def test_close(self):
-        """「关闭本条提示」：下好了的那一条这次运行不再显示（照旧等下次启动换上）；出错、已经是最新的回到没事。"""
-        h = self.ready()
+        """「关闭本条提示」：上次已下好的那一条这次运行不再显示（照旧等下次启动换上）；出错、已经是最新的回到没事。"""
+        h = self.prepared()
         h.ctl.close()
         self.assertEqual((h.ctl.state, h.notices(), h.ctl.busy), ("ready", [], True))
-        self.assertEqual(h.ctl.settings_note(), "新版本 99.0.0 已下好，下次启动拾星助手时自动换上。")
+        self.assertEqual(h.ctl.settings_note(), W.UPDATE_READY_NOTE.format(version=NEW))
         for state in ("failed", "latest"):
             h.ctl.state = state
             h.ctl.close()
@@ -1186,7 +1573,7 @@ class ResultTest(ErrorsCase):
         h.apply.result = {"status": "ok", "version": VERSION, "reason": ""}
         h.ctl.startup()
         self.assertEqual((h.ctl.updated, h.ctl.state), (VERSION, "idle"))
-        self.assertEqual(h.rows(), [("updated", f"拾星助手已更新到 {VERSION}。", "info",
+        self.assertEqual(h.rows(), [("updated", W.update_done_text(VERSION), "info",
                                      [("关闭本条提示", "", "update_close_done", "关闭本条提示")])])
         self.assertIn(("update_result", {"status": "ok", "version": VERSION}), h.traces)
         h.available()
@@ -1199,7 +1586,7 @@ class ResultTest(ErrorsCase):
         h = Harness(self)
         h.apply.result = {"status": "rolled_back", "version": NEW, "reason": "新版本没有打开"}
         h.ctl.startup()
-        self.assertEqual((h.settings.update_skipped, h.saved), (NEW, [(True, "", NEW)]))
+        self.assertEqual((h.settings.update_skipped, h.saved), (NEW, [(True, NEW)]))
         self.assertEqual(h.notices(), [UpdateNotice("failed", version=NEW, failure="rolled_back", reason="新版本没有打开")])
         self.assertEqual(h.rows()[0][1], "⚠ 新版本 99.0.0 启动失败，已换回原来的版本。原因：新版本没有打开。自动检查不再提示"
                                          "这一版，需要时请点击「手动下载」。")
@@ -1235,7 +1622,7 @@ class ResultTest(ErrorsCase):
         h.apply.result = {"status": "not_applied", "version": NEW, "reason": "等不到拾星助手退出",
                           "attempts": real_apply.MAX_FAILED}
         h.ctl.startup()
-        self.assertEqual((h.settings.update_skipped, h.saved), (NEW, [(True, "", NEW)]))
+        self.assertEqual((h.settings.update_skipped, h.saved), (NEW, [(True, NEW)]))
         self.assertEqual(h.notices(), [UpdateNotice("failed", version=NEW, failure="not_applied_final",
                                                     reason="等不到拾星助手退出")])
         self.assertEqual(h.rows()[0][1], "⚠ 新版本 99.0.0 没有换上，现在运行的仍是原来的版本。原因：等不到拾星助手退出。自动检查"
@@ -1506,6 +1893,53 @@ class HandOverTest(ErrorsCase):
         self.apply.ready = None
         self.assertEqual(self.run_ui(), ["preload", "main"])
 
+    def test_hidden_start(self):
+        """「收在托盘里启动」的记号：发行版里 run() 查过防多开以后读走（读了就删），交给悬浮窗（main 的 start_hidden）；
+        没有记号时照旧调 main()；这次启动转去换上次没换上的版本时也先读走、删掉（换好以后照常显示）；已有一个在运行、开发版
+        不读。"""
+        from advisor.ui import hidden_start
+
+        self.frozen()
+        got = []
+        marker = hidden_start.marker_path(self.folder)
+
+        def put():
+            hidden_start.write(self.folder, version=VERSION, current="1.0.0", hidden=["primary"])
+
+        def run(claim=True):
+            with mock.patch.object(si, "claim", lambda: claim), \
+                    mock.patch.object(overlay_app, "main", lambda **kw: got.append(kw)), \
+                    mock.patch.object(startup, "preload", lambda: None), \
+                    mock.patch.object(ui, "report_startup_error", side_effect=AssertionError("不该弹窗")):
+                self.assertIsNone(ui.run())
+
+        put()
+        run(claim=False)
+        self.assertEqual((got, marker.exists()), ([], True))
+        run()
+        self.assertEqual(got, [{"start_hidden": frozenset({"primary"})}])
+        self.assertFalse(marker.exists())
+        run()
+        self.assertEqual(got[-1], {})
+        put()
+        self.apply.ready = {"format": 1, "version": NEW}
+        run()
+        self.assertEqual((len(got), marker.exists()), (2, False))
+        self.apply.ready = None
+        put()
+        self.frozen(False)
+        run()
+        self.assertEqual((got[-1], marker.exists()), ({}, True))
+
+    def test_hidden_start_error(self):
+        """读记号时出错：记进错误记录，照常显示。"""
+        from advisor.ui import hidden_start
+
+        self.frozen()
+        with mock.patch.object(hidden_start, "take", side_effect=OSError("测试造的错")):
+            self.assertEqual(ui.take_hidden_start(), frozenset())
+        self.expect_errors("读「更新后收在托盘里启动」的记号出错，照常显示悬浮窗")
+
 
 # ------------------------------------------------------------ 悬浮窗和设置窗口
 
@@ -1574,13 +2008,13 @@ class OverlayTest(ErrorsCase):
         u.net, u.apply = self.net, self.apply
         u.frozen = lambda: frozen
         u.root = lambda: self.folder
-        u.today = lambda: TODAY
         self.opened = []
         u.open_url = lambda url: self.opened.append(url) or True
         return w
 
     def test_buttons(self):
-        """提示行的按钮接到控制模块上：「看看改了什么」「以后再说」「跳过这个版本」（存进设置文件）「更新」「重启更新」。"""
+        """提示行的按钮接到控制模块上：「看看改了什么」「以后再说」「跳过这个版本」（存进设置文件）「更新」（下好以后自动
+        重启，没有按钮）；上次已下好的那一版点「重启更新」。"""
         w = self.make()
         u = w.updates
         self.net.result = CheckResult(release=REL, latest=NEW)
@@ -1596,8 +2030,15 @@ class OverlayTest(ErrorsCase):
         self.assertNotIn("update", w.notice_model.texts())
         self.assertEqual(json.loads(self.path.read_text(encoding="utf-8"))["update_skipped"], NEW)
         w.check_updates()  # 手动检查：跳过的版本照样提示
+        u.later = lambda ms, fn: None  # 自动重启排在稍后，测试里不做
         click(w, "更新")
         self.assertEqual(u.state, "ready")
+        self.assertEqual(w.notices.buttons("update"), [])  # 下好以后自动重启，没有按钮
+        # 上次已下好的那一版：要点「重启更新」才换
+        u.state = "available"
+        u.hidden = False
+        self.apply.ready = {"format": 1, "version": NEW}
+        w.check_updates()
         self.assertEqual([b.text() for b in w.notices.buttons("update")], ["重启更新", "关闭本条提示"])
         quits = []
         u.quit_app = lambda: quits.append(1)
@@ -1640,7 +2081,8 @@ class OverlayTest(ErrorsCase):
                 self.assertTrue(fits(label), label.text())
 
     def test_held_in_game(self):
-        """本局进行中（读到了轮次）先攒着不显示，设置窗口那一句照写；找不到游戏窗口时不算在对局中；本局结束后照常显示。"""
+        """本局进行中（读到了轮次）先攒着不显示，设置窗口那一句照写；找不到游戏窗口时不算在对局中；中途退出、认不出主菜单
+        （连着一阵子看不到对局里的读数）也不算；本局结束后照常显示。"""
         w = self.make()
         self.net.result = CheckResult(release=REL, latest=NEW)
         w.session.settings.round = 5
@@ -1654,9 +2096,256 @@ class OverlayTest(ErrorsCase):
         w.follower.activity = None
         w.refresh()
         self.assertNotIn("update", w.notice_model.texts())
+        w.session.game_quiet = True
+        w.refresh()
+        self.assertIn("update", w.notice_model.texts())
+        w.session.game_quiet = False
+        w.refresh()
+        self.assertNotIn("update", w.notice_model.texts())
         w.session.settings.round = None
         w.refresh()
         self.assertIn("update", w.notice_model.texts())
+
+    def hold_restart(self, w: Overlay) -> tuple[list, list]:
+        """自动重启排的定时器记下来（到点由 fire_restart 做），退出换成记一笔。返回（定时器, 退出）。"""
+        timers, quits = [], []
+        w.updates.later = lambda ms, fn: timers.append((ms, fn))
+        w.updates.quit_app = lambda: quits.append(1)
+        return timers, quits
+
+    @staticmethod
+    def fire_restart(timers: list) -> None:
+        due = [fn for ms, fn in timers if ms == updates.RESTART_NOTICE_MS]
+        timers[:] = [(ms, fn) for ms, fn in timers if ms != updates.RESTART_NOTICE_MS]
+        for fn in due:
+            fn()
+
+    def launches(self) -> int:
+        return [c[0] for c in self.apply.calls].count("launch")
+
+    def test_auto_restart_waits_for_game(self):
+        """点了「更新」、下好时本局进行中（读到了轮次）：不排自动重启，提示行照旧不显示，设置窗口写等对局结束；本局结束后的
+        那次刷新才排上、提示行写马上重启（没有按钮）；到点前又进了对局就不重启、接着等，回到对局外再排，到点才起换版本的程序、
+        退出。"""
+        w = self.make()
+        timers, quits = self.hold_restart(w)
+        self.net.result = CheckResult(release=REL, latest=NEW)
+        w.check_updates()
+        w.session.settings.round = 5
+        w.refresh()
+        w.updates.start_download()  # 下载在对局中照常进行（「更新」是对局外点的）
+        self.assertEqual(w.updates.state, "ready")
+        self.assertNotIn(updates.RESTART_NOTICE_MS, [ms for ms, _ in timers])
+        self.assertNotIn("update", w.notice_model.texts())
+        self.assertEqual(w.settings_values().update_note, "新版本 99.0.0 已下好，对局结束后自动重启换上。")
+        w.session.settings.round = None
+        w.refresh()
+        self.assertEqual(w.notice_model.texts()["update"], "新版本 99.0.0 已下好，马上重启换上。")
+        self.assertEqual(w.notices.buttons("update"), [])
+        self.assertEqual([ms for ms, _ in timers].count(updates.RESTART_NOTICE_MS), 1)
+        w.session.settings.round = 6  # 到点之前又进了对局
+        w.refresh()
+        self.fire_restart(timers)
+        self.assertEqual((self.launches(), quits, w.updates.state), (0, [], "ready"))
+        w.session.settings.round = None
+        w.refresh()
+        self.fire_restart(timers)
+        self.assertEqual((self.launches(), quits), (1, [1]))
+
+    def test_auto_restart_waits_while_quiet(self):
+        """本局还没结束、连着一阵子看不到对局里的读数（game_quiet：按 Esc 停在菜单上等）时下好：提示行照常显示、写等对局结束，
+        不排自动重启，再刷新几次也不排；认出这一局结束了（game_over）、或者游戏窗口关了（nogame）以后的那次刷新才排上，
+        提示行写马上重启，到点起换版本的程序、退出。"""
+        for case in ("over", "nogame"):
+            with self.subTest(case):
+                w = self.make()
+                timers, quits = self.hold_restart(w)
+                self.net.result = CheckResult(release=REL, latest=NEW)
+                w.check_updates()
+                w.session.settings.round = 5
+                w.session.game_quiet = True
+                w.refresh()
+                w.updates.start_download()
+                self.assertEqual(w.updates.state, "ready")
+                for _ in range(3):
+                    w.refresh()
+                self.assertEqual(w.notice_model.texts()["update"], "新版本 99.0.0 已下好，对局结束后自动重启换上。")
+                self.assertEqual(w.settings_values().update_note, "新版本 99.0.0 已下好，对局结束后自动重启换上。")
+                self.assertNotIn(updates.RESTART_NOTICE_MS, [ms for ms, _ in timers])
+                if case == "over":
+                    w.session.game.game_over = True
+                else:
+                    w.follower.activity = "nogame"
+                w.refresh()
+                self.assertEqual(w.notice_model.texts()["update"], "新版本 99.0.0 已下好，马上重启换上。")
+                self.assertEqual([ms for ms, _ in timers].count(updates.RESTART_NOTICE_MS), 1)
+                self.fire_restart(timers)
+                self.assertEqual((self.launches(), quits), (1, [1]))
+
+    def test_auto_restart_two_lanes(self):
+        """两个客户端同时识别：第二张还在对局中时，第一张在对局外也不自动重启（提示行写等对局结束）；第二张回到对局外的那次
+        刷新排上，到点起换版本的程序、退出（更新只有第一张那一份，两张一起关）。"""
+        w = self.make()
+        timers, quits = self.hold_restart(w)
+        session = OverlaySession(database(), UiSettings(hero="凛"), self.folder / "state-taptap.json")
+        session.game.seen_hero = session.settings.hero
+        second = Overlay(database(), session, threading.Lock(), services=Services(), primary=w,
+                         platform=overlay_app.TAPTAP)
+        second.run_background = lambda fn: fn()
+        self.addCleanup(dispose, second)
+        self.assertIs(second.updates, w.updates)
+        lanes = SimpleNamespace(all=lambda: [SimpleNamespace(window=win, session=win.session, watcher=None,
+                                                             primary=win is w) for win in (w, second)])
+        w.lanes = second.lanes = lanes
+        second.session.settings.round = 5
+        second.refresh()
+        self.net.result = CheckResult(release=REL, latest=NEW)
+        w.check_updates()
+        click(w, "更新")
+        self.assertEqual(w.updates.state, "ready")
+        self.assertNotIn(updates.RESTART_NOTICE_MS, [ms for ms, _ in timers])
+        self.assertEqual(w.notice_model.texts()["update"], "新版本 99.0.0 已下好，对局结束后自动重启换上。")
+        w.refresh()  # 第一张再刷新几次也不排
+        self.assertNotIn(updates.RESTART_NOTICE_MS, [ms for ms, _ in timers])
+        second.session.settings.round = None
+        second.refresh()
+        self.assertEqual([ms for ms, _ in timers].count(updates.RESTART_NOTICE_MS), 1)
+        self.fire_restart(timers)
+        self.assertEqual((self.launches(), quits), (1, [1]))
+
+    def test_auto_restart_read_error(self):
+        """取快照时有几项读出错的那一轮（view.read_error 不空）、整块出错按默认快照画的那一轮：自动重启当对局中，不排；提示行
+        照常显示（写等对局结束）。读对了的下一轮照常排上，到点重启。"""
+        import dataclasses
+
+        real = overlay_module.take_view
+
+        def partly(*args, **kwargs):
+            return dataclasses.replace(real(*args, **kwargs), read_error="测试造的错")
+
+        for case in ("partly", "whole"):
+            with self.subTest(case):
+                w = self.make()
+                timers, quits = self.hold_restart(w)
+                self.net.result = CheckResult(release=REL, latest=NEW)
+                w.check_updates()
+                if case == "partly":
+                    broken = mock.patch.object(overlay_module, "take_view", partly)
+                else:
+                    broken = mock.patch.object(w, "_take_view", side_effect=RuntimeError("测试造的错"))
+                with broken:
+                    w.refresh()
+                    w.updates.start_download()
+                    w.refresh()
+                self.assertEqual(w.updates.state, "ready")
+                self.assertNotIn(updates.RESTART_NOTICE_MS, [ms for ms, _ in timers])
+                self.assertEqual(w.notice_model.texts()["update"], "新版本 99.0.0 已下好，对局结束后自动重启换上。")
+                self.errors.clear()  # 读出错照常记进错误记录（这里不核对标题）
+                w.refresh()
+                self.assertEqual([ms for ms, _ in timers].count(updates.RESTART_NOTICE_MS), 1)
+                self.fire_restart(timers)
+                self.assertEqual((self.launches(), quits), (1, [1]))
+                self.apply.calls.clear()
+
+    def test_auto_restart_waits_for_windows(self):
+        """开着拾星助手的其他窗口（这里是一个对话框）时不自动重启，提示行和设置窗口那一行写等那些窗口关掉；关掉以后隔一会儿
+        看到了，刷新一次照常排上，到点重启。"""
+        from PySide6.QtWidgets import QDialog
+
+        w = self.make()
+        w.show()
+        settle()
+        timers, quits = self.hold_restart(w)
+        dialog = QDialog()
+        self.addCleanup(dispose, dialog)
+        dialog.show()
+        settle()
+        self.net.result = CheckResult(release=REL, latest=NEW)
+        w.check_updates()
+        click(w, "更新")
+        self.assertEqual(w.updates.state, "ready")
+        self.assertNotIn(updates.RESTART_NOTICE_MS, [ms for ms, _ in timers])
+        text = "新版本 99.0.0 已下好，关掉拾星助手的其他窗口后自动重启换上。"
+        self.assertEqual(w.notice_model.texts()["update"], text)
+        self.assertEqual(w.settings_values().update_note, text)
+        dialog.hide()
+        due = [fn for ms, fn in timers if ms == updates.WINDOWS_POLL_MS]
+        timers[:] = [(ms, fn) for ms, fn in timers if ms != updates.WINDOWS_POLL_MS]
+        for fn in due:
+            fn()
+        self.assertEqual(w.notice_model.texts()["update"], "新版本 99.0.0 已下好，马上重启换上。")
+        self.fire_restart(timers)
+        self.assertEqual((self.launches(), quits), (1, [1]))
+
+    def test_other_windows(self):
+        """开着其他窗口按窗口的种类认：看得见的对话框（最小化的也算）算；悬浮窗自己、藏着的、工具提示、弹出的菜单和列表、
+        不接收焦点的小提示框（收到托盘时的提示）不算。"""
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QDialog, QWidget
+
+        w = self.make()
+        w.show()
+        settle()
+        self.assertFalse(w._other_windows_open())
+        dialog = QDialog()
+        self.addCleanup(dispose, dialog)
+        dialog.show()
+        settle()
+        self.assertTrue(w._other_windows_open())
+        dialog.showMinimized()
+        settle()
+        self.assertTrue(w._other_windows_open())
+        dialog.hide()
+        self.assertFalse(w._other_windows_open())
+        for flags in (Qt.ToolTip, Qt.Popup, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowDoesNotAcceptFocus):
+            with self.subTest(flags=flags):
+                tip = QWidget(None, flags)
+                self.addCleanup(dispose, tip)
+                tip.show()
+                settle()
+                self.assertFalse(w._other_windows_open())
+                tip.hide()
+
+    def test_hidden_lanes(self):
+        """自动重启时哪几张收在托盘里：两张按各自藏没藏着算；没有 Lanes 时只看自己。"""
+        w = self.make()
+        second = mock.Mock()
+        second.isHidden.return_value = False
+        lanes = SimpleNamespace(all=lambda: [SimpleNamespace(window=w, primary=True),
+                                             SimpleNamespace(window=second, primary=False)])
+
+        def hidden():
+            w.lanes = lanes  # 只在问的时候接上：显示、藏起悬浮窗时别的地方也会看 lanes
+            try:
+                return w._hidden_lanes()
+            finally:
+                w.lanes = None
+
+        self.assertTrue(w.isHidden())  # 没显示过：同收在托盘里
+        self.assertEqual(hidden(), ("primary",))
+        second.isHidden.return_value = True
+        self.assertEqual(hidden(), ("primary", "secondary"))
+        w.show()
+        settle()
+        self.assertEqual(hidden(), ("secondary",))
+        self.assertEqual(w._hidden_lanes(), ())
+        w.hide()
+        self.assertEqual(w._hidden_lanes(), ("primary",))
+
+    def test_updated_kept_while_hidden(self):
+        """收在托盘里启动时，刚换上新版本那一条留着：收着时刷新几次都不算显示过，显示出来照样看得到，点了关闭才收起。"""
+        w = self.make()
+        self.apply.result = {"status": "ok", "version": VERSION, "reason": ""}
+        w.updates.later = lambda ms, fn: None
+        w.updates.startup()
+        self.assertTrue(w.isHidden())
+        for _ in range(3):
+            w.refresh()
+        self.assertEqual(w.updates.updated, VERSION)
+        w.show()
+        settle()
+        w.refresh()
+        self.assertIn(W.UPDATE_DONE.format(version=VERSION), "\n".join(w.notice_model.texts().values()))
 
     def test_area_and_order(self):
         """标题栏下方的全局提示里：刚换上新版本的、有新版本的，排在「免费软件」声明前面；都是说明（不让边框变色）。"""
@@ -1725,11 +2414,18 @@ class OverlayTest(ErrorsCase):
         fake.instance.return_value.quit.assert_called_once_with()
 
     def test_main_order(self):
-        """main()：悬浮窗显示出来、启动时的几项检查做完以后才读上一次的结果、排自动检查。"""
+        """main()：悬浮窗显示出来、启动时的几项检查做完以后才读上一次的结果、排自动检查。悬浮窗在每一张的接线
+        （Lanes._wire_lane）里显示，第一张的接线 Lanes.wire_primary 排在读上一次的结果以前。"""
         source = inspect.getsource(overlay_app.main)
-        self.assertLess(source.index("window.show()"), source.index("window.updates.startup()"))
+        self.assertIn("window.show()", inspect.getsource(overlay_lanes.Lanes._wire_lane))
+        self.assertIn("self._wire_lane(self._primary)", inspect.getsource(overlay_lanes.Lanes.wire_primary))
+        self.assertLess(source.index("lanes.wire_primary()"), source.index("window.updates.startup()"))
         self.assertLess(source.index("window.notices.check_calibration()"), source.index("window.updates.startup()"))
         self.assertLess(source.index("window.updates.startup()"), source.index("app.exec()"))
+        # 收在托盘里启动：托盘图标建好以后才定（建不出来时照常显示），在事件循环转起来以前
+        self.assertLess(source.index("window.tray_part.setup_tray()"), source.index("lanes.finish_hidden_start(tray)"))
+        self.assertLess(source.index("lanes.finish_hidden_start(tray)"), source.index("app.exec()"))
+        self.assertIn("hidden=start_hidden", source)
 
 
 class Host:
@@ -1806,9 +2502,11 @@ class SkinRowTest(unittest.TestCase):
                     titles = {t.text(): at(t) for t in page.findChildren(chrome.SectionTitle)}
                     self.assertLess(at(d.rows["export"].row), titles[st.UPDATE_CARD])
                     self.assertLess(titles[st.UPDATE_CARD], at(parts.row))
-                # 已经是最新，和下载中较长的两句（比对本机的文件、只下变了的部分）
+                # 已经是最新，下载中较长的两句（比对本机的文件、只下变了的部分），和下好以后最长的一句（等拾星助手的其他窗口
+                # 关掉：开着设置窗口时写的就是它）
                 for note in (W.UPDATE_LATEST.format(version=VERSION), COMPARING,
-                             W.update_download_text(NEW, 12 * MB, PART, "delta")):
+                             W.update_download_text(NEW, 12 * MB, PART, "delta"),
+                             W.UPDATE_READY_WINDOWS.format(version=NEW)):
                     d.set_values(st.SettingsValues(update_note=note))
                     settle()
                     self.assertEqual((parts.desc.isVisible(), parts.note.isVisible()), (False, True))

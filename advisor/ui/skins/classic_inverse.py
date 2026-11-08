@@ -59,8 +59,12 @@ def _classic_inverse() -> Skin:
         f"QPushButton#iconText {{ border-radius: 12px; }}\n"
         f"QPushButton#iconText[tool=\"share\"] {{ background: {p['pink']}; }}\n"
         f"QPushButton#iconText[tool=\"share\"]:hover {{ background: #ff5fb4; }}\n"
+        f"QPushButton#iconText[tool=\"hub\"] {{ background: {p['cyan']}; }}\n"
+        f"QPushButton#iconText[tool=\"hub\"]:hover {{ background: #7fe4ff; }}\n"
         f"QPushButton#remove {{ border-radius: 9px; padding: 0px 6px; }}\n"
         f"QLabel#title {{ padding: 6px 6px 8px 4px; font-size: 14pt; $TITLE_FONT }}\n"
+        f"QLabel#laneTag {{ background: {p['yellow']}; color: {p['band']}; border: 2px solid {p['band']}; "
+        f"border-radius: 4px; padding: 0px 8px; font-weight: bold; }}\n"
         f"QLabel#cardTitle {{ padding: 3px 18px 4px 16px; font-size: 10pt; $TITLE_FONT }}\n"
         f"QWidget#globalArea {{ background: {p['white']}; border-radius: 14px; }}\n"
         f"QWidget#bestBlock {{ background: #fff6e3; border: 2px solid {p['orange']}; border-radius: 12px; }}\n"
@@ -79,7 +83,11 @@ def _classic_inverse() -> Skin:
         "plus": (p["black"], p["lime"], p["text"]), "minus": (p["band"], p["band"], p["yellow"]),
     }
     badge = ("!", p["yellow"], p["band"], "triangle")
-    settings_extra = _scrollbar(p["line"], p["pink"]) + (
+    # 设置窗口的下拉框：白卡片上的白底胶囊（和卡片同色），深色字，右端的三角由 ComboArrow 画（combo 去掉系统的箭头）
+    settings_combo = (f"QComboBox {{ background: {p['white']}; color: {p['text']}; border: 2px solid {p['black']}; "
+                      f"border-radius: 14px; padding: 4px 30px 4px 14px; font-weight: bold; $TITLE_FONT }}\n"
+                      f"QComboBox:hover {{ border-color: {p['lime']}; }}\n" + combo)
+    settings_extra = settings_combo + _scrollbar(p["line"], p["pink"]) + (
         f"QPushButton {{ background: {p['band']}; color: {p['white']}; border: 2px solid {p['black']}; "
         f"border-radius: 6px; padding: 4px 20px; min-height: 26px; font-size: 11pt; font-weight: bold; $TITLE_FONT }}\n"
         f"QPushButton:hover {{ background: #2a2a31; }}\n"
@@ -127,6 +135,10 @@ def _classic_inverse() -> Skin:
         f"padding: 6px 12px; font-weight: bold; }}\n"
         f"QPlainTextEdit#preview {{ color: {p['lime']}; font-size: 12pt; border-radius: 19px; padding: 6px 16px; "
         f"$NUMBER_FONT }}\n"
+        # 按编号导入的输入框：和粘贴框同一种深色底白字（高度跟着右边的平行四边形按钮）
+        f"QLineEdit {{ background: {p['band']}; color: {p['white']}; border: none; border-radius: 14px; "
+        f"padding: 0px 12px; font-weight: bold; }}\n"
+        f"QLineEdit:disabled {{ color: {p['locked']}; }}\n"
     )
     editor_extra = lime_button + combo + _scrollbar(p["line"], p["pink"]) + (
         f"QPushButton {{ border-radius: 6px; }}\n"
@@ -166,6 +178,7 @@ def _classic_inverse() -> Skin:
     return make_skin(
         CLASSIC_INVERSE_KEY, CLASSIC_INVERSE_LABEL, common=common, fonts=fonts, layouts=layouts,
         overlay=dict(
+            WIDTH=540,  # 比默认的 459 宽：最长的角色名、最长的方案名在「筹码方案」卡片的下拉框里要写得下
             PANEL_MARGINS=(14, 8, 12, 14), PANEL_SPACING=14, HEAD_SPACING=6,
             PANEL_BG="transparent", PANEL_BORDER="transparent", PANEL_RADIUS=16, PANEL_PAUSED_BG="transparent",
             PANEL_PAUSED_BORDER="transparent", PANEL_ATTENTION_BORDER=p["yellow"], PANEL_OPAQUE_BG="transparent",
@@ -190,8 +203,8 @@ def _classic_inverse() -> Skin:
             TOGGLE_PRESSED_BG="#3a3a40",
             REMOVE_PADDING="0px 6px", REMOVE_RADIUS=9, SCROLL_WIDTH=8, SCROLL_HANDLE=p["pink"], SCROLL_RADIUS=4,
             SCROLL_HANDLE_MIN=24, CLOSE_PADDING="0px 4px",
-            SCHEME_TOOL_ICON_PX=19, SCHEME_TOOL_COLOR=p["text"], SCHEME_TOOL_DISABLED="#9a9aa6", SCHEME_TOOL_GAP=3,
-            SCHEME_TOOL_PADDING=(10, 6),
+            SCHEME_TOOL_ICON_PX=14, SCHEME_TOOL_COLOR=p["text"], SCHEME_TOOL_DISABLED="#9a9aa6", SCHEME_TOOL_GAP=2,
+            SCHEME_TOOL_PADDING=(10, 4),
             MARK_BEST_COLOR=p["text"], MARK_COLOR=p["text"],
             NAME_BORDER_ALPHA=255, UNREADABLE_BORDER_ALPHA=255, NAME_PADDING="1px 10px", NAME_WEIGHT_BEST=900,
             NAME_WEIGHT=700, PICKED_WEIGHT=700, GRID_DIAMETER=26,
@@ -277,7 +290,7 @@ def _classic_inverse() -> Skin:
             TIER_SEGMENTED=True, SEGMENT_BORDER=p["black"],
         ),
         share=dict(
-            SIZE=(620, 804), SCREEN_MARGIN=0, SHEET_EXTRA=share_extra, WINDOW_BG=p["g2"],
+            SIZE=(620, 840), SCREEN_MARGIN=0, SHEET_EXTRA=share_extra, WINDOW_BG=p["g2"],
             BOX_BG="transparent", BOX_BORDER="transparent", INPUT_BG=p["band"], INPUT_BORDER=p["band"], INPUT_RADIUS=15,
             INPUT_PADDING="4px 14px", INPUT_HOVER_BORDER=p["lime"], POPUP_BG=p["white"], POPUP_SELECTION=p["select"],
             PREVIEW_BG=p["band"], PREVIEW_TEXT=p["lime"], LIST_BG="transparent", LIST_BORDER="transparent",
@@ -286,12 +299,15 @@ def _classic_inverse() -> Skin:
             TONE_BOX={"ok": (p["lime"], p["text"]), "warn": (p["band"], p["yellow"])},
         ),
         settings=dict(
-            # 高度：「识别」页含低配模式一行（连同间距约 106 像素），说明最长的「Windows 未允许」改为截取屏幕时也正好排下、
-            # 不截掉页底的横幅
-            WIDTH=860, HEIGHT=663, SCREEN_MARGIN=0, SHEET_EXTRA=settings_extra,
+            # 高度：「识别」页含游戏平台、低配模式两行（连同间距约 109、106 像素），说明最长的「Windows 未允许」改为截取
+            # 屏幕时也正好排下、不截掉页底的横幅；「只用大核」一行的说明有两行（处理器名称、打开以后的效果），连同间距
+            # 约 108 像素
+            WIDTH=860, HEIGHT=772, BIG_CORES_EXTRA=108, SCREEN_MARGIN=0, SHEET_EXTRA=settings_extra,
             TILE_BG=p["gray"], TILE_BORDER="#c9c9d1", TILE_HOVER_BORDER="#5a5a5a", TILE_ON_BG=p["lime"], TILE_PEN=1,
             TILE_ON_PEN=2.2, TILE_RADIUS=14, TILE_MARGINS=(14, 10, 14, 12), TILE_SPACING=16, RADIO_SIZE=20, RADIO_GAP=10,
             RADIO_PEN=2, RADIO_DOT=5, RADIO_OFF_COLOR=p["black"], SELECTED_COLOR=p["black"], SWITCH_ON_FILL=p["lime"],
+            LEVEL_COLOR={"easy": p["green"], "normal": "#0077b6", "danger": "#9a7b00",
+                         "critical": p["warn"], "overload": "#b3122f"},
             ICON_BG=p["gray"], ICON_COLOR=p["text"],
             KEYCAP_BG=p["lime"], KEYCAP_BORDER=p["black"], KEYCAP_EDGE=p["black"], KEYCAP_RADIUS=24,
             KEYCAP_EDGE_WIDTH=2,

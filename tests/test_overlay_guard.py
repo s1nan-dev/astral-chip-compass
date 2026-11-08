@@ -38,11 +38,13 @@ PACKAGE = "advisor.ui.overlay_parts"
 OVERLAY_MODULE = "advisor.ui.overlay"
 
 # overlay_parts 下各模块归哪一类（不带 .py）。新加的模块要先在这里归类，照那一类的规矩写
-SHELL = {"app", "layout"}  # 外壳（overlay.py 本身也是外壳）
+# 外壳（overlay.py 本身也是外壳）。lane_settings 是第二张悬浮窗的设置类（app.UiSettings 的子类），不碰悬浮窗和部件，
+# 它要用 app 里的设置类，和外壳归在一起；lanes 是两张悬浮窗的协调器，和 app 一样负责接线，也归在外壳
+SHELL = {"app", "layout", "lane_settings", "lanes"}
 DISPATCH = {"dispatch"}  # 编排
 LOW = {"wording", "geometry", "factory", "option_widgets", "state"}  # 底层模块：部件都可以导入
-PARTS = {"advice_card", "background", "dialogs", "follow", "hotkeys", "notices", "owned_card", "records", "scheme_card",
-         "status", "updates", "watcher"}
+PARTS = {"advice_card", "background", "dialogs", "follow", "hotkeys", "notices", "ocr_check", "owned_card", "records",
+         "reporting", "scheme_card", "status", "updates", "watcher"}
 INIT = {"__init__"}
 # 部件模块里定义、几个部件共用的显示状态（只读，或照约定只由一处写）：不算部件，别的部件可以拿着
 SHARED_STATE = {("notices", "NoticeModel")}

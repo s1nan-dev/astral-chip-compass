@@ -1,7 +1,7 @@
 """加载 data/ 下的数据，并提供名称的模糊匹配。
 
 资料库对不上时降级运行，不拒绝启动：适配表里引用了不存在的筹码或角色、缺少某个角色的自动层等情况
-都记进 DB.warnings（同时写日志），推荐照常给出；缺自动层的角色只用游戏内置推荐和通用规则。
+都记进 DB.warnings（同时写日志），推荐照常给出；缺自动层的角色只用通用规则。
 写坏的一项同样只记警告、跳过这一项：适配表某一段写成了非数组、某条规则缺 chips 或 score、字段类型不对，
 chips.json、heroes.json 里某个筹码或角色缺字段，maps.json、mutators.json、meta.json 整份读不出或某一项写得不对。
 rules.toml 里引用的筹码名、特性名、组合规则名、地图名，推荐要用到的键和取值范围（除零的几项）载入时核对，
@@ -59,6 +59,7 @@ EXTREME = "极限"  # 极限难度的难度名（只有几张地图有，进度�
 # DIFFICULTIES 只列每张地图都有进度上限资料的四个难度，不含极限
 DIFFICULTY_NAMES = (*DIFFICULTIES, EXTREME)
 _NIGHTMARE_NAMES = DIFFICULTY_NAMES[2:]  # 噩梦、疯狂、极限
+MAP_CODE_MAX = 63  # 地图编号最大是几（MapInfo.code）：分享方案的短字符串里一个地图编号占 6 位
 # 本局难度的档位（State.difficulty_level）：合并画面读数、进度上限推算和概率行的结果，None 为不知道。
 # 只有 LEVEL_NIGHTMARE 改变推荐（rules.toml [survival] nightmare_*）；其余档位和 None 一样维持困难及以上的计算
 LEVEL_NORMAL = NORMAL  # 普通
@@ -97,6 +98,9 @@ class Chip:
     class_points: dict[str, int]
     fit: frozenset[str]
     fit_minor: frozenset[str]
+    # 游戏繁体中文界面里的名字（chips.json 的 hant，默认没有）：认筹码名字的地方（resolve_chip、match_chip）一并认，
+    # 程序内部、方案和分享码仍用简体名做键
+    hant: str = ""
     # 旧名、俗称（chips.json 的 aliases，默认没有）：认筹码名字的地方（resolve_chip、match_chip）一并当成本筹码的名字，
     # 分享码和方案文件里的旧名另有 data/chip_codes.json 的 old_names 认（改了名的筹码编号不变）
     aliases: tuple[str, ...] = ()
@@ -126,6 +130,11 @@ class Hero:
     potential: bool
     weights: dict[str, int]
     title: str = ""  # 游戏选角界面上显示的叫法：称号，或联动角色的简称
+    # 游戏繁体中文界面里的名字、称号、全名（heroes.json 的 hant、hant_title、hant_full_name）：认角色时一并认，
+    # 程序内部、方案和分享码仍用简体名做键
+    hant: str = ""
+    hant_title: str = ""
+    hant_full_name: str = ""
     unrecorded: bool = False
 
     @property
@@ -366,6 +375,18 @@ class MapInfo:
     # 极限难度（只有几张地图有）的进度上限和筹码任务数（maps.json 的 extreme）；没有极限难度、或资料里没写时为 None
     extreme_cap: int | None = None
     extreme_tasks: float | None = None
+    # 各难度一局的筹码任务等级（maps.json 的 task_levels）：难度名（DIFFICULTY_NAMES）→ 各路线的等级列表；一条路线时
+    # 直接写一个等级列表。路线不知道时按各条线平均（MapInfo.task_level_shares）；没写的难度按困难那一列
+    task_levels: dict = field(default_factory=dict)
+    # 游戏繁体中文界面里的地图名（maps.json 的 hant）：认地图时一并认
+    hant: str = ""
+    # 游戏任务栏里的繁体任务文字（maps.json 的 hant_tasks，原样，不归一化）。资料里和 tasks 一一对应，拼不出来写 null 的
+    # 那几条这里已去掉（有去掉的时候就不再按位置和简体任务对应）；载入时按位置配好的对见 DB.map_task_keys
+    hant_tasks: tuple[str, ...] = ()
+    # 地图编号（maps.json 的 code，1～MAP_CODE_MAX）：筹码方案能标的地图才有，分享方案的短字符串、方案文件用它代表地图。
+    # 和筹码编号一样只增不改：改名时编号不变，结束的地图留着编号、不再给别的地图用。没有编号的地图（已经结束的运动场）
+    # 不能标在方案上；资料里没写时为 None（旧的资料也照常读）
+    code: int | None = None
 
     def cap_for(self, difficulty: str | None = None, name: str | None = None) -> int | None:
         """推荐用的进度上限。知道具体难度（name：困难、噩梦、疯狂、极限等 DIFFICULTY_NAMES 里的难度名）时取那一难度的
@@ -385,6 +406,29 @@ class MapInfo:
         if name == EXTREME and self.extreme_tasks is not None:
             return self.extreme_tasks
         return self.chip_tasks
+
+    def task_level_shares(self, name: str | None = None) -> tuple[tuple[int, float], ...] | None:
+        """之后任务三选一的等级比例：这个难度的任务等级（task_levels）里 1～3 级各占多少，各条路线平均（路线不知道
+        时按各条线平均，和 chip_tasks 的取法相同）。name 是难度名，只知道档位时由调用方换成那一档的一列（噩梦及以上按
+        噩梦，engine.context.task_level_column）。难度完全不知道（None）、或这个难度没写时取困难那一列：各难度等级相同的
+        地图不受影响；现在的资料里水乡古镇、魔法学院的噩梦及以上和困难那一列不同，难度完全不知道时这两张图按困难估、会
+        偏一些。
+        整张地图没写等级时为 None，调用方照旧按当前星数估。
+
+        等级写在任务上、与星数无关（mechanics/chips.md），所以一局里先做哪几个任务不影响比例。返回（等级, 占比）的
+        元组，按等级从小到大，占比合计为 1。"""
+        routes = self.task_levels.get(name) if name is not None else None
+        if not routes:
+            routes = self.task_levels.get(DIFFICULTIES[1])
+        if not routes:
+            return None
+        if all(_is_int(v) for v in routes):  # 一条路线：直接写的等级列表
+            routes = [routes]
+        shares: dict[int, float] = {}
+        for route in routes:
+            for level in route:
+                shares[level] = shares.get(level, 0.0) + 1 / len(route) / len(routes)
+        return tuple(sorted(shares.items()))
 
     def difficulties_at(self, cap: int) -> tuple[str, ...] | None:
         """进度上限为 cap 的难度（DIFFICULTIES 里的，按其顺序；没有一个是 cap 时为空元组）。
@@ -419,6 +463,7 @@ class Mutator:
     effect: str
     scope: str  # 通用、星趴·梦想号、运动场系列等
     hint: str = ""  # 对选择筹码的影响（仅提示，未计入推荐度）
+    hant: str = ""  # 游戏繁体中文界面里的组件名（mutators.json 的 hant）
 
 
 @dataclass(eq=False)
@@ -431,7 +476,13 @@ class DB:
     hero_synergy: dict[str, HeroSynergy]
     player_synergy: dict[str, PlayerSynergy]
     maps: tuple[str, ...]
-    map_tasks: dict[str, tuple[str, ...]] = field(default_factory=dict)  # 地图 → 归一化后的任务文字
+    map_tasks: dict[str, tuple[str, ...]] = field(default_factory=dict)  # 地图 → 归一化后的简体任务文字（每条任务一个）
+    # 地图 → 每条任务在任务栏上的几种写法（归一化后）：和 map_tasks 里这张地图的任务一一对应、先后相同，每一组第一个是
+    # 简体的写法（就是 map_tasks 里的那一个），后面接游戏繁体中文界面上的写法（maps.json 的 hant_tasks，按列表里的位置
+    # 和 tasks 配对）。繁体写法归一化后和简体相同、写了 null、或资料里没有时，这一组只有简体的一种。任务栏读到的一行
+    # 对上某条任务的任一种写法，这条任务算对上一次（hud._guess_map）：对上几条、读到这张地图几成任务都按任务算，
+    # 不按写法算，繁体任务栏和简体任务栏读全时得分相同。没有这一项的地图按只有简体的写法算
+    map_task_keys: dict[str, tuple[tuple[str, ...], ...]] = field(default_factory=dict)
     problems: list[str] = field(default_factory=list)  # 严重错误：推荐无法进行
     warnings: list[str] = field(default_factory=list)  # 资料对不上，已降级处理
     trait_rules: dict[str, tuple[Rule, ...]] = field(default_factory=dict)
@@ -453,18 +504,23 @@ class DB:
 
     def resolve_chip(self, text: str) -> Chip:
         return self.chips[_resolve(text, {_norm(n): c.name for c in self.chips.values()
-                                          for n in (c.name, *c.aliases)}, "筹码")]
+                                          for n in (c.name, c.hant, *c.aliases) if n}, "筹码")]
 
     def resolve_hero(self, text: str) -> Hero:
-        index = {_norm(a): h.name for h in self.heroes.values() for a in h.aliases}
+        index = {_norm(a): h.name for h in self.heroes.values()
+                 for a in (h.name, *h.aliases, h.hant, h.hant_title, h.hant_full_name) if a}
         return self.heroes[_resolve(text, index, "角色")]
 
     def resolve_map(self, text: str) -> str:
+        def names(m: str) -> tuple[str, ...]:
+            info = self.map_info.get(m)
+            return (m, info.hant) if info and info.hant else (m,)
+
         key = _norm(text)
         for m in self.maps:
-            if key and (key in _norm(m) or _norm(m) in key):
+            if key and any(key in _norm(n) or _norm(n) in key for n in names(m)):
                 return m
-        return _resolve(text, {_norm(m): m for m in self.maps}, "地图")
+        return _resolve(text, {_norm(n): m for m in self.maps for n in names(m)}, "地图")
 
     def match_chip(self, text: str, rarity: str | None = None, *, closest: bool = False) -> tuple[str | None, float, bool]:
         """把识别到的文字配成筹码名。返回（筹码名或 None，相似度，是否判为资料库未收录）。
@@ -484,7 +540,7 @@ class DB:
         if not key:
             return None, 0.0, False
         index = {_norm(n): n for n in self.chips}
-        index.update({_norm(a): c.name for c in self.chips.values() for a in c.aliases})
+        index.update({_norm(a): c.name for c in self.chips.values() for a in (c.hant, *c.aliases) if a})
         index.update({_norm(n): n for n in self.removed if _norm(n) not in index})
         if key in index:
             return index[key], 1.0, False
@@ -631,7 +687,7 @@ def task_key(text: str) -> str:
     「击倒人工生命体-天崩」的一样。
     """
     text = re.sub(r"[（(].*?[）)]", "", text)
-    text = re.sub(r"\d+\s*[只个艘次张条层名位颗]?", "", text)
+    text = re.sub(r"\d+\s*[只个艘次张条层名位颗隻個張條層顆]?", "", text)
     return re.sub(r"[\s\\/:：，,。.*×x]", "", _dash(text))
 
 
@@ -723,12 +779,28 @@ def _is_texts(value) -> bool:
     return isinstance(value, list) and all(isinstance(v, str) for v in value)
 
 
+def _is_levels(value) -> bool:
+    """任务等级的列表：1～3 级的整数（对应 data/rules.toml [rarity] 的第 1～3 行）。"""
+    return isinstance(value, list) and all(_is_int(v) and 1 <= v <= 3 for v in value)
+
+
+def _is_level_routes(value) -> bool:
+    """maps.json 的任务等级：一条路线写成等级列表，几条路线写成列表的列表；每条路线都要有等级。没写这个难度时
+    整个不写，空表不算（空路线算不出比例）。"""
+    if not isinstance(value, list) or not value:
+        return False
+    if all(_is_int(v) for v in value):
+        return _is_levels(value)
+    return all(_is_levels(v) and v for v in value)
+
+
 def _is_points(value) -> bool:
     """名称 → 数 的表（职业分值、角色权重）。"""
     return isinstance(value, dict) and all(_is_name(k) and _is_number(v) for k, v in value.items())
 
 
-# chips.json 每个筹码、heroes.json 每个角色必须有的字段和取值的类型：缺字段或类型不对的那一项记警告、跳过（_field_problem）
+# chips.json 每个筹码、heroes.json 每个角色必须有的字段和取值的类型：缺字段或类型不对的那一项记警告、跳过（_field_problem）。
+# 游戏繁体中文界面里的名字（hant 等）不在这里：可以不写，见 _optional_text
 _CHIP_FIELDS = {
     "name": _is_name, "en": _is_text, "rarity": _is_text, "icon": _is_text, "group": _is_text,
     "school": lambda v: v is None or isinstance(v, str), "maps": _is_names, "granted": lambda v: isinstance(v, bool),
@@ -740,6 +812,19 @@ _HERO_FIELDS = {
     "atk": _is_number, "def": _is_number, "hp": _is_number, "potential": lambda v: isinstance(v, bool),
     "weights": _is_points,
 }
+
+
+def _optional_text(raw: dict, key: str, where: str, warn, ignored: str = "已忽略") -> str:
+    """可以不写的一项文字（筹码、角色、地图、畸变组件在游戏繁体中文界面里的名字）。没写（或写 null）时为空串，不记警告：
+    缺了只是认不出繁体的写法，由 tools/check_data.py 报给维护资料的人；写了却不是文字时记警告、按没写处理，这一个筹码
+    （角色、地图、组件）照常载入。"""
+    value = raw.get(key)
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    warn(f"{where}：{key} 的类型不对，{ignored}")
+    return ""
 
 
 def _field_problem(raw, fields: dict) -> str | None:
@@ -1160,6 +1245,7 @@ def _load_chips(raw: dict, warn) -> dict[str, Chip]:
             class_points=c["class_points"],
             fit=frozenset(c["fit"]),
             fit_minor=frozenset(c["fit_minor"]),
+            hant=_optional_text(c, "hant", f"chips.json 筹码「{c['name']}」", warn),
             aliases=tuple(aliases),
         )
     for c in chips.values():
@@ -1182,6 +1268,7 @@ def _load_heroes(raw: list, warn) -> dict[str, Hero]:
             label = f"（「{h['name']}」）" if isinstance(h, dict) and _is_name(h.get("name")) else ""
             warn(f"heroes.json 第 {i} 个角色{label}：{problem}，已忽略")
             continue
+        where = f"heroes.json 角色「{h['name']}」"
         heroes[h["name"]] = Hero(
             id=h["id"],
             name=h["name"],
@@ -1195,6 +1282,9 @@ def _load_heroes(raw: list, warn) -> dict[str, Hero]:
             potential=h["potential"],
             weights=h["weights"],
             title=h.get("title", ""),
+            hant=_optional_text(h, "hant", where, warn),
+            hant_title=_optional_text(h, "hant_title", where, warn),
+            hant_full_name=_optional_text(h, "hant_full_name", where, warn),
         )
     for h in heroes.values():
         odd = [k for k in h.weights if k not in CLASSES]
@@ -1203,14 +1293,24 @@ def _load_heroes(raw: list, warn) -> dict[str, Hero]:
     return heroes
 
 
-def _load_maps(raw: dict, warn) -> tuple[dict[str, tuple[str, ...]], dict[str, MapInfo]]:
-    """maps.json：返回（地图 → 归一化后的任务文字, 地图 → MapInfo）。某张地图不是表时记警告、跳过；tasks 不是文字的列表、
-    进度上限等某一项的类型不对时记警告，那一项按没有资料处理（没有任务、进度上限不知道、筹码任务数 0）。"""
+def _load_maps(raw: dict, warn) -> tuple[dict[str, tuple[str, ...]], dict[str, tuple[tuple[str, ...], ...]],
+                                          dict[str, MapInfo]]:
+    """maps.json：返回（地图 → 归一化后的简体任务文字, 地图 → 每条任务的几种写法, 地图 → MapInfo），前两项见
+    DB.map_tasks、DB.map_task_keys。某张地图不是表时记警告、跳过；tasks 不是文字的列表、hant_tasks 不是文字（或 null）的
+    列表、hant 和进度上限等某一项的类型不对时记警告，那一项按没有资料处理（没有任务、进度上限不知道、筹码任务数 0）。
+    hant、hant_tasks 可以不写（不记警告）。
+
+    任务文字只放简体的写法，和资料里只有简体任务时一模一样。繁体任务按列表里的位置和简体任务配对（在去掉 null 之前配，
+    第 i 条繁体就是第 i 条简体的繁体写法），归进那条任务的写法里，任务栏读到的繁体文字也认得出这张地图；写 null 的、
+    比简体任务多出来的几条不参加比对（条数对不上由 tools/check_data.py 报）。几条简体任务归一化后相同时（只差数量）
+    算一条，它们的繁体写法并进这一条。"""
     map_tasks: dict[str, tuple[str, ...]] = {}
+    map_task_keys: dict[str, tuple[tuple[str, ...], ...]] = {}
     map_info: dict[str, MapInfo] = {}
     # 某一项的检查和类型不对时用的值。extreme（极限难度的进度上限和筹码任务数，只有几张地图有）：两项都可以不写，
     # 写了的要是正整数、不小于 0 的数
     fields = {
+        "code": (lambda v: v is None or _is_int(v) and 1 <= v <= MAP_CODE_MAX, None),
         "progress_cap": (lambda v: v is None or _is_int(v), None),
         "chip_tasks": (_is_number, 0.0),
         "until": (lambda v: v is None or isinstance(v, str), None),
@@ -1221,6 +1321,8 @@ def _load_maps(raw: dict, warn) -> tuple[dict[str, tuple[str, ...]], dict[str, M
                     and (v.get("chip_tasks") is None
                          or _is_number(v["chip_tasks"]) and math.isfinite(v["chip_tasks"]) and v["chip_tasks"] >= 0),
                     None),
+        "task_levels": (lambda v: v is None or isinstance(v, dict)
+                        and all(d in DIFFICULTY_NAMES and _is_level_routes(x) for d, x in v.items()), None),
     }
     for name, info in raw.items():
         where = f"maps.json 地图「{name}」"
@@ -1228,9 +1330,31 @@ def _load_maps(raw: dict, warn) -> tuple[dict[str, tuple[str, ...]], dict[str, M
             warn(f"{where}：格式不对，已忽略")
             continue
         tasks = info.get("tasks")
-        if not _is_texts(tasks):
+        tasks_ok = _is_texts(tasks)
+        if not tasks_ok:
             warn(f"{where}：tasks 应为任务文字的列表，按没有任务处理")
             tasks = []
+        hant = _optional_text(info, "hant", where, warn, "按没有资料处理")
+        hant_tasks = info.get("hant_tasks")
+        if hant_tasks is None:  # 没写：只认简体的任务文字，不记警告（由 tools/check_data.py 报）
+            hant_tasks = []
+        elif not isinstance(hant_tasks, list) or not all(v is None or isinstance(v, str) for v in hant_tasks):
+            warn(f"{where}：hant_tasks 应为任务文字的列表（拼不出来的写 null），按没有资料处理")
+            hant_tasks = []
+        elif not tasks_ok:
+            # 简体任务写坏了，繁体任务也不知道怎么对应：一起按没有任务处理
+            hant_tasks = []
+        # 每条简体任务（归一化后）→ 它的几种写法，简体的在前；繁体按位置配对，null 占着位置、不算一种写法
+        spellings: dict[str, list[str]] = {}
+        for i, task in enumerate(tasks):
+            key = task_key(task)
+            if not key:
+                continue
+            group = spellings.setdefault(key, [key])
+            hant_key = task_key(hant_tasks[i]) if i < len(hant_tasks) and hant_tasks[i] is not None else ""
+            if hant_key and hant_key not in group:
+                group.append(hant_key)
+        hant_tasks = [t for t in hant_tasks if t is not None]  # 拼不出来写 null 的那几条占位，配完对就去掉
         values = {}
         for key, (ok, default) in fields.items():
             values[key] = info.get(key, default)
@@ -1238,6 +1362,7 @@ def _load_maps(raw: dict, warn) -> tuple[dict[str, tuple[str, ...]], dict[str, M
                 warn(f"{where}：{key} 的类型不对，按没有资料处理")
                 values[key] = default
         map_tasks[name] = tuple(dict.fromkeys(k for k in (task_key(t) for t in tasks) if k))
+        map_task_keys[name] = tuple(tuple(spellings[k]) for k in map_tasks[name])
         extreme = values["extreme"] or {}
         map_info[name] = MapInfo(
             name=name,
@@ -1249,8 +1374,12 @@ def _load_maps(raw: dict, warn) -> tuple[dict[str, tuple[str, ...]], dict[str, M
             progress_caps=dict(values["progress_caps"] or {}),
             extreme_cap=extreme.get("progress_cap"),
             extreme_tasks=None if extreme.get("chip_tasks") is None else float(extreme["chip_tasks"]),
+            task_levels=dict(values["task_levels"] or {}),
+            hant=hant,
+            hant_tasks=tuple(hant_tasks),
+            code=values["code"],
         )
-    return map_tasks, map_info
+    return map_tasks, map_task_keys, map_info
 
 
 def _load_sources(raw, chips: dict[str, Chip], heroes: dict[str, Hero], warn) -> dict[str, Source]:
@@ -1417,7 +1546,7 @@ def load_db(data_path: str | None = None) -> DB:
         )
     for name in heroes:
         if name not in hero_synergy:
-            warn(f"角色自动层：缺少角色「{name}」，该角色只按游戏内置推荐和通用规则计算")
+            warn(f"角色自动层：缺少角色「{name}」，该角色只按通用规则计算")
         elif not hero_synergy[name].traits:
             warn(f"角色 {name}：未指定任何特性")
 
@@ -1524,7 +1653,7 @@ def load_db(data_path: str | None = None) -> DB:
 
     needs = _load_needs(_section(syn, "need", warn), chips, heroes, trait_rules, warn)
 
-    map_tasks, map_info = _load_maps(_read_json(base / "maps.json", {}, warn), warn)
+    map_tasks, map_task_keys, map_info = _load_maps(_read_json(base / "maps.json", {}, warn), warn)
     # 地图清单取两处的并集：专属筹码出现过的地图（按筹码表的顺序），再接 maps.json 里另有的地图
     # （没有专属筹码的新地图也参加「按候选地图平均」，命令行也认得出）
     maps = tuple(dict.fromkeys([*(m for c in chips.values() for m in c.maps), *map_info]))
@@ -1534,7 +1663,8 @@ def load_db(data_path: str | None = None) -> DB:
             warn(f"mutators.json 组件「{name}」：格式不对，已忽略")
             continue
         mutators[name] = Mutator(name=name, en=m.get("en", ""), effect=m.get("effect", ""), scope=m.get("scope", ""),
-                                 hint=m.get("hint", ""))
+                                 hint=m.get("hint", ""),
+                                 hant=_optional_text(m, "hant", f"mutators.json 组件「{name}」", warn))
     series, starlight_uses = _load_series(base / "series.toml", chips, warn, heroes)
     _check_rules(rules, {"chips": set(chips), "maps": set(maps),
                          # 适配表读不出来时没有特性和组合规则，不核对这两种（不然每一个都报不存在）
@@ -1542,6 +1672,7 @@ def load_db(data_path: str | None = None) -> DB:
                  warn)
     return DB(
         map_tasks=map_tasks,
+        map_task_keys=map_task_keys,
         chips=chips,
         heroes=heroes,
         removed=tuple(removed),
@@ -1578,7 +1709,8 @@ _RULES_REQUIRED = {
                 "keep_schools": "num", "extra_rule_factor": "num", "cap": "num"},
     "scheme": {"must": "num", "recommend": "num", "optional": "num", "skip": "num", "target": "num", "lock": "num",
                "unmarked_lookahead": "num", "same_tier_near": "num", "income_demote": "num"},
-    "lookahead": {"weight": "num", "picks": "star_numbers", "round_advance": "count", "high_value": "num"},
+    "lookahead": {"weight": "num", "tier_weight": "num", "picks": "star_numbers", "round_advance": "count",
+                  "high_value": "num"},
     "reroll_cost": {"gain": "num"},
     "picks": {"end_round": "above_one", "task_rate": "num", "shop": "num", "default_tasks": "num", "default_cap": "posint",
               "late_rate": "num", "late_from": "num"},
@@ -1607,7 +1739,7 @@ _RULES_SECTIONS = {
                  {"fighter_traits": "traits", "fighter_chips": "chips", "fighter_factor": "num", "nightmare_chips": "chips",
                   "nightmare_factor": "num", "nightmare_trait_factor": "num", "skip_maps": "map_chips"}),
     "extreme": ({"difficulty": "difficulty", "chips": "chip_numbers", "reasons": "chip_texts"}, {}),
-    "charge_build": ({"school": "school", "factor": "num"}, {}),
+    "school_build": ({"schools": "schools", "factor": "num"}, {}),
 }
 _DELAY_SOURCES = ("levelup", "shop", "task")  # [endless_cycle] delay 按来源写时的键（State.source 的取值）
 # 取值是数（或数的列表、表）的几种：TOML 认得 inf、nan，写进去总分、推荐度会算不出来，同角色的 keep_schools_penalty 一样当成写错
@@ -1687,8 +1819,6 @@ def _rule_value_problem(kind: str, value, known: dict) -> str | None:
         return missing(value, "特性", "traits") if _is_names(value) else "应为特性名的列表"
     if kind == "combos":
         return missing(value, "组合规则", "combos") if _is_names(value) else "应为组合规则名的列表"
-    if kind == "school":
-        return None if value in SCHOOLS else f"应为流派名（{'、'.join(SCHOOLS)}）"
     if kind == "schools":
         if not _is_names(value):
             return f"应为流派名（{'、'.join(SCHOOLS)}）的列表"

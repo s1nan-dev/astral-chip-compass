@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .. import chrome, theme
+from .. import chrome, lang, names, theme
 from ..scheme_list import BlockSpec, SchemeList
 from ...schemes import (
     AUTHOR_MAX,
@@ -36,8 +36,10 @@ from ...schemes import (
     default_schools,
     get_catalog,
     locked_schools,
+    normalize_maps,
     scheme_from_default,
     school_of,
+    taggable_maps,
     target_schools,
 )
 from ..text import tip_paragraphs_html
@@ -66,6 +68,7 @@ from .notes import (
     DEFAULT_TAG,
     DELETE_CONFIRM,
     EDITOR_TITLE,
+    LIST_MAPS,
     LIST_NOTE,
     LIST_SEP,
     MINE_HEADER,
@@ -98,6 +101,7 @@ from ..scheme_cards import _ID_ROLE, _TAG_ROLE, _USED_ROLE
 from .widgets import (
     ICON_SEARCH,
     LockQuestion,
+    MapField,
     _CharLimit,
     _Kit,
     _button,
@@ -231,8 +235,8 @@ class SchemeEditor(SkinnedWindow, chrome.EdgeResize, chrome.HideNotice, QWidget)
         return box
 
     def _make_fields(self, kit: _Kit) -> None:
-        """名称、作者、说明三个输入框（统一按字数限长），和名称一行的说明、复制来源、目标流派的说明；三个框一次接好
-        输入信号。"""
+        """名称、作者、说明三个输入框（统一按字数限长），和名称一行的说明、复制来源、目标流派的说明、适用地图；三个框一次接好
+        输入信号，适用地图的下拉多选接好勾选信号。"""
         self.name_edit = QLineEdit()
         if kit.fields_named:
             self.name_edit.setObjectName("nameEdit")
@@ -247,6 +251,8 @@ class SchemeEditor(SkinnedWindow, chrome.EdgeResize, chrome.HideNotice, QWidget)
         self.copied_label.setWordWrap(True)
         self.target_note = kit.dim("", "dim")
         self.target_note.setWordWrap(True)
+        self.maps_box = MapField(taggable_maps(self.db), display=lambda name: names.map_in(self.db, name))
+        self.maps_box.toggled.connect(self._map_toggled)
         for edit in (self.name_edit, self.author_edit, self.note_edit):
             edit.textEdited.connect(self._text_edited)
             edit.editingFinished.connect(self._text_finished)
@@ -459,9 +465,11 @@ class SchemeEditor(SkinnedWindow, chrome.EdgeResize, chrome.HideNotice, QWidget)
                 header.setForeground(QColor(L.LIST_HEADER_COLOR))
                 self.scheme_list.addItem(header)
             for scheme in mine:
-                item = QListWidgetItem(scheme.name)
+                # 列表上的方案名显示时按界面语言转；编辑框里照旧是原文（存的就是它）
+                item = QListWidgetItem(lang.t(scheme.name))
                 item.setData(_ID_ROLE, scheme.id)
                 item.setData(_TAG_ROLE, MINE_TAG)
+                item.setToolTip(self._maps_tip(scheme))
                 self.scheme_list.addItem(item)
                 if scheme.id == select_id:
                     target = item
@@ -470,6 +478,11 @@ class SchemeEditor(SkinnedWindow, chrome.EdgeResize, chrome.HideNotice, QWidget)
         finally:
             self._loading = False
         self._show_selected()
+
+    def _maps_tip(self, scheme: Scheme) -> str:
+        """方案列表里这一行的悬停说明：标了地图的写「适用地图：……」，通用的不写（空字符串）。"""
+        return LIST_MAPS.format(maps=LIST_SEP.join(names.map_in(self.db, m) for m in scheme.maps)) \
+            if scheme.maps else ""
 
     def used_id(self) -> str:
         """悬浮窗对正在编辑的角色正在用的方案 id（SchemeStore.current）；用默认推荐时为空字符串。"""
@@ -559,7 +572,8 @@ class SchemeEditor(SkinnedWindow, chrome.EdgeResize, chrome.HideNotice, QWidget)
         else:
             schools = default_schools(self.db, self.hero)
             self.default_schools.setText(
-                DEFAULT_SCHOOLS.format(schools=LIST_SEP.join(schools)) if schools else DEFAULT_NO_SCHOOLS)
+                DEFAULT_SCHOOLS.format(schools=LIST_SEP.join(lang.t(s) for s in schools))
+                if schools else DEFAULT_NO_SCHOOLS)
             self.no_tiers_label.setVisible(not self._default_marks)
             self._show_copy_default()
         # 默认推荐没有固定档位时筹码列表一行都没有：空框里写下一步怎么做（新建空方案、标档位、悬浮窗直接改用）
@@ -571,13 +585,15 @@ class SchemeEditor(SkinnedWindow, chrome.EdgeResize, chrome.HideNotice, QWidget)
         self.chip_list.scroll_to_top()
 
     def _show_fields(self) -> None:
-        """把选中方案的名称、作者、说明、复制来源和目标流派写进编辑区（不算用户的改动）。"""
+        """把选中方案的名称、作者、说明、适用地图、复制来源和目标流派写进编辑区（不算用户的改动）。"""
         s = self.scheme
         read_only = bool(self.store.read_only)
         for edit, text in ((self.name_edit, s.name), (self.author_edit, s.author), (self.note_edit, s.note)):
             edit.setText(text)
             edit.setReadOnly(read_only)
             edit.setCursorPosition(0)
+        self.maps_box.set_maps(s.maps, keep_extra=False)  # 上一套补的结束地图不带到这一套
+        self.maps_box.set_enabled(not read_only)
         note = copied_note(self.db, s)
         self.copied_label.setText(note)
         self.copied_label.setVisible(bool(note))
@@ -599,8 +615,8 @@ class SchemeEditor(SkinnedWindow, chrome.EdgeResize, chrome.HideNotice, QWidget)
         stale = self.scheme.stale if self.scheme is not None else ()
         self.stale_row.setVisible(bool(stale))
         if stale:
-            names = LIST_SEP.join(dict.fromkeys(x.name for x in stale))
-            self.stale_label.setText(STALE_NOTE.format(n=len(stale), names=names))
+            shown = LIST_SEP.join(dict.fromkeys(names.chip_in(self.db, x.name) for x in stale))
+            self.stale_label.setText(STALE_NOTE.format(n=len(stale), names=shown))
             self.stale_remove.setEnabled(not self.store.read_only)
 
     def _show_hints(self) -> None:
@@ -630,7 +646,9 @@ class SchemeEditor(SkinnedWindow, chrome.EdgeResize, chrome.HideNotice, QWidget)
         for name in self.catalog.markable:
             if only and name not in tiers:
                 continue
-            if query and query not in name.casefold() and query not in self.db.chips[name].effect.casefold():
+            chip = self.db.chips[name]
+            if query and query not in name.casefold() and query not in chip.hant.casefold() \
+                    and query not in chip.effect.casefold():
                 continue
             out.add(name)
         return out
@@ -657,6 +675,7 @@ class SchemeEditor(SkinnedWindow, chrome.EdgeResize, chrome.HideNotice, QWidget)
         except ValueError:
             return False
         if wanted == base:
+            self.maps_box.set_maps(base.maps)  # 勾了、取消了一张地图，整理后回到原样：下拉框跟着恢复
             self._show_saved()
             return False
         try:
@@ -672,13 +691,18 @@ class SchemeEditor(SkinnedWindow, chrome.EdgeResize, chrome.HideNotice, QWidget)
         if stored.name != base.name:
             item = self._list_item(stored.id)
             if item is not None:
-                item.setText(stored.name)
+                item.setText(lang.t(stored.name))
             if not self.name_edit.hasFocus():
                 self.name_edit.setText(stored.name)
         if stored.tiers != base.tiers:
             self._show_list(animate=True)
             self._apply_filter()
             self._show_targets()
+        if stored.maps != base.maps:
+            self.maps_box.set_maps(stored.maps)
+            item = self._list_item(stored.id)
+            if item is not None:
+                item.setToolTip(self._maps_tip(stored))
         if stored.stale != base.stale:
             self._show_stale()
         self._show_hints()
@@ -740,6 +764,18 @@ class SchemeEditor(SkinnedWindow, chrome.EdgeResize, chrome.HideNotice, QWidget)
                 text = getattr(self.scheme, key)
                 if edit.text() != text:
                     edit.setText(text)
+
+    def _map_toggled(self, name: str, on: bool) -> None:
+        """在适用地图的下拉框里勾了、取消了一张地图：标上或去掉这张地图（用 normalize_maps 整理成 Scheme.maps 的样子），
+        改动即存。"""
+        if self.scheme is None or self.store.read_only:
+            return
+        wanted = set(self.scheme.maps)
+        if on:
+            wanted.add(name)
+        else:
+            wanted.discard(name)
+        self._commit(maps=normalize_maps(self.db, wanted))
 
     def _tier_clicked(self, name: str, tier: str) -> None:
         """点档位按钮：标成这一档（新标的、改了档位的排到那一块最后），已经是这一档时取消。被锁流派的筹码点必选、推荐、
@@ -854,7 +890,7 @@ class SchemeEditor(SkinnedWindow, chrome.EdgeResize, chrome.HideNotice, QWidget)
             return
         self._flush()
         self._cancel_question()
-        self.confirm_label.setText(DELETE_CONFIRM.format(name=self.scheme.name))
+        self.confirm_label.setText(DELETE_CONFIRM.format(name=lang.t(self.scheme.name)))
         self.action_row.hide()
         self.confirm_row.show()
 

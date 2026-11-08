@@ -1,6 +1,6 @@
 # 第三方声明
 
-拾星助手 1.0.0 是《吉星派对》合作挑战的筹码推荐工具，由玩家自制，**不是官方工具**，与《吉星派对》的开发商、发行商以及下面两个 wiki 均无关联，也未获得它们的认可。
+拾星助手 1.1.0 是《吉星派对》合作挑战的筹码推荐工具，由玩家自制，**不是官方工具**，与《吉星派对》的开发商、发行商以及下面两个 wiki 均无关联，也未获得它们的认可。
 
 本文件说明本工具使用的资料、图片和第三方软件的来源与授权。本工具和第三方软件的许可证全文在 `LICENSES` 文件夹里。
 
@@ -39,7 +39,7 @@
 1. 拾星助手是免费的开源软件，程序代码按 GNU Affero 通用公共许可证第 3 版（AGPL-3.0）授权，许可证全文见程序目录下的 `LICENSES` 文件夹；源代码：<https://github.com/s1nan-dev/astral-chip-compass> 。
 2. 按这一许可证，您可以使用、复制、修改和分发本工具；分发时须附上完整的源代码、保留版权和许可证声明，修改后的版本同样按 AGPL-3.0 授权。具体以许可证全文为准。
 3. 随附的第三方组件按各自的许可证授权，本工具的许可证不限制这些许可证赋予您的权利，包括按 LGPL 替换 Qt / PySide6 库，以及为此所需的调试和逆向分析。
-4. `data` 文件夹里由本工具整理、编写的资料（角色、筹码、地图数据，规则和筹码适配表）按 CC BY-SA 4.0 提供，署名为「拾星者Sinan，改编自 Astral Party Wiki（CC BY-SA 4.0）」。其中的游戏内文字（名称和效果描述）版权归游戏方所有，不在此授权范围内。
+4. `data` 文件夹里由本工具整理、编写的资料（角色、筹码、地图数据，规则和筹码适配表）按 CC BY-SA 4.0 提供，署名为「拾星者Sinan，改编自 Astral Party Wiki（CC BY-SA 4.0）」。其中的游戏内文字（名称和效果描述）版权归游戏方所有，不在此授权范围内。`data/zh_hant.json` 是用 OpenCC 词典的全部条目生成的简体转繁体对照表，按 Apache-2.0 提供（出处见第六节），不按 CC BY-SA 4.0 授权。
 
 ## 五、免责声明
 
@@ -49,7 +49,7 @@
 4. **推荐仅供参考**：推荐依据公开的游戏资料和本工具的规则估算，可能与游戏实际情况不符。按推荐选择不保证获胜，也不保证取得任何特定结果。
 5. **不作担保**：本工具按现状提供，不作任何明示或默示的担保。在适用法律允许的最大范围内，作者不对因使用或无法使用本工具造成的任何损失承担责任，包括但不限于账号受到处罚、游戏内资产损失、数据丢失。
 6. **获取渠道**：拾星助手免费发布，官方下载只有两处：下载镜像 <https://dl.astral-chip-compass.com/ACC-latest.zip> ，GitHub 上的发布页面 <https://github.com/s1nan-dev/astral-chip-compass/releases> ；源代码在 <https://github.com/s1nan-dev/astral-chip-compass> 。付费获得的版本、来路不明的修改版都不是官方发布的，可能被植入恶意程序，请只从上面的地址下载。
-7. **隐私**：截图只在本机识别，不上传。联网只有两项：从吉星派对 WIKI 下载识别用的图片；检查和下载新版本（连接下载镜像 dl.astral-chip-compass.com 和 GitHub，启动时的自动检查可以在「拾星助手设置」中关掉）。详见使用说明的「隐私」一节。
+7. **隐私**：截图只在本机识别，不上传。联网有三项：从吉星派对 WIKI 下载识别用的图片；检查和下载新版本（连接下载镜像 dl.astral-chip-compass.com 和 GitHub，启动时的自动检查可以在「拾星助手设置」中关掉）；发送对局报告（筹码三选一的局面、推荐和您的选择等，不含截图和玩家名字，用于改善推荐准确度；默认开启，可以在「拾星助手设置」最下面关掉）。详见使用说明的「隐私」一节。
 8. **联系**：游戏方如对本工具有异议，请通过项目主页联系作者。
 
 下载、安装或使用本工具，即表示您已阅读并同意本声明。
@@ -70,17 +70,22 @@ app 文件夹里的 ACC.exe（程序本体）由 [Nuitka](https://nuitka.net/) �
 | ONNX Runtime | 1.30.0 | MIT 及附带组件的许可证（另附官方构建的遥测说明 Privacy.md；本工具在识别前关闭遥测） | `LICENSES/onnxruntime.txt` |
 | RapidOCR | 3.9.2 | Apache-2.0（随发行版的是按 3.9.2 修改的精简版 `rapidocr_lite`，改了什么见 `LICENSES/RapidOCR.txt`） | `LICENSES/RapidOCR.txt`、`Apache-2.0.txt` |
 | PaddleOCR 模型（PP-OCRv6 检测与识别、方向分类） | 随 RapidOCR 3.9.2 | Apache-2.0 | `LICENSES/PaddleOCR-models.txt`、`Apache-2.0.txt` |
+| OpenCC 简体转繁体词典（`data/zh_hant.json`） | 1.4.2 | Apache-2.0（收词典的全部条目，条目内容未改） | `LICENSES/OpenCC.txt`、`Apache-2.0.txt` |
 | NumPy（含 LAPACK、libdivide、Highway、x86-simd-sort、掩码数组 numpy.ma 等） | 2.5.3 | BSD-3-Clause 及附带组件的许可证 | `LICENSES/NumPy.txt` |
 | python-mss | 10.2.0 | MIT | `LICENSES/mss.txt` |
 | pyclipper / Clipper | 1.4.0 | MIT / BSL-1.0 | `LICENSES/pyclipper.txt` |
 | 思源黑体 Heavy（按界面用到的字做的子集，字体名改为 ACC Heading） | 2.005 | SIL OFL 1.1 | `LICENSES/SourceHanSans-OFL.txt` |
 | 思源黑体 Bold（按界面用到的字做的子集，字体名改为 ACC Title） | 2.005 | SIL OFL 1.1 | `LICENSES/SourceHanSans-OFL.txt` |
+| 思源黑体繁体中文 Heavy（按界面用到的字做的子集，字体名改为 ACC Heading） | 2.005 | SIL OFL 1.1 | `LICENSES/SourceHanSans-OFL.txt` |
+| 思源黑体繁体中文 Bold（按界面用到的字做的子集，字体名改为 ACC Title） | 2.005 | SIL OFL 1.1 | `LICENSES/SourceHanSans-OFL.txt` |
 
 ### 字体（思源黑体）
 
-- `fonts` 文件夹里的 `ACCHeading-Heavy.otf`（界面标题、页签和按钮用的字体）：取自 Adobe 的思源黑体（Source Han Sans）2.005 简体中文 Heavy，只保留了界面上用到的字（按 SIL Open Font License 1.1 授权，许可证全文和版权声明见 `LICENSES/SourceHanSans-OFL.txt`）。
-- `fonts` 文件夹里的 `ACCTitle-Bold.otf`（界面标题用的字体）：取自同一版本思源黑体的简体中文 Bold，同样只保留了界面上用到的字，许可证同上。
-- 思源黑体的许可证保留了字体名「Source」，改动过的字体不能再用这个名字，所以这两个子集的字体名分别改为「ACC Heading」「ACC Title」。子集同样按 SIL OFL 1.1 提供，不单独出售。
+- `fonts` 文件夹里的 `ACCHeading-Heavy.otf`（简体界面：标题、页签和按钮用的字体）：取自 Adobe 的思源黑体（Source Han Sans）2.005 简体中文 Heavy，只保留了界面上用到的字（按 SIL Open Font License 1.1 授权，许可证全文和版权声明见 `LICENSES/SourceHanSans-OFL.txt`）。
+- `fonts` 文件夹里的 `ACCTitle-Bold.otf`（简体界面：标题用的字体）：取自同一版本思源黑体的简体中文 Bold，同样只保留了界面上用到的字，许可证同上。
+- `fonts` 文件夹里的 `ACCHeadingTC-Heavy.otf`（繁体界面：标题、页签和按钮用的字体）：取自同一版本思源黑体的繁体中文Heavy，只保留了界面上用到的字（含简体子集的字和繁体界面会用到的字），许可证同上。
+- `fonts` 文件夹里的 `ACCTitleTC-Bold.otf`（繁体界面：标题用的字体）：取自同一版本思源黑体的繁体中文Bold，同样只保留了界面上用到的字，许可证同上。
+- 思源黑体的许可证保留了字体名「Source」，改动过的字体不能再用这个名字，所以简体、繁体的两个子集的字体名都改为「ACC Heading」「ACC Title」（字体名相同，程序只按界面语言装不同的文件）。子集同样按 SIL OFL 1.1 提供，不单独出售。
 - 原字体的下载地址：<https://github.com/adobe-fonts/source-han-sans/releases>
 
 ### LGPL 组件（Qt、PySide6）
@@ -94,6 +99,12 @@ app 文件夹里的 ACC.exe（程序本体）由 [Nuitka](https://nuitka.net/) �
 
 - 发行版里的文字识别组件是 `rapidocr_lite`：根据 RapidAI 的 RapidOCR 3.9.2 修改而来的精简版，按 Apache-2.0 授权（许可证全文见 `LICENSES/Apache-2.0.txt`，出处和改了什么见 `LICENSES/RapidOCR.txt`），编在 ACC.exe 里。按 Apache-2.0 第 4 条（b），源代码里改过的文件开头都写明了出处和改动，逐个文件的说明见源代码中的 `rapidocr_lite/NOTICE.md`（源代码地址见第四节）。
 - 识别模型（PP-OCRv6 检测与识别、方向分类）随发行版附在程序目录的 `models` 文件夹里，来自 PaddleOCR，许可证见 `LICENSES/PaddleOCR-models.txt`。识别全靠本机计算，不联网。
+
+### 简体转繁体词典（OpenCC）
+
+- `data/zh_hant.json` 是界面文字从简体转繁体用的对照表，按 Apache-2.0 授权（许可证全文见 `LICENSES/Apache-2.0.txt`，出处和整理方式见 `LICENSES/OpenCC.txt`）。
+- 内容从 OpenCC 1.4.2（<https://github.com/BYVoid/OpenCC>）的 STPhrases、STCharacters、TWPhrases、TWVariantsPhrases、TWVariants 五份词典的全部条目合成一个 JSON 文件；条目内容未改，只改了组织方式和文件格式。版权归 OpenCC 的作者和贡献者。同一个文件里的 `names`（资料库里的繁体名）和 `char_defaults`（常用字的默认写法）两项由本工具整理，不是 OpenCC 的内容。
+- `data/zh_hant_extra.toml` 里的补充词组由本工具编写，不是 OpenCC 的内容。
 
 ### Nuitka
 

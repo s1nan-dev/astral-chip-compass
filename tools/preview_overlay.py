@@ -45,6 +45,10 @@
   --download-few N      个别图片下不了：N 张下载失败，其余识别照常、明天会自动再试（带「重试」和「关闭本条提示」）
   --download-few-later N  同 --download-few，失败的里面混着 wiki 上已删除、写不进等别的原因：写「之后会自动再试」
   --calibrate           推荐日志已满 20 局
+  --ocr-check 种类       性能自检那一条：running 正在量、good 良好、fair 一般、poor 较差、slow 太慢量不完、noisy 量不准、error 出错；
+                        带查到的原因的 poor_small（能替玩家改，「是」「否」）、fair_small（一般、排在小核上，同样问）、
+                        poor_ac（只能玩家自己做）、poor_two（两条）、slow_unknown（都没查到）、noisy_busy；
+                        点了以后的 fixed、lowend_on、fix_failed
   --unsupported 宽度     不支持的情况：游戏窗口过小（「识别」卡片里的警告行）
   --teammates           队友（悬停说明里）
   --collapse 卡片,卡片   收起这几张卡片（recog 识别 / advice 推荐 / owned 已有筹码），等于点了卡片头的折叠按钮（▾）
@@ -73,6 +77,7 @@
                         例如「被金色上位替代」、对比行「比紫色多」、推荐度「%」（文件名加 _hovertext，写多次时加序号）
   --settings            另存「拾星助手设置」窗口（识别模式、识别热键、低配模式、悬浮窗背景、诊断与说明；按直接截取画，没有
                         「识别画面」一项，截取屏幕时才有；文件名加 _settings）
+  --big-cores           配 --settings：按有大小核的电脑画（多「只用大核」那一项；处理器名称写 SAMPLE_CPU，按没有自检记录写）
   --hover-live          另存悬停在「推荐」卡片三选一内容空白处（首推那一行筹码名按钮的右边）的样子，悬停说明是整块内容的
                         说明（wording.LIVE_TIP；文件名加 _hoverlive）
   这几种悬停说明在 offscreen 平台上用 Qt 自己的悬停说明控件画（宽度、换行和实际一样）；其他平台上为了不弹出窗口，
@@ -113,6 +118,7 @@ from PySide6.QtCore import QEvent, QPoint, QRect, Qt  # noqa: E402
 from PySide6.QtGui import QColor, QGuiApplication, QImage, QPainter, QPixmap  # noqa: E402
 from PySide6.QtWidgets import QAbstractButton, QApplication, QLabel, QToolTip, QWidget  # noqa: E402
 
+from advisor import sysinfo  # noqa: E402
 from advisor.data import HARD, NORMAL, load_db  # noqa: E402
 from advisor.paths import temp_dir  # noqa: E402
 from advisor.session import Event, split_extra  # noqa: E402
@@ -121,10 +127,12 @@ from advisor.ui.overlay import Overlay
 from advisor.ui.overlay_parts.app import OverlaySession, UiSettings
 from advisor.ui.hotkey import busy_text
 from advisor.ui.overlay_parts.geometry import fit_rect, live_placement, rel_point
+from advisor.ui.overlay_parts.ocr_check import OcrNote
 from advisor.ui.services import Services  # noqa: E402
 from advisor.ui.text import chip_tip  # noqa: E402
 from advisor.ui.widgets import Pill  # noqa: E402
 from advisor.vision import read_chip_select  # noqa: E402
+from advisor.vision.ocr_reason import Reason  # noqa: E402
 
 PIPELINE_STEP = 4.0  # --pipeline：帧与帧之间按几秒算（比读轮次的间隔长，每帧都读一次轮次）
 PIPELINE_HOLD = 2  # --pipeline：每张截图喂几帧（轮次大幅跳变要连续读到两次才采用）
@@ -276,6 +284,26 @@ SCENARIOS = [
      f" --owned {al_owned(5)},肾上腺素-高效 --hover-reason 冲突"),
 ]
 UNRECORDED_NAME = "星辰回响徽记"  # --unrecorded：模拟游戏更新后资料库还没收录的新筹码
+SAMPLE_CPU = "13th Gen Intel Core i9-13980HX"  # --big-cores：「只用大核」一项写的处理器名称（举例，8 大核 16 小核）
+# --ocr-check：性能自检那一条的几种样子（秒数、毫秒是举例）
+OCR_NOTES = {
+    "running": OcrNote("running", left=8), "good": OcrNote("good", threads=4, ms=222),
+    "fair": OcrNote("fair", threads=4, ms=620), "poor": OcrNote("poor", threads=4, ms=1240),
+    "slow": OcrNote("slow", threads=4, retry=True), "noisy": OcrNote("noisy", threads=4, retry=True),
+    "error": OcrNote("error", threads=4, retry=True),
+    "poor_small": OcrNote("poor", threads=4, ms=1240,
+                          reasons=(Reason("small_core", "big_cores", {"big": 8, "small": 16, "ratio": 2.0}),)),
+    "fair_small": OcrNote("fair", threads=8, ms=400,
+                          reasons=(Reason("small_core", "big_cores", {"big": 8, "small": 16, "ratio": 2.0}),)),
+    "poor_ac": OcrNote("poor", threads=4, ms=1240, retry=True, reasons=(Reason("no_ac", values={"perf": 45}),)),
+    "poor_two": OcrNote("poor", threads=4, ms=1240,
+                        reasons=(Reason("others_busy", values={"percent": 70, "with_game": True}),
+                                 Reason("small_core", "big_cores", {"big": 8, "small": 16, "ratio": 2.0}))),
+    "slow_unknown": OcrNote("slow", threads=4, reasons=(Reason("unknown", "lowend"),)),
+    "noisy_busy": OcrNote("noisy", threads=4, retry=True,
+                          reasons=(Reason("others_busy", values={"percent": 70, "with_game": False}),)),
+    "fixed": OcrNote("fixed"), "lowend_on": OcrNote("lowend_on"), "fix_failed": OcrNote("fix_failed"),
+}
 
 ABOUT = [
     ("版本", "拾星助手 0.0.0（预览）"),
@@ -340,6 +368,10 @@ def _set_assets_state(window: Overlay, state: tuple, blocked: bool = False) -> N
     window.background.assets_state = state
     if blocked:
         window.background.blocked = True
+
+
+def _set_ocr_note(window: Overlay, note: OcrNote) -> None:
+    window.ocr_check.notice = lambda: note
 
 
 def _set_activity(window: Overlay, activity: str) -> None:
@@ -438,6 +470,7 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--download-few", type=int)
     ap.add_argument("--download-few-later", type=int)
     ap.add_argument("--calibrate", action="store_true")
+    ap.add_argument("--ocr-check", choices=sorted(OCR_NOTES))
     ap.add_argument("--unsupported")
     ap.add_argument("--teammates", action="store_true")
     ap.add_argument("--collapse", default="")
@@ -459,6 +492,7 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--hover-status")
     ap.add_argument("--hover-text", action="append", default=[])
     ap.add_argument("--settings", action="store_true")
+    ap.add_argument("--big-cores", action="store_true")
     ap.add_argument("--hover-live", action="store_true")
     ap.add_argument("--offscreen", action="store_true")
     ap.add_argument("--native", action="store_true")
@@ -905,6 +939,9 @@ def build(args, db, read=None, show: bool | None = None) -> Built:
     if args.calibrate:
         window.notices.check_calibration()
         window.refresh()
+    if args.ocr_check:
+        _set_ocr_note(window, OCR_NOTES[args.ocr_check])
+        window.refresh()
     if args.expanded:
         window.set_expanded(True)
     if args.paused:
@@ -957,7 +994,14 @@ def shots(built: Built, args, db) -> list[Shot]:
         suffix = "_hovertext" if len(args.hover_text) == 1 else f"_hovertext{i}"
         out.append(Shot(suffix, text_hover_image(window, pixmap, query), kind="hover"))
     if args.settings:
-        out.append(settings_shot(window))
+        actual, actual_label = sysinfo.has_big_cores, sysinfo.cpu_label
+        if args.big_cores:  # 跑这个工具的电脑不一定有大小核：处理器名称也换成有大小核的，不写这台电脑的
+            sysinfo.has_big_cores = lambda: True
+            sysinfo.cpu_label = lambda: SAMPLE_CPU
+        try:
+            out.append(settings_shot(window))
+        finally:
+            sysinfo.has_big_cores, sysinfo.cpu_label = actual, actual_label
     if args.hover_live:
         out.append(Shot("_hoverlive", live_hover_image(window, pixmap), kind="hover"))
     if args.in_game:

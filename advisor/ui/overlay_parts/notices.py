@@ -1,9 +1,9 @@
 """提示行：新一局（撤销）、截取方式、不支持的情况、皮肤解锁、打开「查看筹码」面板、补录、移出筹码（撤销）、热键不可用、
-方案文件和个人目录、图片下载、校准、诊断包、软件内更新（update_rows）、第一次启动的「免费软件」声明，以及这次运行里一直
-留着的三条（识别已停止、DPI 设置被改过、程序文件夹写不进）。
+方案文件和个人目录、图片下载、校准、诊断包、性能自检（ocr_check_row）、软件内更新（update_rows）、第一次启动的「免费软件」
+声明，以及这次运行里一直留着的三条（识别已停止、DPI 设置被改过、程序文件夹写不进）。
 
 两层：NoticeModel 记着这些提示的状态（哪几条用户关掉了、要显示的几样），rows 按状态排出这一轮的各行
-（（键, 文字, 级别, [(按钮文字, 强调色, 动作, 悬停说明)]），级别 action 时边框变色），不碰 Qt，也不读 Session；按钮的动作写成
+（（键, 文字, 级别, [(按钮文字, 强调色, 动作, 悬停说明)]），级别 action 时边框变色，ok 时绿字），不碰 Qt，也不读 Session；按钮的动作写成
 名字，点了做什么由 NoticeView 接（NoticeView.action）。NoticeView 把各行排进搭界面时建好的几块（NOTICE_AREA：标题栏下方、
 各卡片），内容没变时不重建；用户关掉一条时改状态、记识别记录、刷新；启动时的几项检查（check_*）也在这里。
 """
@@ -22,9 +22,19 @@ from PySide6.QtWidgets import QLabel, QPushButton
 from ... import paths as app_paths
 from ...paths import logs_dir
 from ...schemes import NOTICE_BROKEN, NOTICE_NEWER, NOTICE_USED_BACKUP
-from .. import log_error
+from .. import lang, log_error
 from ..text import DENIED_CODE, capture_detail, link_style, linkify
-from .factory import _button, _clear_layout, _column_widget, _fill_grid, _grid, _row_widget, _set_tip
+from .factory import (
+    WrapLabel,
+    _button,
+    _clear_layout,
+    _column_widget,
+    _equal_width,
+    _fill_grid,
+    _grid,
+    _row_widget,
+    _set_tip,
+)
 from .wording import (
     ABOUT_LINK,
     ASSETS_TIP,
@@ -63,12 +73,31 @@ from .wording import (
     FREE_NOTICE_RISK,
     GAIN_TEXT,
     GAIN_WHY,
+    HANT_NOTICE_TEXT,
+    HANT_STAY,
+    HANT_STAY_TIP,
+    HANT_SWITCH,
+    HANT_SWITCH_TIP,
     HOTKEY_CHANGE,
     HOTKEY_CHANGE_TIP,
+    MAP_SCHEME_REVERT,
+    MAP_SCHEME_REVERT_TIP,
+    MAP_SCHEME_TEXT,
     NEWGAME_MIDGAME,
     NEWGAME_OWNED,
     NEWGAME_TEXT,
     NOTICE_AREA,
+    OCR_CHECK_AFTER,
+    OCR_CHECK_LEFT,
+    OCR_CHECK_NO,
+    OCR_CHECK_NO_TIP,
+    OCR_CHECK_NOISY_FOUND,
+    OCR_CHECK_RESULT,
+    OCR_CHECK_RUNNING,
+    OCR_CHECK_SOON,
+    OCR_CHECK_TIP,
+    OCR_CHECK_YES,
+    OCR_CHECK_YES_TIP,
     PANEL_TAB,
     PROMPT_PANEL,
     PROMPT_PANEL_RESUME,
@@ -83,7 +112,6 @@ from .wording import (
     UNDO_TIP,
     UPDATE_AVAILABLE,
     UPDATE_AVAILABLE_MANUAL,
-    UPDATE_DONE,
     UPDATE_LATER,
     UPDATE_LATEST,
     UPDATE_MANUAL,
@@ -91,12 +119,17 @@ from .wording import (
     UPDATE_NOTES,
     UPDATE_PREPARING,
     UPDATE_READY,
+    UPDATE_READY_WAIT,
+    UPDATE_READY_WINDOWS,
     UPDATE_RESTART,
+    UPDATE_RESTARTING,
     UPDATE_SKIP,
     UPDATE_START,
     UPDATE_STOP,
+    ocr_reason_text,
     short_path,
     update_date_text,
+    update_done_text,
     update_download_text,
     update_failed_text,
     update_size_text,
@@ -155,6 +188,15 @@ def dpi_program() -> str:
         return str(exe)
 
 
+def shown_keeping(text: str, keep) -> str:
+    """提示行的文字、悬停说明按界面语言转（lang.t），其中 keep 里的几段（诊断包、推荐日志所在的完整路径）原样：路径里的
+    汉字转了就不是那个文件夹了。keep 里的空串不算。"""
+    for part in keep:
+        if part and part in text:
+            return part.join(shown_keeping(piece, keep) for piece in text.split(part))
+    return lang.t(text)
+
+
 def notice_html(text: str, about: bool = False) -> str | None:
     """提示行做成链接的写法（富文本）：文字里的网址变成能点的链接（text.linkify，交给系统默认浏览器）；about 为真时（第一次
     启动的「免费软件」声明那一行）最后一处「关于」（FREE_NOTICE_LINK）也做成同样带底色的链接，地址是 ABOUT_LINK（不是网址，
@@ -191,9 +233,11 @@ def folder_text(folder) -> str:
         return str(folder)
 
 
-# 按钮排在文字下面的提示行：按钮多于两个的都这样排；键在这里的有两个按钮时也这样排（软件内更新那一条的文字较长，两个按钮跟在
-# 右边时文字挤成三四行）
-STACKED_NOTICES = frozenset({"update"})
+# 按钮排在文字下面的提示行：按钮多于两个的都这样排；键在这里的有两个按钮时也这样排（软件内更新那一条、性能自检问「是否允许」
+# 那一条的文字较长，两个按钮跟在右边时文字挤成很多行）
+STACKED_NOTICES = frozenset({"update", "ocr_check"})
+# 两个按钮一样宽的提示行：按钮只有一个字时（〔换〕〔不换〕〔是〕〔否〕）也要好点，宽度见 factory._equal_width
+EQUAL_WIDTH_NOTICES = frozenset({"hant", "ocr_check"})
 
 
 def update_rows(notices) -> list[tuple]:
@@ -202,8 +246,11 @@ def update_rows(notices) -> list[tuple]:
     - 有新版本：「更新」「看看改了什么」「跳过这个版本」「以后再说」；这一版只能手动下载时「更新」换成「手动下载」；这一版有
       文件清单（只下变了的部分）时大小写成上限（update_size_text）；
     - 下载中（比对本机的文件、只下变了的部分、下整包各一句，update_download_text）：「停止」；解压核对中：没有按钮；
-      下好了：「重启更新」「关闭本条提示」；
-    - 出错：⚠ 橙色，「手动下载」「关闭本条提示」；已经是最新、刚换上新版本：「关闭本条提示」。
+    - 下好了：这次点了「更新」下好的（UpdateNotice.restart）写马上重启、等对局结束再重启或等拾星助手的其他窗口关掉再重启，
+      没有按钮（自己会重启）；上次已
+      下好的那一版：「重启更新」「关闭本条提示」；
+    - 出错：⚠ 橙色，「手动下载」「关闭本条提示」；已经是最新：「关闭本条提示」；刚换上新版本：这一版的主要改动列在那一句
+      下面（update_done_text），「关闭本条提示」。
     都不让边框变色（不是 action）。按钮的动作名由外壳接到 UpdateControl 的方法上（Overlay._update_actions）。"""
     rows = []
     close = (DISMISS, "", "update_close", "关闭本条提示")
@@ -211,7 +258,7 @@ def update_rows(notices) -> list[tuple]:
         kind, version = note.kind, note.version
         manual = (UPDATE_MANUAL[0], "primary", "update_manual", UPDATE_MANUAL_PAGE if note.page else UPDATE_MANUAL[1])
         if kind == "updated":
-            rows.append(("updated", UPDATE_DONE.format(version=version), "info",
+            rows.append(("updated", update_done_text(version), "info",
                          [(DISMISS, "", "update_close_done", "关闭本条提示")]))
         elif kind == "available":
             date_text, size = update_date_text(note.data_date), update_size_text(note.size, note.delta)
@@ -231,6 +278,12 @@ def update_rows(notices) -> list[tuple]:
                          [(UPDATE_STOP[0], "", "update_stop", UPDATE_STOP[1])]))
         elif kind == "preparing":
             rows.append(("update", UPDATE_PREPARING.format(version=version), "info", []))
+        elif kind == "ready" and note.restart == "soon":
+            rows.append(("update", UPDATE_RESTARTING.format(version=version), "info", []))
+        elif kind == "ready" and note.restart == "wait":
+            rows.append(("update", UPDATE_READY_WAIT.format(version=version), "info", []))
+        elif kind == "ready" and note.restart == "windows":
+            rows.append(("update", UPDATE_READY_WINDOWS.format(version=version), "info", []))
         elif kind == "ready":
             rows.append(("update", UPDATE_READY.format(version=version), "info", [
                 (UPDATE_RESTART[0], "primary", "update_restart", UPDATE_RESTART[1]), close,
@@ -241,6 +294,32 @@ def update_rows(notices) -> list[tuple]:
         elif kind == "latest":
             rows.append(("update", UPDATE_LATEST.format(version=version), "info", [close]))
     return rows
+
+
+# 性能自检的结果各用什么级别：良好绿字，性能差的 ⚠ 橙色，其余按说明（都不让边框变色，不用玩家马上操作）
+OCR_CHECK_LEVEL = {"good": "ok", "fair": "info", "poor": "warn", "slow": "warn", "noisy": "info", "error": "info",
+                   "fixed": "info", "lowend_on": "info", "fix_failed": "info"}
+
+
+def ocr_check_row(note) -> tuple:
+    """性能自检那一行：note 是 OcrCheck.notice 给的 OcrNote。量的时候绿字、没有按钮，标剩余时间（快到点时不写秒数）；量完是
+    结果，读一次的秒数写到小数点后一位、最少写 0.1，查到原因时后面接原因和建议做法（ocr_reason_text）。查到能替玩家改的
+    （note.offer）带「是」「否」，排在文字下面、一样宽；其余带「关闭本条提示」。"""
+    if note.kind == "running":
+        left = OCR_CHECK_LEFT.format(n=note.left) if note.left > 1 else OCR_CHECK_SOON
+        return ("ocr_check", OCR_CHECK_RUNNING.format(left=left), "ok", [])
+    level = OCR_CHECK_LEVEL[note.kind]
+    close = [(DISMISS, "", "dismiss_ocr_check", "关闭本条提示")]
+    if note.kind in OCR_CHECK_AFTER:
+        return ("ocr_check", OCR_CHECK_AFTER[note.kind], level, close)
+    result = OCR_CHECK_NOISY_FOUND if note.kind == "noisy" and note.reasons else OCR_CHECK_RESULT[note.kind]
+    text = (result.format(threads=note.threads, seconds=f"{max(note.ms, 100) / 1000:.1f}")
+            + ocr_reason_text(note.reasons, note.retry))
+    buttons = close
+    if note.offer:
+        buttons = [(OCR_CHECK_YES, "primary", "ocr_check_accept", OCR_CHECK_YES_TIP[note.offer]),
+                   (OCR_CHECK_NO, "", "ocr_check_decline", OCR_CHECK_NO_TIP)]
+    return ("ocr_check", "⚠ " + text if level == "warn" else text, level, buttons)
 
 
 # 发行版下载的识别图片这次退回了程序文件夹（paths.download_fallback）时错误记录里的一条（不另出提示）：{reason} 是原因（同诊断包，
@@ -255,7 +334,9 @@ DOWNLOAD_DIR_TITLE = "下载的识别图片的文件夹写不进（拾星助手�
 class NoticeModel:
     """提示行的状态和排法。状态只在界面线程里改（事件、用户点了按钮）；rows 只读这些状态和传进来的几样。"""
 
-    def __init__(self):
+    def __init__(self, lane_only: bool = False):
+        # 第二张悬浮窗只显示本局的提示和「识别已停止」：全局提示（更新、下载、目录、热键、免费声明等）只在第一张上
+        self.lane_only = bool(lane_only)
         self.schemes_closed = False  # 方案文件读取结果的提示：用户关掉后这次运行不再显示
         self.storage_closed = False  # 个人目录存不进的提示：同上（只显示一次）
         self.storage_reason = None  # paths.storage_fallback() 最近的结果
@@ -299,7 +380,7 @@ class NoticeModel:
 
     def rows(self, view, *, live: bool, reverted_chip: str, capture, unlocked, schemes: str, assets,
              calibrate_games: int, folder: str, images_personal: bool = False, hotkey: str = "",
-             update=()) -> list[tuple]:
+             update=(), chip_name=None, hant: bool = False, ocr_note=None) -> list[tuple]:
         """按当前状态排出提示行：（键, 文字, 级别, [(按钮文字, 强调色, 动作, 悬停说明)]）。级别 action 时边框变色。
 
         view 是这一轮的快照（本局已结束、不支持的情况、待补录的个数），live 为三选一显示着，reverted_chip 为同一组候选再次出现
@@ -307,10 +388,14 @@ class NoticeModel:
         [(编号, 文字, 键)]，schemes 为方案文件读取结果的提示（schemes_notice），assets 为图片下载的状态，calibrate_games
         为提示校准的局数，folder 为个人目录的文件夹名，images_personal 为下载的识别图片在个人目录里（发行版平时；开发版、
         个人目录用不了退回程序文件夹时为假），hotkey 为热键不可用的那一句（热键能用时为空），update 为软件内更新的几条
-        （UpdateControl.notices：对局中为空，排法见 update_rows）。
+        （UpdateControl.notices：对局中为空，排法见 update_rows）。hant 为界面是简体、认出游戏是繁体中文、这一轮该显示那一条
+        （对局进行中先不出，由调用的一方判断）：标题栏下方的全局提示，排在「免费软件」声明前面，带〔换〕〔不换〕两个按钮，
+        文字和按钮在显示时才转成繁体，两个按钮一样宽。ocr_note 为性能自检这一轮写什么（OcrNote，排法见 ocr_check_row，
+        没有时为 None；结果那一条对局进行中先不出，由调用的一方判断）：标题栏下方，排在诊断包位置后面、软件内更新前面。
 
         各行放进所属的一块（NOTICE_AREA）：新一局、不支持的情况在「识别」卡片；补录、打开「查看筹码」面板、刚移出的筹码
-        （带「撤销」）在「已有筹码」卡片；同一组候选再次出现在「推荐」卡片；这次运行里一直留着的三条、热键不可用、个人目录存不进、
+        （带「撤销」）在「已有筹码」卡片；这一局按地图换用了方案（带「换回原来的」）在「筹码方案」卡片；同一组候选再次出现在
+        「推荐」卡片；这次运行里一直留着的三条、热键不可用、个人目录存不进、
         方案文件读取的结果、图片下载、校准、诊断包位置、第一次启动时的「免费软件」声明在标题栏下方。
         一直留着的三条排在全局提示的最前面，按要紧的先后：识别已停止 ＞ DPI 设置被改过 ＞ 程序文件夹写不进（理由见
         wording.RECOG_STOPPED 那一段），热键不可用（带「更换热键」）紧跟在它们后面。图片下载失败的全是写盘出错时（assets 的
@@ -325,10 +410,12 @@ class NoticeModel:
         同样只有「重试」。下载被站点防护拦下、冷却期间（assets 为 ("blocked", 还没下载的张数, 这一轮下好的张数, 几点几分接着
         下)），下载那一行写明几点几分自动接着下（DOWNLOAD_BLOCKED，「重试」只试一张）。
         「免费软件」声明排在全局提示的最后：它是说明、不用操作（级别 info，边框不变色），一直留到点「关闭本条提示」，
-        和这次使用有关的几条（存不进个人目录、方案文件读坏、图片下载进度和失败、校准、诊断包位置、软件内更新）排在它前面。
+        和这次使用有关的几条（存不进个人目录、方案文件读坏、图片下载进度和失败、校准、诊断包位置、软件内更新、认出繁体游戏
+        时问要不要换界面）排在它前面。
         本局已结束时不显示只对进行中的对局有意义的两类：打开「查看筹码」面板（含切到自己的页签）、星数增加需补录。
         """
         over = view.game_over
+        shown = chip_name or (lambda name: name)  # 「reverted_chip」「self.removed」是按简体记下的，显示时换
         rows = []
         undo_btn = ("撤销", "primary", "undo", UNDO_TIP)
         midgame = self.midgame()
@@ -355,7 +442,7 @@ class NoticeModel:
             text = PROMPT_PANEL_RESUME if self.panel_resume else PROMPT_PANEL
             rows.append(("panel", text, "action", [ignore_panel]))
         if reverted_chip and live:
-            rows.append(("reverted", REVERTED_NOTICE.format(chip=reverted_chip), "info", []))
+            rows.append(("reverted", REVERTED_NOTICE.format(chip=shown(reverted_chip)), "info", []))
         gain = 0 if over else max(int(view.unrecorded), 0)
         if gain:
             n = f" {gain} 个筹码" if gain > 1 else ""
@@ -366,8 +453,15 @@ class NoticeModel:
             ]))
         if self.removed:
             # 刚用小卡片的「×」移出的筹码：只作说明（边框不变色），「撤销」把它放回（外壳的 undo_remove）
-            rows.append(("removed", REMOVED_TEXT.format(chip=self.removed), "info", [
-                (REMOVE_UNDO, "primary", "undo_remove", REMOVE_UNDO_TIP.format(chip=self.removed)),
+            rows.append(("removed", REMOVED_TEXT.format(chip=shown(self.removed)), "info", [
+                (REMOVE_UNDO, "primary", "undo_remove", REMOVE_UNDO_TIP.format(chip=shown(self.removed))),
+            ]))
+        if view.map_switched:
+            # 这一局按地图换着方案：只作说明（边框不变色），「换回原来的」交给外壳（Overlay.revert_map_scheme：换回、重算、
+            # 提示、打标记都在那里）。方案名照这一轮的快照写（不持锁另读 Session）；地图不换了、本局结束、新的一局时收起
+            rows.append(("map_switch", MAP_SCHEME_TEXT.format(name=view.scheme_name), "info", [
+                (MAP_SCHEME_REVERT, "primary", "revert_map_scheme",
+                 MAP_SCHEME_REVERT_TIP.format(name=view.saved_scheme_name)),
             ]))
         # 这次运行里一直留着的三条：全局提示的最前面，⚠ 橙色，没有按钮，边框不变色
         write_failed = assets is not None and assets[0] == "failed" and len(assets) > 3 and assets[3] == "write"
@@ -432,9 +526,20 @@ class NoticeModel:
                 (EXPORT_OPEN, "", "open_export", tip),
                 (DISMISS, "", "close_export", "关闭本条提示"),
             ]))
+        if ocr_note is not None:
+            rows.append(ocr_check_row(ocr_note))
         rows += update_rows(update)
+        if hant:
+            # 认出的游戏是繁体中文、界面还是简体：排在「免费软件」声明前面，文字和按钮在显示时才转成繁体
+            rows.append(("hant", HANT_NOTICE_TEXT, "info", [
+                (HANT_SWITCH, "primary", "switch_hant", HANT_SWITCH_TIP),
+                (HANT_STAY, "", "dismiss_hant", HANT_STAY_TIP),
+            ]))
         if self.free_notice:
             rows.append(("free", self.free_notice, "info", [(DISMISS, "", "dismiss_free", "关闭本条提示")]))
+        if self.lane_only:
+            rows = [row for row in rows
+                    if self.area(row[0]) != "global" or re.sub(r"\d+$", "", row[0]) == "stopped"]
         return rows
 
     def tips(self, *, logs: str, assets_folder: str, capture, assets=None, assets_personal: bool = False) -> dict[str, str]:
@@ -469,6 +574,7 @@ class NoticeModel:
             "export": self.export_zip or self.export_path or "",
             "assets": (ASSETS_TIP if assets_personal else ASSETS_TIP_PROGRAM).format(folder=assets_folder) + after,
             "capture": capture[1] if capture is not None else "",
+            "ocr_check": OCR_CHECK_TIP,
         }
 
     def area(self, key: str) -> str:
@@ -498,9 +604,10 @@ class NoticeView:
 
     def __init__(self, *, model: NoticeModel, boxes: dict, session, lock, store, services, live, calibrate_games: int,
                  capture_state, capture_method, trace_user, refresh, unlocked, dismiss_unlock, assets, actions: dict,
-                 hotkey_problem=None, update_notices=None, notice_width=None):
+                 hotkey_problem=None, update_notices=None, notice_width=None, chip_name=None, playing=None, ocr_note=None):
         self.model = model
-        # 控件：各块放提示行的框（global 标题栏下方、recog_top / recog「识别」卡片、advice、owned，键同 NOTICE_AREA 的值）
+        # 控件：各块放提示行的框（global 标题栏下方、recog_top / recog「识别」卡片、advice、owned、scheme「筹码方案」卡片，
+        # 键同 NOTICE_AREA 的值）
         self.boxes = boxes
         # 服务：Session 和它的锁、方案存储、可选模块（services() 每次现取）；只读的显示状态：三选一显示期间的状态（live）
         self.session, self.lock, self.store, self.services, self.live = session, lock, store, services, live
@@ -511,8 +618,9 @@ class NoticeView:
         self.trace_user, self.refresh = trace_user, refresh
         self.unlocked, self.dismiss_unlock, self.assets = unlocked, dismiss_unlock, assets
         # 提示行按钮里不在这里处理的几个动作（rows 里写的名字 → 点了调用的方法）：撤销新一局（undo）、补录（add）、重试下载
-        # （retry_download）、关掉个别图片下不了的那一行（dismiss_download）、放回刚移出的筹码（undo_remove）、更换热键
-        # （change_hotkey），软件内更新那几条的按钮（update_ 开头的几个，接到 UpdateControl 上），以及「免费软件」声明里
+        # （retry_download）、关掉个别图片下不了的那一行（dismiss_download）、放回刚移出的筹码（undo_remove）、按地图换着时
+        # 换回保存的方案（revert_map_scheme）、更换热键（change_hotkey），软件内更新那几条的按钮（update_ 开头的几个，接到
+        # UpdateControl 上），以及「免费软件」声明里
         # 「关于」那个链接（open_about）。其余动作（关掉提示、打开诊断包文件夹）就是
         # 这里的同名方法；皮肤解锁那一条另带解锁的是哪一套：("dismiss_unlock", 键)
         self.actions = actions
@@ -522,6 +630,12 @@ class NoticeView:
         # 内容的宽度（notice_width()：按钮排在文字下面的提示行看按钮一行放不放得下，不给时每行两个）
         self.update_notices = update_notices if update_notices is not None else (lambda view: ())
         self.notice_width = notice_width
+        # 显示筹码名（按界面语言换繁体名）：不给时原样显示（测试、预览）
+        self.chip_name = chip_name
+        # 正在玩这一局、又找得到游戏窗口（Overlay._playing）：对局进行中先不显示的就是这一条；不给时按不在玩
+        self.playing = playing if playing is not None else (lambda view: False)
+        # 性能自检这一轮写什么（OcrCheck.notice，没有时为 None）；不给时没有
+        self.ocr_note = ocr_note if ocr_note is not None else (lambda: None)
 
     def storage_state(self):
         """设置和筹码方案存不进个人目录、退回程序文件夹保存的原因（paths.storage_fallback()）；正常时、或 paths 没有这一项
@@ -552,20 +666,30 @@ class NoticeView:
 
     def update(self, view) -> None:
         """按当前状态排出提示行（NoticeModel.rows），内容（含悬停说明）变了时重建各块。文字里有网址的提示行，网址做成能点的
-        链接（用系统默认浏览器打开）；「免费软件」声明里的「关于」也做成链接（notice_html），点了打开「关于」窗口。
-        按钮多于两个的提示行（有新版本的那一条），和 STACKED_NOTICES 里有两个按钮的（更新下好了、更新出错），文字占一行，
-        按钮排在文字下面：一行放得下（notice_width）就排成一行，否则每行两个；其余的按钮跟在文字右边。"""
+        链接（用系统默认浏览器打开）；「免费软件」声明里的「关于」也做成链接（notice_html），点了打开「关于」窗口；其余的
+        按纯文本画（文字里的方案名等照原样显示）。按钮多于两个的提示行（有新版本的那一条），和 STACKED_NOTICES 里有两个按钮的（更新下好了、更新出错、性能自检问是否允许），文字占一行，
+        按钮排在文字下面：一行放得下（notice_width）就排成一行，否则每行两个；其余的按钮跟在文字右边。
+        认出繁体游戏那一条、性能自检的结果在对局进行中（playing）先不显示。"""
         model = self.model
         capture = self.capture()
         personal = self.images_shown()
+        hant = bool(getattr(view, "hant_notice", False)) and not self.playing(view)
+        ocr_note = self.ocr_note()
+        if ocr_note is not None and ocr_note.kind != "running" and self.playing(view):
+            ocr_note = None
         rows = model.rows(view, live=self.live.on, reverted_chip=self.live.reverted_chip, capture=capture,
                           unlocked=self.unlocked(), schemes=schemes_notice(self.store, model.schemes_closed),
                           assets=self.assets(), calibrate_games=self.calibrate_games,
                           folder=getattr(app_paths, "FOLDER_NAME", ""), images_personal=personal is not None,
-                          hotkey=self.hotkey_problem() or "", update=tuple(self.update_notices(view) or ()))
-        tips = model.tips(logs=str(logs_dir()) if model.calibrate_n is not None else "",
-                          assets_folder=personal or app_paths.shown(app_paths.ASSETS_SUBDIR), capture=capture,
+                          hotkey=self.hotkey_problem() or "", update=tuple(self.update_notices(view) or ()),
+                          chip_name=self.chip_name, hant=hant, ocr_note=ocr_note)
+        # 认出繁体游戏那一条在简体界面上显示：文字和按钮这时才转成繁体
+        rows = [self._hant_row(row) if row[0] == "hant" else row for row in rows]
+        logs = str(logs_dir()) if model.calibrate_n is not None else ""
+        tips = model.tips(logs=logs, assets_folder=personal or app_paths.shown(app_paths.ASSETS_SUBDIR), capture=capture,
                           assets=self.assets(), assets_personal=personal is not None)
+        # 悬停说明里的完整路径（诊断包的位置、推荐日志的文件夹）显示时不转
+        paths = (model.export_zip or "", model.export_path or "", logs)
         # 悬停说明也算在内：同一条提示的说明变了（例如截取方式提示的错误代码、出错的步骤）时一并重建
         key = tuple((k, t, lvl, tuple(b[0] for b in btns), tips.get(k, "")) for k, t, lvl, btns in rows)
         model.notices = {r[0]: r for r in rows}
@@ -575,15 +699,21 @@ class NoticeView:
         for notice_box in self.boxes.values():
             _clear_layout(notice_box)
         for name, text, level, btns in rows:
+            text = lang.t(text)
             stacked = len(btns) > 2 or (name in STACKED_NOTICES and len(btns) > 1)
             row, line = _column_widget(6) if stacked else _row_widget(8)
             row.setObjectName(f"notice-{name}")
-            label = QLabel(text)
+            rich = notice_html(text, about=name == "free")
+            # 纯文本的用 WrapLabel：换行时名称、术语和常用双字词不从中间拆开（例如不排成「下次启动拾 / 星助手」），
+            # text() 照旧是原文。带链接的富文本不插字符（会插进网址里），照旧由 Qt 断行
+            label = WrapLabel(text) if rich is None else QLabel(text)
             label.setObjectName(f"notice_{level}")
             label.setWordWrap(True)
             label.setTextInteractionFlags(Qt.NoTextInteraction)  # 不接鼠标按下和拖动，按在文字上也能拖动悬浮窗
-            rich = notice_html(text, about=name == "free")
-            if rich is not None:
+            if rich is None:
+                # 没有链接的照纯文本画：文字里带着方案名这类自己起的名字时，像网页标记的（<b>粗</b>）也照原样显示
+                label.setTextFormat(Qt.PlainText)
+            else:
                 # 网址、「关于」做成能点的链接（带底色，同「关于」窗口）：链接由 open_link 接（网址交给系统默认浏览器，「关于」
                 # 打开「关于」窗口）；自己处理链接的标签不关文字交互，按在链接上照样能点
                 label.setTextFormat(Qt.RichText)
@@ -592,11 +722,12 @@ class NoticeView:
                 label.linkActivated.connect(self.open_link)
                 label.setTextInteractionFlags(Qt.LinksAccessibleByMouse)
             if tips.get(name):
-                _set_tip(label, tips[name])  # 诊断包的路径放得下时照写一行，太长时在「\」处换行（text.tip_lines）
+                # 诊断包的路径放得下时照写一行，太长时在「\」处换行（text.tip_lines）
+                _set_tip(label, shown_keeping(tips[name], paths))
             line.addWidget(label, 0 if stacked else 1)
             buttons = []
             for btn_text, accent, action, tip in btns:
-                btn = _button(btn_text, accent=accent, tip=tip)
+                btn = _button(lang.t(btn_text), accent=accent, tip=lang.t(tip))
                 btn.clicked.connect(lambda _=False, cb=self.action(action): cb())
                 buttons.append(btn)
             grid = None
@@ -607,9 +738,18 @@ class NoticeView:
                 for btn in buttons:
                     line.addWidget(btn, 0, Qt.AlignVCenter)
             self.boxes[model.area(name)].addWidget(row)
+            if name in EQUAL_WIDTH_NOTICES and len(buttons) > 1:
+                _equal_width(buttons)  # 放进悬浮窗以后再量（按悬浮窗的样式表）
             if grid is not None:  # 放进悬浮窗以后再量按钮（按悬浮窗的样式表）
                 _fill_grid(grid, buttons, self.notice_width() if self.notice_width is not None else 0)
             row.show()
+
+    @staticmethod
+    def _hant_row(row: tuple) -> tuple:
+        """一条提示行的文字、按钮文字和悬停说明转成繁体（键、级别、动作名不变）。"""
+        key, text, level, btns = row
+        return (key, lang.to_hant(text), level,
+                [(lang.to_hant(label), accent, action, lang.to_hant(tip)) for label, accent, action, tip in btns])
 
     def action(self, action):
         """提示行按钮的动作 → 点了调用的方法：外壳给的（actions）或这里的同名方法；皮肤解锁那一条另带解锁的是哪一套。"""
@@ -692,6 +832,14 @@ class NoticeView:
             self.session.settings.free_notice_closed = True
             self.session.save()
         self.trace_user("dismiss_free")
+        self.refresh()
+
+    def dismiss_hant(self) -> None:
+        """认出繁体游戏那一条的「不换」：记进设置文件（UiSettings.hant_notice_closed），以后启动不再显示。"""
+        with self.lock:
+            self.session.settings.hant_notice_closed = True
+            self.session.save()
+        self.trace_user("dismiss_hant")
         self.refresh()
 
     def dismiss_capture(self) -> None:
@@ -807,3 +955,9 @@ class NoticeView:
         log_error("「替代高 DPI 缩放行为」被改过，识别会认错（拾星助手仍在运行）",
                   f"本进程的 DPI 感知：{value}（{name}），按每块屏幕的缩放应为 {winapi.DPI_PER_MONITOR}", append=True)
         self.refresh()
+
+
+# 写进错误记录的标题、内容不转（界面是繁体时也照旧写简体）
+HANT_KEEP = ("DOWNLOAD_DIR_TITLE", "DOWNLOAD_FALLBACK_DETAIL", "DOWNLOAD_FALLBACK_TITLE")
+
+lang.localize(globals())

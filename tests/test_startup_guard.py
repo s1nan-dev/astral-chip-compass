@@ -1180,9 +1180,11 @@ class ReadySignalTest(unittest.TestCase):
             return listener
 
         main_mod = sys.modules[overlay_app.main.__module__]
-        session = SimpleNamespace(eventlog=SimpleNamespace(recorder=None), save=lambda force=False: None)
+        session = SimpleNamespace(eventlog=SimpleNamespace(recorder=None), save=lambda force=False: None,
+                                  settings=SimpleNamespace(big_cores=False))
         with mock.patch.object(main_mod, "build", return_value=(app, window, session, threading.Lock())), \
                 mock.patch.object(main_mod, "Watcher"), mock.patch.object(main_mod, "Hotkey"), \
+                mock.patch.object(main_mod, "QTimer"), \
                 mock.patch.object(main_mod, "expected_capture", return_value="window"), \
                 mock.patch.object(main_mod.Services, "load", return_value=None), \
                 mock.patch.object(si, "listen", side_effect=listen), \

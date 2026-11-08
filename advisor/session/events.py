@@ -40,9 +40,10 @@ class Event:
     # advice 给出推荐 / picked 记下拿到的筹码 / idle 三选一界面关闭
     # unreadable 候选筹码读不出（三选一刚出现时、刷新后先等一等，仍读不全才发，见 SelectTracker.hold_frame）
     # missed_pick 三选一界面关了，但始终没看到选中了哪个（offer 是当时的三个候选，请用户补录）
-    # status 角色、轮次、地图、队友、本局难度等有变化 / newgame 检测到新的一局（undo=True：可以撤销；
+    # status 角色、轮次、地图、队友、本局难度等有变化（cause 为 rejoined 时：主菜单结束的那一局又连回来了，见 cause）
+    #   / newgame 检测到新的一局（undo=True：可以撤销；
     #   上一局已结束后的新一局 why 以「上一局已结束，」开头，结算画面结束的那一局之后的 undo=False，
-    #   房间、「匹配成功」画面、奖励画面结束的之后按对局画面、三选一判出的 undo=True、按选角界面判出的 undo=False，
+    #   房间、「匹配成功」画面、奖励画面、主菜单结束的之后按对局画面、三选一判出的 undo=True、按选角界面判出的 undo=False，
     #   见 Session._start_next_game）
     # game_over 本局已结束（why 写明依据，例如「检测到结算画面（异变图书馆、噩梦、12 轮）」「检测到组队房间」）；
     #   结束时的轮次、地图、难度等见 Session.game_over_info
@@ -73,7 +74,8 @@ class Event:
     fixes: list[tuple[str, str]] = field(default_factory=list)  # panel_read：[(原来记下的筹码, 面板上实际的筹码)]
     # newgame：凭哪一类迹象判定的（select 选角界面；round 轮次变小；star 星数变少；hero 角色换了；progress 进度条退回；
     # panel 离开后的面板核对）。选角界面以外的都是对局中途判定的，误判时影响大，悬浮窗按「需要您操作」显示。
-    # 上一局已结束后的新一局：select 选角界面；round 连续两次读到同一个轮次；offer 出现筹码三选一界面
+    # 上一局已结束后的新一局：select 选角界面；round 连续两次读到同一个轮次；offer 出现筹码三选一界面。
+    # status：rejoined 主菜单结束的那一局又连回来了，撤回了那次结束、接着记（offgame.rejoin；悬浮窗回到结束之前的样子）
     cause: str = ""
     # 序号：同一个 Session 发出的事件从 1 起递增（Session._event），先产生的小。悬浮窗据此认出晚到的旧推荐。
     # Session 以外建的事件（识别流程的 status 等）为 0

@@ -3,6 +3,7 @@
   {
    "name": "拳击手套-初级",
    "en": "Boxing Gloves - Basic",
+   "hant": "拳擊手套-初級",
    "rarity": "蓝",
    "icon": "Attack",
    "group": "通用",
@@ -21,6 +22,7 @@
   {
    "name": "拳击手套-中级",
    "en": "Boxing Gloves - Fairly good",
+   "hant": "拳擊手套-中級",
    "rarity": "紫",
    "icon": "Attack",
    "group": "通用",
@@ -39,6 +41,7 @@
   {
    "name": "拳击手套-高级",
    "en": "Boxing Gloves - Excellent",
+   "hant": "拳擊手套-高級",
    "rarity": "金",
    "icon": "Attack",
    "group": "通用",
@@ -74,6 +77,7 @@
   {
    "name": "摩托头盔-一般",
    "en": "Motorcycle Helmet - Regular",
+   "hant": "摩托頭盔-一般",
    "rarity": "蓝",
    "icon": "Defend",
    "group": "通用",
@@ -92,6 +96,7 @@
   {
    "name": "摩托头盔-中级",
    "en": "Motorcycle Helmet - Fairly Good",
+   "hant": "摩托頭盔-中級",
    "rarity": "紫",
    "icon": "Defend",
    "group": "通用",
@@ -110,6 +115,7 @@
   {
    "name": "摩托头盔-高级",
    "en": "Motorcycle Helmet - Excellent",
+   "hant": "摩托頭盔-高級",
    "rarity": "金",
    "icon": "Defend",
    "group": "通用",
@@ -128,6 +134,7 @@
   {
    "name": "夹心饼干-一般",
    "en": "Sandwich Cookie - Regular",
+   "hant": "夾心餅乾-一般",
    "rarity": "蓝",
    "icon": "Hp",
    "group": "通用",
@@ -146,6 +153,7 @@
   {
    "name": "夹心饼干-可口",
    "en": "Sandwich Cookie - Tasty",
+   "hant": "夾心餅乾-可口",
    "rarity": "紫",
    "icon": "Hp",
    "group": "通用",
@@ -164,6 +172,7 @@
   {
    "name": "夹心饼干-美味",
    "en": "Sandwich Cookie - Delicious",
+   "hant": "夹心饼干-美味",
    "rarity": "金",
    "icon": "Hp",
    "group": "通用",
@@ -182,6 +191,7 @@
   {
    "name": "速度轮滑-初级",
    "en": "Speed Roller Skates - Basic",
+   "hant": "速度輪滑-初級",
    "rarity": "蓝",
    "icon": "Speed",
    "group": "通用",
@@ -200,6 +210,7 @@
   {
    "name": "速度轮滑-中级",
    "en": "Speed Roller Skates - Fairly Good",
+   "hant": "速度輪滑-中級",
    "rarity": "紫",
    "icon": "Speed",
    "group": "通用",
@@ -218,6 +229,7 @@
   {
    "name": "速度轮滑-高级",
    "en": "Speed Roller Skates - Excellent",
+   "hant": "速度輪滑-高級",
    "rarity": "金",
    "icon": "Speed",
    "group": "通用",
@@ -236,6 +248,7 @@
   {
    "name": "小猪存钱罐",
    "en": "Piggy Bank",
+   "hant": "小豬存錢罐",
    "rarity": "蓝",
    "icon": "50035",
    "group": "通用",
@@ -254,6 +267,7 @@
   {
    "name": "大背包",
    "en": "Large Backpack",
+   "hant": "大背包",
    "rarity": "紫",
    "icon": "50028",
    "group": "通用",
@@ -272,6 +286,7 @@
   {
    "name": "额外电池",
    "en": "Extra Battery",
+   "hant": "額外電池",
    "rarity": "紫",
    "icon": "50025",
    "group": "通用",
@@ -290,6 +305,7 @@
   {
    "name": "魔法秘典",
    "en": "Magic Tome",
+   "hant": "魔法秘典",
    "rarity": "紫",
    "icon": "50029",
    "group": "通用",
@@ -308,6 +324,7 @@
   {
    "name": "智能手表",
    "en": "Smartwatch",
+   "hant": "智慧手錶",
    "rarity": "紫",
    "icon": "50031",
    "group": "通用",
@@ -326,6 +343,7 @@
   {
    "name": "会员推荐信",
    "en": "Membership Recommendation Letter",
+   "hant": "會員推薦信",
    "rarity": "蓝",
    "icon": "50026",
    "group": "通用",
@@ -344,6 +362,7 @@
   {
    "name": "优雅之羽",
    "en": "Graceful Feather",
+   "hant": "優雅之羽",
    "rarity": "蓝",
    "icon": "50065",
    "group": "通用",
@@ -362,6 +381,7 @@
   {
    "name": "探天卫星",
    "en": "Survey Satellite",
+   "hant": "探天衛星",
    "rarity": "金",
    "icon": "50066",
    "group": "通用",
@@ -380,6 +400,7 @@
   {
    "name": "肾上腺素-高效",
    "en": "Adrenaline - High Efficiency",
+   "hant": "腎上腺素-高效",
    "rarity": "金",
    "icon": "Enmity",
    "group": "通用",
@@ -398,6 +419,7 @@
   {
    "name": "书签",
    "en": "Bookmark",
+   "hant": "書籤",
    "rarity": "紫",
    "icon": "50081",
    "group": "通用",
@@ -416,6 +438,7 @@
   {
    "name": "磨刀石",
    "en": "Sharpening Stone",
+   "hant": "磨刀石",
    "rarity": "紫",
    "icon": "50082",
    "group": "通用",
@@ -434,6 +457,7 @@
   {
    "name": "循环往复",
    "en": "Endless Cycle",
+   "hant": "循環往復",
    "rarity": "蓝",
    "icon": "50083",
    "group": "通用",
@@ -452,6 +476,7 @@
   {
    "name": "银行卡-余额少",
    "en": "Bank Card - Low Balance",
+   "hant": "銀行卡-餘額少",
    "rarity": "蓝",
    "icon": "Gold",
    "group": "星光",
@@ -470,6 +495,7 @@
   {
    "name": "银行卡-余额多",
    "en": "Bank Card - High Balance",
+   "hant": "銀行卡-餘額多",
    "rarity": "紫",
    "icon": "Gold",
    "group": "星光",
@@ -488,6 +514,7 @@
   {
    "name": "银行卡-用不完",
    "en": "Bank Card - Unlimited Balance",
+   "hant": "銀行卡-用不完",
    "rarity": "金",
    "icon": "Gold",
    "group": "星光",
@@ -506,6 +533,7 @@
   {
    "name": "“8面”骰子",
    "en": "8-Sided Die",
+   "hant": "“8面”骰子",
    "rarity": "蓝",
    "icon": "50036",
    "group": "星光",
@@ -524,6 +552,7 @@
   {
    "name": "ATM机",
    "en": "ATM",
+   "hant": "ATM機",
    "rarity": "蓝",
    "icon": "50042",
    "group": "星光",
@@ -542,6 +571,7 @@
   {
    "name": "手电筒-强光",
    "en": "Flashlight - Bright",
+   "hant": "手電筒筒-強光",
    "rarity": "紫",
    "icon": "KillReward",
    "group": "星光",
@@ -560,6 +590,7 @@
   {
    "name": "星币锤",
    "en": "Star Coin Hammer",
+   "hant": "星幣錘",
    "rarity": "金",
    "icon": "50043",
    "group": "星光",
@@ -578,6 +609,7 @@
   {
    "name": "紫色飞星",
    "en": "Shooting Star - Purple",
+   "hant": "紫色飛星",
    "rarity": "紫",
    "icon": "50078",
    "group": "星光",
@@ -596,6 +628,7 @@
   {
    "name": "金色飞星",
    "en": "Shooting Star - Gold",
+   "hant": "金色飛星",
    "rarity": "金",
    "icon": "50078",
    "group": "星光",
@@ -614,6 +647,7 @@
   {
    "name": "缓冲盾牌",
    "en": "Buffer Shield",
+   "hant": "緩沖盾牌",
    "rarity": "蓝",
    "icon": "50040",
    "group": "治愈",
@@ -632,6 +666,7 @@
   {
    "name": "可口糖果",
    "en": "Tasty Candy",
+   "hant": "可口糖果",
    "rarity": "紫",
    "icon": "50033",
    "group": "治愈",
@@ -650,6 +685,7 @@
   {
    "name": "维生素药丸",
    "en": "Vitamin Pills",
+   "hant": "維生素藥丸",
    "rarity": "紫",
    "icon": "50027",
    "group": "治愈",
@@ -668,6 +704,7 @@
   {
    "name": "友情徽章",
    "en": "Friendship Badge",
+   "hant": "友情徽章",
    "rarity": "紫",
    "icon": "50041",
    "group": "治愈",
@@ -686,6 +723,7 @@
   {
    "name": "大碗炖肉",
    "en": "Gourmet Stew",
+   "hant": "大碗燉肉",
    "rarity": "金",
    "icon": "50034",
    "group": "治愈",
@@ -704,6 +742,7 @@
   {
    "name": "医疗箱-紧急治疗",
    "en": "Medical Kit - Emergency Treatment",
+   "hant": "醫療箱-緊急治療",
    "rarity": "蓝",
    "icon": "Heal",
    "group": "治愈",
@@ -722,6 +761,7 @@
   {
    "name": "医疗箱-完备治疗",
    "en": "Medical Kit - Comprehensive Treatment",
+   "hant": "醫療箱-完備治療",
    "rarity": "金",
    "icon": "Heal",
    "group": "治愈",
@@ -740,6 +780,7 @@
   {
    "name": "美工刀-初级",
    "en": "Utility Knife - Basic",
+   "hant": "美工刀-初級",
    "rarity": "紫",
    "icon": "50010",
    "group": "治愈",
@@ -758,6 +799,7 @@
   {
    "name": "美工刀-锋利",
    "en": "Utility Knife - Sharp",
+   "hant": "美工刀-鋒利",
    "rarity": "金",
    "icon": "50010",
    "group": "治愈",
@@ -776,6 +818,7 @@
   {
    "name": "标记喷罐",
    "en": "Marking Spray Can",
+   "hant": "標記噴罐",
    "rarity": "蓝",
    "icon": "50032",
    "group": "标记",
@@ -794,6 +837,7 @@
   {
    "name": "魔法箭袋",
    "en": "Magic Quiver",
+   "hant": "魔法箭袋",
    "rarity": "紫",
    "icon": "50047",
    "group": "标记",
@@ -812,6 +856,7 @@
   {
    "name": "忍术飞镖",
    "en": "Ninja Throwing Darts",
+   "hant": "忍術飛镖",
    "rarity": "金",
    "icon": "50045",
    "group": "标记",
@@ -830,6 +875,7 @@
   {
    "name": "手持风扇-小",
    "en": "Handheld Fan - Small",
+   "hant": "手持風扇-小",
    "rarity": "蓝",
    "icon": "50030",
    "group": "标记",
@@ -848,6 +894,7 @@
   {
    "name": "手持风扇-大",
    "en": "Handheld Fan - Large",
+   "hant": "手持風扇-大",
    "rarity": "紫",
    "icon": "50030",
    "group": "标记",
@@ -866,6 +913,7 @@
   {
    "name": "标靶",
    "en": "Target Board",
+   "hant": "標靶",
    "rarity": "蓝",
    "icon": "50046",
    "group": "标记",
@@ -884,6 +932,7 @@
   {
    "name": "普通瞄具",
    "en": "Standard Sight",
+   "hant": "普通瞄具",
    "rarity": "紫",
    "icon": "50044",
    "group": "标记",
@@ -902,6 +951,7 @@
   {
    "name": "鹰眼瞄具",
    "en": "Eagle Eye Sight",
+   "hant": "鷹眼瞄具",
    "rarity": "金",
    "icon": "50044",
    "group": "标记",
@@ -920,6 +970,7 @@
   {
    "name": "能量回收",
    "en": "Energy Recycler",
+   "hant": "能量回收",
    "rarity": "蓝",
    "icon": "50084",
    "group": "充能",
@@ -938,6 +989,7 @@
   {
    "name": "电流剑",
    "en": "Electric Blade",
+   "hant": "電流劍",
    "rarity": "蓝",
    "icon": "50085",
    "group": "充能",
@@ -956,6 +1008,7 @@
   {
    "name": "安全气囊",
    "en": "Air Bag",
+   "hant": "安全氣囊",
    "rarity": "紫",
    "icon": "50086",
    "group": "充能",
@@ -974,6 +1027,7 @@
   {
    "name": "电击手套",
    "en": "Shock Gloves",
+   "hant": "電擊手套",
    "rarity": "紫",
    "icon": "50087",
    "group": "充能",
@@ -992,6 +1046,7 @@
   {
    "name": "跃迁引擎",
    "en": "Warp Engine",
+   "hant": "躍遷引擎",
    "rarity": "蓝",
    "icon": "50088",
    "group": "充能",
@@ -1010,6 +1065,7 @@
   {
    "name": "电流核心",
    "en": "Electric Core",
+   "hant": "電流核心",
    "rarity": "紫",
    "icon": "50089",
    "group": "充能",
@@ -1028,6 +1084,7 @@
   {
    "name": "永动机",
    "en": "Perpetual Motion Machine",
+   "hant": "永動機",
    "rarity": "金",
    "icon": "50090",
    "group": "充能",
@@ -1046,6 +1103,7 @@
   {
    "name": "电磁炮",
    "en": "Electromagnetic Gun",
+   "hant": "電磁炮",
    "rarity": "金",
    "icon": "50091",
    "group": "充能",
@@ -1064,6 +1122,7 @@
   {
    "name": "大铁锚",
    "en": "Iron Anchor",
+   "hant": "大鐵錨",
    "rarity": "蓝",
    "icon": "50053",
    "group": "地图专属",
@@ -1082,6 +1141,7 @@
   {
    "name": "三叉戟",
    "en": "Trident",
+   "hant": "三叉戟",
    "rarity": "紫",
    "icon": "50055",
    "group": "地图专属",
@@ -1100,6 +1160,7 @@
   {
    "name": "梦想号模型",
    "en": "Dreamliner Model",
+   "hant": "夢想號模型",
    "rarity": "金",
    "icon": "50054",
    "group": "地图专属",
@@ -1118,6 +1179,7 @@
   {
    "name": "诅咒之剑",
    "en": "Cursed Sword",
+   "hant": "詛咒之劍",
    "rarity": "蓝",
    "icon": "50037",
    "group": "地图专属",
@@ -1136,6 +1198,7 @@
   {
    "name": "复仇之戟",
    "en": "Revenge Halberd",
+   "hant": "複仇之戟",
    "rarity": "紫",
    "icon": "50038",
    "group": "地图专属",
@@ -1154,6 +1217,7 @@
   {
    "name": "贯穿之铳",
    "en": "Piercing Gun",
+   "hant": "貫穿之铳",
    "rarity": "金",
    "icon": "50039",
    "group": "地图专属",
@@ -1172,6 +1236,7 @@
   {
    "name": "大铜锣",
    "en": "Giant Grand Gong",
+   "hant": "大銅鑼",
    "rarity": "蓝",
    "icon": "50070",
    "group": "地图专属",
@@ -1190,6 +1255,7 @@
   {
    "name": "节日红包",
    "en": "Red Festival Envelopes",
+   "hant": "節日紅包",
    "rarity": "金",
    "icon": "50071",
    "group": "地图专属",
@@ -1200,7 +1266,7 @@
    "base": 1,
    "growth_round": null,
    "tags": ["辅助"],
-   "pools": [],
+   "pools": ["辅助"],
    "class_points": {"卡牌": 30},
    "fit": ["帕露南", "小町"],
    "fit_minor": []
@@ -1208,6 +1274,7 @@
   {
    "name": "佐茶蛋糕",
    "en": "Tea Cake",
+   "hant": "佐茶蛋糕",
    "rarity": "蓝",
    "icon": "50049",
    "group": "地图专属",
@@ -1226,6 +1293,7 @@
   {
    "name": "古老法杖",
    "en": "Ancient Staff",
+   "hant": "古老法杖",
    "rarity": "紫",
    "icon": "50050",
    "group": "地图专属",
@@ -1244,6 +1312,7 @@
   {
    "name": "精品剑盾",
    "en": "Premium Sword and Shield",
+   "hant": "精品劍盾",
    "rarity": "金",
    "icon": "50051",
    "group": "地图专属",
@@ -1279,6 +1348,7 @@
   {
    "name": "小蛇玩偶",
    "en": "Snake Plushie",
+   "hant": "小蛇玩偶",
    "rarity": "紫",
    "icon": "50060",
    "group": "地图专属",
@@ -1297,6 +1367,7 @@
   {
    "name": "小鲤鱼玩偶",
    "en": "Carp Plushie",
+   "hant": "小鯉魚玩偶",
    "rarity": "紫",
    "icon": "50061",
    "group": "地图专属",
@@ -1315,6 +1386,7 @@
   {
    "name": "惊涛御守",
    "en": "Raging Wave Charm",
+   "hant": "驚濤禦守",
    "rarity": "蓝",
    "icon": "50056",
    "group": "地图专属",
@@ -1333,6 +1405,7 @@
   {
    "name": "迷幻海鲜汤",
    "en": "Psychedelic Seafood Soup",
+   "hant": "迷幻海鮮湯",
    "rarity": "蓝",
    "icon": "50057",
    "group": "地图专属",
@@ -1351,6 +1424,7 @@
   {
    "name": "交错双鲤",
    "en": "Intertwined Twin Carps",
+   "hant": "交錯雙鯉",
    "rarity": "金",
    "icon": "50059",
    "group": "地图专属",
@@ -1369,6 +1443,7 @@
   {
    "name": "无限之蛇",
    "en": "Infinite Serpent",
+   "hant": "無限之蛇",
    "rarity": "金",
    "icon": "50058",
    "group": "地图专属",
@@ -1387,6 +1462,7 @@
   {
    "name": "计时器",
    "en": "Chronometer",
+   "hant": "計時器",
    "rarity": "蓝",
    "icon": "50062",
    "group": "地图专属",
@@ -1405,6 +1481,7 @@
   {
    "name": "重生人偶",
    "en": "Revival Doll",
+   "hant": "重生強化",
    "rarity": "紫",
    "icon": "50063",
    "group": "地图专属",
@@ -1423,6 +1500,7 @@
   {
    "name": "糖果会员证",
    "en": "Candy Rewards Card",
+   "hant": "糖果會員證",
    "rarity": "金",
    "icon": "50064",
    "group": "地图专属",
@@ -1441,6 +1519,7 @@
   {
    "name": "孔雀扇",
    "en": "Peacock Feather Fan",
+   "hant": "孔雀扇",
    "rarity": "紫",
    "icon": "50069",
    "group": "地图专属",
@@ -1451,7 +1530,7 @@
    "base": 30,
    "growth_round": null,
    "tags": ["攻击"],
-   "pools": [],
+   "pools": ["攻击"],
    "class_points": {"攻击": 30},
    "fit": ["潘大猛", "摩西"],
    "fit_minor": []
@@ -1459,6 +1538,7 @@
   {
    "name": "鸳鸯玉佩",
    "en": "Lovebird's Jade Pendant",
+   "hant": "鴛鴦玉佩",
    "rarity": "紫",
    "icon": "50068",
    "group": "地图专属",
@@ -1477,6 +1557,7 @@
   {
    "name": "飞羽手环",
    "en": "Colourful Feather Bracelet",
+   "hant": "飛羽手環",
    "aliases": ["彩羽手环"],
    "rarity": "金",
    "icon": "50067",
@@ -1496,6 +1577,7 @@
   {
    "name": "运动手环",
    "en": "Sports Wristband",
+   "hant": "運動手環",
    "rarity": "紫",
    "icon": "50073",
    "group": "地图专属",
@@ -1506,7 +1588,7 @@
    "base": 20,
    "growth_round": null,
    "tags": ["攻击"],
-   "pools": [],
+   "pools": ["攻击"],
    "class_points": {"攻击": 20},
    "fit": [],
    "fit_minor": []
@@ -1514,6 +1596,7 @@
   {
    "name": "时间怀表",
    "en": "Timely Pocket Watch",
+   "hant": "時間懷錶",
    "rarity": "金",
    "icon": "50074",
    "group": "地图专属",
@@ -1532,6 +1615,7 @@
   {
    "name": "电击枪",
    "en": "Taser",
+   "hant": "電擊槍",
    "rarity": "紫",
    "icon": "50072",
    "group": "地图专属",
@@ -1550,6 +1634,7 @@
   {
    "name": "自适应核心",
    "en": "Adaptive Core",
+   "hant": "自適應核心",
    "rarity": "蓝",
    "icon": "50075",
    "group": "地图专属",
@@ -1568,6 +1653,7 @@
   {
    "name": "娱乐终端",
    "en": "Entertainment Terminal",
+   "hant": "娛樂終端",
    "rarity": "紫",
    "icon": "50076",
    "group": "地图专属",
@@ -1578,7 +1664,7 @@
    "base": 20,
    "growth_round": null,
    "tags": ["攻击"],
-   "pools": [],
+   "pools": ["攻击"],
    "class_points": {"攻击": 30},
    "fit": [],
    "fit_minor": []
@@ -1586,6 +1672,7 @@
   {
    "name": "原初意识",
    "en": "Original Consciousness",
+   "hant": "原初意識",
    "rarity": "金",
    "icon": "50077",
    "group": "地图专属",
@@ -1604,6 +1691,7 @@
   {
    "name": "放大镜",
    "en": "Magnifying Glass",
+   "hant": "放大鏡",
    "rarity": "紫",
    "icon": "50092",
    "group": "地图专属",
@@ -1614,7 +1702,7 @@
    "base": 20,
    "growth_round": null,
    "tags": ["攻击"],
-   "pools": [],
+   "pools": ["攻击"],
    "class_points": {"攻击": 30},
    "fit": [],
    "fit_minor": []
@@ -1622,6 +1710,7 @@
   {
    "name": "汉娜人偶",
    "en": "Hanna Doll",
+   "hant": "漢娜人偶",
    "rarity": "金",
    "icon": "50093",
    "group": "地图专属",
@@ -1632,7 +1721,7 @@
    "base": 30,
    "growth_round": null,
    "tags": ["辅助"],
-   "pools": [],
+   "pools": ["辅助"],
    "class_points": {"辅助": 20},
    "fit": ["帕露南", "橘雪莉"],
    "fit_minor": []

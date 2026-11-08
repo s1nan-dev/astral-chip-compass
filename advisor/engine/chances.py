@@ -1,15 +1,16 @@
 """之后选到某筹码的概率：美工刀、治愈来源、配套筹码三个预判共用 take_chance（按地图取之后几次三选一的分布、几次里一个
 都不出现的概率、按候选地图平均），各自只定「已有筹码按哪一组算」和「会选哪几个」：
 
-- 之后获得美工刀（knife_chance）：已有筹码不含正在评估的这个治愈来源，美工刀的分数不计治愈来源折算那一项；
+- 之后获得美工刀（knife_chance）：筹码池不含正在评估的这个治愈来源，美工刀的分数按「已有筹码 + 这个治愈来源」算（那时
+  没有治愈来源的两项：提前加分和折算）；
 - 选了美工刀以后获得治愈来源（heal_chance）、选了以后获得配套筹码（partner_chance）：按「已有筹码 + 这一张」算，
   配套筹码按筹码名排好先后。
 之后的几次三选一和前瞻一样按次数分开算（context.split_picks）：剩下的升星一定会来，按下一星的升星；已拿循环往复、额外
 那次还没给时那一次按任务来源；其余是任务和筹码商店，按两者在一局里的占比混合。
 三个预判的口径不同是有意的：美工刀预判的系数（rules.toml [heal_knife] anticipation_factor）是按它现在的口径定的。
 另有 [heal_knife] 的几项设置（heal_knife、layer_value、has_heal_source、knife_school_bonus）。
-把概率折成分项（治愈来源折算、美工刀预判、开套预判）在 parts；这里给之后的候选打分时经 Scorer.score、Scorer.parts，
-不直接导入 parts（parts 要用这里的概率），也不导入 lookahead（它导入 parts）。
+把概率折成分项（治愈来源的提前加分和折算、美工刀预判、开套预判）在 parts；这里给之后的候选打分时经 Scorer.score、
+Scorer.parts，不直接导入 parts（parts 要用这里的概率），也不导入 lookahead（它导入 parts）。
 """
 from __future__ import annotations
 
@@ -26,6 +27,11 @@ if TYPE_CHECKING:
 HEAL_DISCOUNT_ORIGIN = "heal_discount"
 HEAL_DISCOUNT_REASON = "尚未持有治愈来源，之后获得治愈来源的概率{p}：美工刀需生命值为满才生效，收益按该概率折算"
 HEAL_DISCOUNT_SHORT = "尚无治愈来源，难以保持满血"
+# 美工刀的治愈来源提前加分（rules.toml [heal_knife] ④）：还没有治愈来源时，预支之后配上治愈来源才有的组合分，记一项「组合」
+# 加分（parts._heal_advance）。{p} 同上
+HEAL_ADVANCE_ORIGIN = "heal_advance"
+HEAL_ADVANCE_REASON = "预计之后获得治愈来源的概率{p}：美工刀在生命值为满时按治愈层数增加攻击力，治愈来源提供治愈层数"
+HEAL_ADVANCE_SHORT = "之后获得治愈来源 {p}"
 
 
 # ------------------------------------------------------------ 美工刀与治愈来源（rules.toml [heal_knife]）
@@ -85,7 +91,8 @@ def take_chance(sc: Scorer, owned: tuple, take: list, maps) -> float:
     剩余 n 次三选一（picks.total）按次数分开算，和前瞻同一个口径（context.split_picks）：剩下的升星一定会来，L 次
     （min(剩余升星次数, n)）按下一星的升星（第一次刷出的规则，context.levelup_sources）；已拿循环往复、额外那次还没给时，
     接着 X 次（min(1, n − L)）按任务来源（三格全随机，context.endless_sources）；其余 E = n − L − X 次是任务和筹码商店，
-    按两者在一局里的占比混合，稀有度按当前星数（context.mixed_sources）。3 星以后 L = 0。
+    按两者在一局里的占比混合，任务的稀有度按地图资料里任务自带的等级、筹码商店按当前星数（context.mixed_sources）。3 星以后
+    L = 0。
     一次三选一里 take 一个都不出现的概率：升星为 Π(1 − k 的出现率)；任务和筹码商店的一次三选一三格出自同一种来源，按来源
     分别算、再按占比加权：Σ 占比 × Π(1 − 这种来源下 k 的出现率)，不把两种来源的分布先平均再算（那样等于三格各自换来源）。
     n 次都不出现的概率是 miss_升星^L × miss_循环往复^X × miss_混合^E，至少一次为 1 减去它；地图待识别时按候选地图分别算出
@@ -128,41 +135,37 @@ def take_chance(sc: Scorer, owned: tuple, take: list, maps) -> float:
     return sum(per) / len(per) if per else 0.0
 
 
-def knife_chance(sc: Scorer, owned_set: frozenset, cfg: dict, map_name=None) -> float:
-    """之后的三选一里出现、并且会选美工刀（cfg["knives"]）的概率，算法见 take_chance（剩下的升星按下一星的升星，其余
-    按任务和筹码商店混合）。
+def knife_chance(sc: Scorer, name: str, owned_set: frozenset, cfg: dict, map_name=None) -> float:
+    """选择治愈来源 name 之后，之后的三选一里出现、并且会选美工刀（cfg["knives"]）的概率，算法见 take_chance（剩下的升星
+    按下一星的升星，其余按任务和筹码商店混合）。
 
-    只算总分达到推荐线（[advice] recommend_total）的美工刀。这里预判的是选择这个治愈来源之后的情形，那时美工刀
-    不再按治愈来源的概率折算：总分不计治愈来源折算那一项（parts._heal_discount）。
-    筹码池和美工刀的分数按现在的已有筹码 owned_set 算，不含正在评估的这个治愈来源（另两个预判按「已有筹码 + 这一张」
-    算）：[heal_knife] anticipation_factor 是按这个口径定的，统一口径要连同它重新定。
+    只算总分达到推荐线（[advice] recommend_total）的美工刀。预判的是选择这个治愈来源之后的情形，所以美工刀的分数按
+    「已有筹码 + name」算：有这个治愈来源配美工刀的组合分，也不再有治愈来源的那两项（parts._heal_advance、parts._heal_discount）。
+    筹码池仍按现在的已有筹码 owned_set 算，不含 name（另两个预判连筹码池也按「已有筹码 + 这一张」）：
+    [heal_knife] anticipation_factor 是按这个口径定的，统一口径要连同它重新定。
     map_name 给定时只按这张地图算（刷新期望、前瞻逐张地图计算时）；地图待识别时按候选地图分别算出概率再平均，
     和「按候选地图平均计算」的其余部分同一口径。
     """
     maps = (map_name,) if map_name else tuple(sc.maps)
-    key = (owned_set, maps)
+    key = (name, owned_set, maps)
     if key in sc.memo.knife:
         return sc.memo.knife[key]
     db, st = sc.db, sc.st
     owned = sc.ordered(owned_set)  # 不按集合的遍历顺序（随哈希种子变化）
     line = db.rules["advice"]["recommend_total"]
     knives = [k for k in cfg["knives"] if k in db.chips and k not in owned_set]
-    take = [k for k in knives if sc.score(k, owned, st.round) - heal_discount_score(sc, k, owned, st.round) >= line]
+    take = [k for k in knives if sc.score(k, (*owned, name), st.round) >= line]
     p = take_chance(sc, owned, take, maps)
     sc.memo.knife[key] = p
     return p
 
 
-def heal_discount_score(sc: Scorer, name: str, owned, rnd: int | None) -> float:
-    """这个筹码总分里治愈来源折算那一项的分值（parts._heal_discount，为负；没有这一项时为 0）。"""
-    return sum(p.score for p in sc.parts(name, owned, rnd) if p.origin == HEAL_DISCOUNT_ORIGIN)
-
-
 def heal_chance(sc: Scorer, name: str, owned_set: frozenset, map_name=None) -> float:
     """选择美工刀 name 之后，剩余三选一里出现、并且会选治愈来源（[heal_knife] layers）中至少一个的概率。
 
-    算法见 take_chance（剩下的升星按下一星的升星，其余按任务和筹码商店混合），只算总分达到推荐线的治愈来源；折算时不乘
-    系数（parts._heal_discount）。
+    算法见 take_chance（剩下的升星按下一星的升星，其余按任务和筹码商店混合），只算总分达到推荐线的治愈来源；折算不乘系数
+    （parts._heal_discount），提前加分乘 [school_build] factor（parts._heal_advance），
+    两者都不乘 [heal_knife] anticipation_factor。
     筹码池、流派、职业分值和治愈来源的分数都按「已有筹码 + 这把美工刀」计算：美工刀属于治愈流派，选择后同流派加权；
     治愈来源的分数含「已持有美工刀」的组合分（不会再回头算美工刀预判，两者不互相依赖）。"""
     maps = (map_name,) if map_name else tuple(sc.maps)

@@ -257,7 +257,7 @@ def latency(db, battle: np.ndarray, select: np.ndarray, trials: int) -> list[flo
     out = []
     for _ in range(trials):
         processor = new_processor(db, map_known=True)
-        processor._last_round_at = time.monotonic()
+        processor._mark_seen_at = time.monotonic()
         switch = time.perf_counter() + WARMUP + rng.uniform(0, idle_s + 0.5)
         while True:
             img = select if time.perf_counter() >= switch else battle

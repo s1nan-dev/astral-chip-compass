@@ -92,8 +92,18 @@ kernel32.GetCurrentThreadId.restype = wintypes.DWORD
 # Windows 文件夹（ui/winapi.py 的 open_folder 按完整路径起 explorer）：返回写进去的字数，缓冲区不够时返回要的字数
 kernel32.GetSystemWindowsDirectoryW.argtypes = [wintypes.LPWSTR, wintypes.UINT]
 kernel32.GetSystemWindowsDirectoryW.restype = wintypes.UINT
+# 查别的进程的启动时间（vision/capture.py 比两个游戏窗口谁后启动）：只要这么一点信息，不用申请更大的权限
+kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+kernel32.OpenProcess.restype = wintypes.HANDLE
+kernel32.GetProcessTimes.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.FILETIME),
+                                     ctypes.POINTER(wintypes.FILETIME), ctypes.POINTER(wintypes.FILETIME),
+                                     ctypes.POINTER(wintypes.FILETIME)]
+kernel32.GetProcessTimes.restype = wintypes.BOOL
+kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+kernel32.CloseHandle.restype = wintypes.BOOL
 
 GA_ROOT = 2
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 GW_HWNDNEXT = 2
 GWL_EXSTYLE = -20
 WS_EX_TOPMOST, WS_EX_TRANSPARENT = 0x00000008, 0x00000020

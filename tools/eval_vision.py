@@ -5,7 +5,9 @@
   左右加边（更宽的窗口）；上下加边（更高的窗口），加边前先缩到 1920 宽（本来更窄的直接加边）。
 样本本来就不比目标宽的不放大，这一项跳过（记作「·」）。4K 样本缩到 1920、1280 宽正好是 1/2、1/3。
 缩小后界面缩放比例低于支持下限（悬浮窗会提示「窗口过小」，例如 21:9 样本缩到 1280×528）的也跳过，记作「·」。
-加边只是近似：真实游戏在不同比例下怎么排版还需要实机截图确认。
+加边只是近似：真实游戏在不同比例下怎么排版还需要实机截图确认。游戏按窗口定界面缩放，加边以后画面里的界面却还是原来的
+大小；两者差太多的（21:9 的样本上下加边、4:3 的样本左右加边，差两三成），三选一的标题带不在预筛按窗口算出的位置上，预筛
+没认出不算漏，另外列出（见 LAYOUT_TOLERANCE）。这些画面照样做文字识别、照样计数。
 标注里有 size 的样本，先核对图片尺寸和标注一致。
 识别的自检提示要和标注的 expect_problems 逐条相同（没写的为没有）：截图早于游戏更新、资料已照新版改的样本（例如截图上筹码的
 稀有度后来改了），自检照资料会报的那几条写在标注里，多了少了都算错。
@@ -68,6 +70,20 @@ VARIANTS = {
     "更宽": lambda im: padded(im, 0.15, 0),
     "更高": lambda im: padded(im, 0, 0.12),
 }
+PADDED = {"更宽", "更高"}
+# 加边以后的界面缩放（按加边后的窗口算）和加边前相差不超过这个比例，才算界面和窗口对得上、核对预筛。16:9 附近的样本
+# 加边以后只差 0~5%；21:9 的样本上下加边差 24%，4:3 的样本左右加边差 30%，实机不会有这样的画面
+LAYOUT_TOLERANCE = 0.1
+
+
+def layout_kept(variant: str, original, img) -> bool:
+    """img 里界面的大小和它的窗口对得上（实机可能出现的画面）。不加边的变体都对得上。"""
+    if variant not in PADDED:
+        return True
+    base = to_width(original, 1920)
+    base = original if base is None else base
+    before = ui_scale(base.shape[1], base.shape[0])
+    return abs(ui_scale(img.shape[1], img.shape[0]) / before - 1) <= LAYOUT_TOLERANCE
 
 
 def _reading(seen) -> dict | None:
@@ -122,6 +138,7 @@ def main() -> int:
         labels = labels[:limit]
     totals = {name: [0, 0] for name in variants}
     prefilter_misses = size_errors = 0
+    layout_changed: list[str] = []  # 界面和窗口对不上、预筛没认出的三选一（不算漏）
     failed = 0  # 有 KNOWN 以外的错误的图（每个变体算一次）
     known_hits: list[tuple[str, str]] = []
     records: list[dict] = []
@@ -140,7 +157,10 @@ def main() -> int:
                 marks.append("·")
                 continue
             if item["scene"] in SELECT_SCENES and not looks_like_overlay_screen(img):
-                prefilter_misses += 1
+                if layout_kept(name, original, img):
+                    prefilter_misses += 1
+                else:
+                    layout_changed.append(f"[{name}] {item['file']}")
             start = time.perf_counter()
             got = read_chip_select(img, db)
             spent.append(time.perf_counter() - start)
@@ -161,6 +181,10 @@ def main() -> int:
     for name, (good, total) in totals.items():
         print(f"{name}: {good} / {total}")
     print(f"预筛漏掉的三选一画面：{prefilter_misses}")
+    if layout_changed:
+        print(f"加边以后界面缩放和窗口对不上、预筛没认出的三选一（实机不会有这样的画面，不算漏）：{len(layout_changed)}")
+        for entry in layout_changed:
+            print(f"      {entry}")
     if size_errors:
         print(f"尺寸和标注不符的样本：{size_errors}")
     print(f"每张平均 {sum(spent[1:]) / max(1, len(spent) - 1):.2f} 秒")
@@ -168,6 +192,7 @@ def main() -> int:
     if json_path is not None:
         write_json(json_path, {
             "variants": list(variants), "totals": totals, "prefilter_misses": prefilter_misses,
+            "prefilter_layout_changed": layout_changed,
             "size_errors": size_errors, "failed": failed, "samples": records,
         })
     return 0 if not failed and not prefilter_misses and not size_errors else 1

@@ -585,7 +585,7 @@ def manual_section(root: Path = ROOT) -> tuple[list[str], int]:
 
 
 def front_note(root: Path = ROOT) -> list[str]:
-    """首页 README.md 第一个「## 」标题之前、整行是粗体的段落（纯视觉声明、仅支持简体中文），每段后面空一行。
+    """首页 README.md 第一个「## 」标题之前、整行是粗体的段落（纯视觉声明、支持的平台和游戏语言），每段后面空一行。
     发行版里没有首页，网页的开头（目录前面）照写这几段；docs/使用说明.md 里不重复写。"""
     note: list[str] = []
     for ln in (Path(root) / "README.md").read_text(encoding="utf-8").splitlines():

@@ -15,6 +15,7 @@ from PySide6.QtCore import QThread, Qt, Signal
 # 声明在 advisor/win32.py（截屏、找窗口、热键、窗口层次共用）：句柄、消息参数按正确宽度声明，64 位下不会被截断。
 from ..win32 import kernel32 as _kernel32
 from ..win32 import user32 as _user32
+from . import lang
 
 WM_HOTKEY = 0x0312
 WM_QUIT = 0x0012
@@ -109,6 +110,11 @@ def hotkey_text(key: int, modifiers, native_vk: int = 0) -> str | None:
         (Qt.ControlModifier, "Ctrl"), (Qt.AltModifier, "Alt"), (Qt.ShiftModifier, "Shift"), (Qt.MetaModifier, "Win"),
     ) if modifiers & flag]
     return "+".join([*mods, name])
+
+
+# 热键线程经 failed、change_failed 发出的句子（下面两个函数、parse_hotkey 的 ValueError）都照旧简体，显示的地方转一次：
+# 标题栏下方的提示行（notices.NoticeView 整行转）、更换热键的结果（overlay_parts/hotkeys.py 的 on_hotkey_change_failed）、
+# 设置窗口里热键写法无效的说明（settings.hotkey_texts）。在这里先转了，提示行那一处就转了两次
 
 
 def busy_text(text: str) -> str:
@@ -258,3 +264,6 @@ class Hotkey(QThread):
         if self._ready.wait(1) and self.isRunning():
             _user32.PostThreadMessageW(self._thread_id, WM_QUIT, 0, 0)
         self.wait(2000)
+
+
+lang.localize(globals())

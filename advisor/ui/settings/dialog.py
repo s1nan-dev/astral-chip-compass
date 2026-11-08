@@ -1,10 +1,12 @@
 """「拾星助手设置」窗口（底栏的「设置」按钮打开）：识别模式、识别热键、识别画面（只读，只在截取屏幕时有）、低配模式、
-悬浮窗背景不透明、导出诊断、启动时自动检查更新（开关和「检查更新」按钮）、关于拾星助手。默认皮肤是 Windows 风的单页分组
-卡片；低配模式开了以后识别怎么变见 Overlay.set_lowend，检查更新见 overlay_parts/updates.py。
+悬浮窗背景不透明、导出诊断、启动时自动检查更新（开关和「检查更新」按钮）、关于拾星助手、帮助拾星助手改善推荐准确度（开关，
+说明下面能点的「我的统计」）。默认皮肤是 Windows 风的单页分组卡片；低配模式开了以后识别怎么变见 Overlay.set_lowend，检查
+更新见 overlay_parts/updates.py。
 
-有哪些项：ITEMS（每一项的标题、说明、控件种类、改了以后调用悬浮窗的哪个方法）。「皮肤」一项在「悬浮窗背景不透明」下面，
-只在皮肤功能解锁了（advisor/unlock.py；开发版一律解锁）、登记了两套以上皮肤时出现（shown_items）：右边是当前
-这套的小缩略图和名称（只显示）、「更换」按钮（打开「皮肤」窗口，skin_window.py），做法同「识别热键」一行。
+有哪些项：ITEMS（每一项的标题、说明、控件种类、改了以后调用悬浮窗的哪个方法，说明下面能点的字和点了调用的方法）。
+「皮肤」一项在「悬浮窗背景不透明」下面，只在皮肤功能解锁了（advisor/unlock.py；开发版一律解锁）、登记了两套以上皮肤时
+出现（shown_items）：右边是当前这套的小缩略图和名称（只显示）、「更换」按钮（打开「皮肤」窗口，skin_window.py），做法同
+「识别热键」一行。
 
 窗口里的值由悬浮窗给（SettingsValues，set_values）；截取状态由悬浮窗在截取方式变了时调用 set_state 即时更新（字段同
 ui/screen.py 的 CaptureState：method、problem、detail、border_requested），截取方式只读不改。「识别画面」一项只在截取屏幕
@@ -18,7 +20,7 @@ ui/screen.py 的 CaptureState：method、problem、detail、border_requested）�
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
 from PySide6.QtWidgets import (
@@ -32,15 +34,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ... import paths, unlock
+from ... import paths, sysinfo, unlock
 from ... import version as app_version
-from .. import chrome, theme
-from ..glyphs import (ICON_ABOUT, ICON_CAPTURE, ICON_DIAG, ICON_HOTKEY, ICON_LOOK, ICON_LOWEND, ICON_MODE, ICON_SKIN,
-                      ICON_UPDATE)
+from .. import chrome, lang, theme
+from ..glyphs import (ICON_ABOUT, ICON_BIG_CORES, ICON_CAPTURE, ICON_DIAG, ICON_HOTKEY, ICON_LANG, ICON_LOOK, ICON_LOWEND,
+                      ICON_MODE, ICON_PLATFORM, ICON_SKIN, ICON_UPDATE)
 from ..hotkey import parse_hotkey
 from ..text import DENIED_CODE, capture_detail, tip_paragraphs_html
 from ..theme import SETTINGS as L
-from ..widgets import TextLabel
+from ..widgets import TextLabel, WheelLockedCombo, draw_combo_rows
 from ..window_base import SkinnedWindow
 
 # ------------------------------------------------------------ 界面文字
@@ -52,6 +54,17 @@ PAGE_SUBTITLE = "改动即时生效"
 GROUP_RECOG = "识别"
 GROUP_LOOK = "外观"
 GROUP_DIAG = "诊断与说明"
+GROUP_PRIVACY = "隐私与数据"
+# 游戏平台（「识别」一组最上面）：右边下拉框，第一项是自动识别，文字照上一次认出的端写（PLATFORM_AUTO，例如
+# 「Steam端（自动识别）」），下面是两个端；选了以后只认这个端的游戏窗口。悬停说明分条写自动识别怎么认
+PLATFORM_TITLE = "游戏平台"
+PLATFORM_DESC = "读取哪个客户端的游戏画面"
+PLATFORM_AUTO = "{name}（自动识别）"
+PLATFORM_TIP = (
+    "· 自动识别：认出正在运行的客户端；Steam 版和 TapTap 版都开着时，跟最后启动的那个。\n"
+    "· 选了「Steam端」或「TapTap端」以后，只认这个客户端的游戏窗口。\n"
+    "· 选「Steam端+TapTap端」以后，两个客户端同时识别，各一张悬浮窗；对性能有较大影响，开启前先做性能测试。"
+)
 # 识别模式：一行标题和说明，下面两块可选的方块。手动模式的说明按当前热键写；热键不可用、未设置时写 MODE_MANUAL_NO_KEY
 MODE_TITLE = "识别模式"
 MODE_DESC = "读取游戏画面的时机"
@@ -109,10 +122,23 @@ LOWEND_DESC = "电脑配置较低、玩游戏时卡顿可以开启：识别隔�
 LOWEND_TIP = (
     "开启后：\n"
     "· 平时隔 1 秒看一次游戏画面（关闭时 0.5 秒），读轮次、星币、队友也隔得久一倍；\n"
-    "· 文字识别只用 2 个处理器核心（关闭时 4 个），给游戏多留出核心；\n"
+    "· 文字识别只用 2 个处理器核心（关闭时按性能自检的结果，一般 4 个），给游戏多留出核心；\n"
     "· 筹码三选一出现后照常及时识别，选了哪个照样记得到。\n"
     "推荐最多晚约半秒出现，读数和推荐本身不变。"
 )
+# 只用大核（紧接在低配模式后面，只有大小核的电脑才有这一项，比出来已经在大核上时也没有，见 shown_items）：右边开关，默认关，
+# 性能自检查到文字识别排到了小核、玩家点了「是」时也改它。Windows 上的做法是限定本进程用哪些核（sysinfo.use_big_cores），
+# 任务管理器里优先级仍是「正常」；标题照玩家能看懂的说法写，悬停说明写实际做什么。说明写两行（big_cores_desc）：第一行写
+# 处理器名称（BIG_CORES_CPU，名称是 sysinfo.cpu_label；读不到时 BIG_CORES_CPU_UNKNOWN；和程序别处一样写「处理器」）；第二行
+# 开关开着时写 BIG_CORES_ON，关着、性能自检比出来文字识别确实排在小核上时写 BIG_CORES_SMALL，关着、没比过（或比出来
+# 不到分界、窗口开着时刚关掉）时写 BIG_CORES_EFFECT：没比出来的不说在小核上
+BIG_CORES_TITLE = "允许拾星助手以高优先级运行以改善识别速度"
+BIG_CORES_CPU = "这台电脑的处理器是{name}，有大小核"
+BIG_CORES_CPU_UNKNOWN = "这台电脑的处理器有大小核"
+BIG_CORES_SMALL = "目前拾星助手运行在小核上，打开此选项后文字识别更快，游戏帧数可能略受影响"
+BIG_CORES_EFFECT = "打开此选项后文字识别更快，游戏帧数可能略受影响"
+BIG_CORES_ON = "目前拾星助手只在大核上运行，文字识别更快，游戏帧数可能略受影响"
+BIG_CORES_TIP = "这台电脑有大小核。打开后拾星助手只用大核，文字识别更快，但和游戏抢同一批核，游戏帧数可能略受影响。"
 # 外观：悬浮窗背景不透明，下面是皮肤（皮肤功能解锁了、登记了两套以上皮肤时才出现；右边是当前这套的小缩略图和名称
 # theme.Skin.label，只显示，「更换」按钮打开「皮肤」窗口，skin_window.py；有几套皮肤连排法也换，说明不只说配色与字体）
 SKIN_TITLE = "皮肤"
@@ -121,6 +147,15 @@ SKIN_CHANGE = "更换"
 SKIN_CHANGE_TIP = "打开「皮肤」窗口，查看全部皮肤并更换"
 OPAQUE_TITLE = "悬浮窗背景不透明"
 OPAQUE_DESC = "开启后悬浮窗使用不透明底色，不再透出下方的游戏画面"
+# 界面语言（「外观」一组，皮肤下面）：右边下拉框，两项各用自己的字写（换成哪种界面都不变）。选了以后交给悬浮窗的
+# set_ui_lang 存进设置；和这次启动定下的语言（lang.CURRENT）不同时，这一项下面显示 RELAUNCH_HINT 和「现在重开」按钮
+# （relaunch.py 起新进程，新旧进程交接见那里）
+UI_LANG_TITLE = "界面语言"
+UI_LANG_DESC = "界面文字使用的语言；换了以后要重新打开拾星助手才生效"
+LANG_CHOICES = ((lang.HANS, "简体中文"), (lang.HANT, "繁體中文"))
+RELAUNCH_HINT = "重新打开拾星助手后生效"
+RELAUNCH_BUTTON = "现在重开"
+RESTART_ACTION = "restart_app"  # 「现在重开」按钮调用的悬浮窗方法
 # 解锁「霓虹贴纸」皮肤的机关（调色盘图标，见模块说明）：悬停横幅，点一下以后「悬浮窗背景不透明」那一行的标题也换成它。
 # 机关里有意用口语（界面用词规矩的例外，只限皮肤解锁的机关）
 PALETTE_TEXT = "这是什么？点一下"
@@ -139,18 +174,27 @@ EXPORT_TIP = (
 # 那一格下面的暗色说明里（SettingsValues.update_note，文字在 overlay_parts/wording.py 的 UPDATE_CHECKING 那一段）。分页的
 # 排法里这一项在「关于」一页，顶上一排页签的排法另有分组标题 UPDATE_CARD
 UPDATE_TITLE = "启动时自动检查更新"
-UPDATE_DESC = "启动后在后台检查有没有新版本，一天最多一次；有新版本时在对局外提示。当前版本 {version}"
+UPDATE_DESC = "每次启动时在后台检查有没有新版本；有新版本时在对局外提示。当前版本 {version}"
 UPDATE_BUTTON = "检查更新"
 UPDATE_BUTTON_TIP = "立即检查有没有新版本"
 UPDATE_CARD = "更新"
 ABOUT_TITLE = "关于拾星助手"
 ABOUT_DESC = "版本、资料日期、资料来源与授权、许可证、第三方许可证、免责声明和隐私说明"
+# 隐私与数据（窗口最下面一组，在「诊断与说明」下面）：开关下面这段说明是定稿的措辞，照抄不改写。说明下面是能点的
+# STATS_TITLE 几个字（链接颜色、带下划线，widgets.TextLink），点了打开「我的统计」窗口（stats_window），开关关着时也能点；
+# 这一组里不放打开 logs\upload 文件夹的按钮
+REPORT_TITLE = "帮助拾星助手改善推荐准确度"
+REPORT_DESC = "开启会向拾星助手官方发送对局中筹码选择偏好（匿名）。关闭则不会发送任何数据，也无法提交反馈。"
+STATS_TITLE = "我的统计"
 CHEVRON_TEXT = "›"  # 「关于」那一行右端的箭头（没有图标字体时写这个字）
-# 左侧页签的排法（side_tabs）：三个页签，「关于」一页里的两张卡片的标签。「说明」卡片里的四个按钮就是「关于」窗口里的
+# 左侧页签的排法（side_tabs）：四个页签，「关于」一页里的两张卡片的标签。「说明」卡片里的四个按钮就是「关于」窗口里的
 # 四节的标题（version.about_sections），点了打开「关于」窗口、停在那一节
 TAB_RECOG = "识别"
 TAB_LOOK = "外观"
 TAB_ABOUT = "关于"
+# 「隐私与数据」一组另占一个页签：分页的排法里没有地方接在「关于」下面。页签字写两个字的「隐私」，同「诊断与说明」
+# 一组写「关于」：分页排法的页签放不下四个字（选中时向右突出，能放字的宽度只剩约 100 像素），组名照旧是「隐私与数据」
+TAB_PRIVACY = "隐私"
 DIAG_CARD = "诊断"
 NOTES_CARD = "说明"
 NOTE_SECTIONS = ("资料来源与授权", "第三方许可证", "免责声明", "隐私说明")
@@ -164,8 +208,9 @@ NOTE_TIP = "打开「关于拾星助手」窗口，查看「{section}」一节"
 class SettingItem:
     """设置窗口里的一项：key 是项名，group 分组，icon 系统图标编号，title、desc 标题和一句说明（desc 为空的随状态写），
     kind 控件种类（mode 两块可选的方块 / hotkey 键帽加按钮 / status 只读的状态标签 / skin 当前皮肤的小缩略图和名称加按钮 /
-    switch 开关 / button 按钮 / link 整行可点 / update 开关加「检查更新」按钮），action 改了以后（按钮：点了以后；update 是
-    开关改了以后，「检查更新」另调用 check_updates）调用悬浮窗的方法名（None 为只读）。"""
+    switch 开关 / choice 下拉框 / button 按钮 / link 整行可点 / update 开关加「检查更新」按钮），action 改了以后（按钮：点了
+    以后；update 是开关改了以后，「检查更新」另调用 check_updates；choice 是选了以后）调用悬浮窗的方法名（None 为只读）。
+    link 是说明下面一行能点的字（链接颜色、带下划线，widgets.TextLink；空为没有），点了调用悬浮窗的 link_action。"""
 
     key: str
     group: str
@@ -174,19 +219,26 @@ class SettingItem:
     desc: str
     kind: str
     action: str | None = None
+    link: str = ""
+    link_action: str | None = None
 
 
 ITEMS = (
+    SettingItem("platform", GROUP_RECOG, ICON_PLATFORM, PLATFORM_TITLE, PLATFORM_DESC, "choice", "set_platform"),
     SettingItem("mode", GROUP_RECOG, ICON_MODE, MODE_TITLE, MODE_DESC, "mode", "set_manual"),
     SettingItem("hotkey", GROUP_RECOG, ICON_HOTKEY, HOTKEY_TITLE, HOTKEY_DESC, "hotkey", "start_capture"),
     SettingItem("capture", GROUP_RECOG, ICON_CAPTURE, CAPTURE_TITLE, "", "status"),
     SettingItem("lowend", GROUP_RECOG, ICON_LOWEND, LOWEND_TITLE, LOWEND_DESC, "switch", "set_lowend"),
+    SettingItem("big_cores", GROUP_RECOG, ICON_BIG_CORES, BIG_CORES_TITLE, "", "switch", "set_big_cores"),
     SettingItem("opaque", GROUP_LOOK, ICON_LOOK, OPAQUE_TITLE, OPAQUE_DESC, "switch", "set_opaque"),
     SettingItem("skin", GROUP_LOOK, ICON_SKIN, SKIN_TITLE, SKIN_DESC, "skin", "show_skins"),
+    SettingItem("ui_lang", GROUP_LOOK, ICON_LANG, UI_LANG_TITLE, UI_LANG_DESC, "choice", "set_ui_lang"),
     SettingItem("export", GROUP_DIAG, ICON_DIAG, EXPORT_TITLE, EXPORT_DESC, "button", "export_diagnostics"),
     SettingItem("update", GROUP_DIAG, ICON_UPDATE, UPDATE_TITLE, UPDATE_DESC.format(version=app_version.VERSION),
                 "update", "set_update_auto"),
     SettingItem("about", GROUP_DIAG, ICON_ABOUT, ABOUT_TITLE, ABOUT_DESC, "link", "show_about"),
+    SettingItem("report", GROUP_PRIVACY, ICON_DIAG, REPORT_TITLE, REPORT_DESC, "switch", "set_report_enabled",
+                link=STATS_TITLE, link_action="show_stats"),
 )
 UPDATE_CHECK_ACTION = "check_updates"  # 「检查更新」按钮调用的悬浮窗方法
 
@@ -197,20 +249,30 @@ def capture_shown(state) -> bool:
     return getattr(state, "method", None) == "screen"
 
 
-def shown_items(state=None) -> tuple[SettingItem, ...]:
+def shown_items(state=None, values=None) -> tuple[SettingItem, ...]:
     """窗口里现在要显示的项：「皮肤」只在皮肤功能解锁了（unlock.feature_open；开发版一律解锁）、登记了两套以上
-    皮肤时显示（只有默认皮肤时没得选）；「识别画面」只在截取状态 state 为截取屏幕时显示（capture_shown）。"""
+    皮肤时显示（只有默认皮肤时没得选）；「识别画面」只在截取状态 state 为截取屏幕时显示（capture_shown）；「界面语言」只在
+    繁体界面打开（lang.HANT_ENABLED）时显示；「只用大核」只在这台电脑有大小核（sysinfo.has_big_cores）、按窗口里的值
+    （values，SettingsValues；None 时按出现）该出现时显示（big_cores_shown：比出来已经在大核上、开关又关着时不显示）。"""
     skins = unlock.feature_open() and len(theme.skins()) >= 2
     capture = capture_shown(state)
-    return tuple(item for item in ITEMS if (item.key != "skin" or skins) and (item.key != "capture" or capture))
+    big_cores = sysinfo.has_big_cores() and big_cores_shown(values)
+    return tuple(item for item in ITEMS if (item.key != "skin" or skins) and (item.key != "capture" or capture)
+                 and (item.key != "ui_lang" or lang.HANT_ENABLED) and (item.key != "big_cores" or big_cores))
 
 
 @dataclass(frozen=True)
 class SettingsValues:
-    """窗口里显示的值（悬浮窗给）：模式、热键（文字、能不能用、是否正在等待按键、说明处另写的一句）、背景不透明、是否正在
-    导出诊断包、低配模式、软件内更新（自动检查的开关、说明下面写的一句检查的结果、「检查更新」不能点：检查中、下载中、
-    下好了）。默认值是没有悬浮窗时显示的。"""
+    """窗口里显示的值（悬浮窗给）：游戏平台（选的是哪个端或两个客户端同时识别，None 为自动识别；自动识别时上一次认出的
+    端，第一项的字照它写）、模式、热键（文字、能不能用、是否正在等待按键、说明处另写的一句）、背景不透明、是否正在导出
+    诊断包、低配模式、只用大核（开关；big_core_gain 是这台电脑的性能自检比出来的只用大核的收益，不限制的中位毫秒 ÷ 只用
+    大核的中位毫秒，没比过为 None，见 overlay_parts/ocr_check.py 的 recorded_gain）、软件内更新（自动检查的开关、说明下面
+    写的一句检查的结果、「检查更新」不能点：检查中、下载中、下好了）、界面语言（值在 lang.LANGUAGES 里；空串、不认识的值按
+    当前语言）。默认值是没有悬浮窗时显示的。"""
 
+    platform: str | None = None
+    platform_seen: str = "steam"
+    ui_lang: str = ""
     manual: bool = False
     hotkey: str = "F8"
     hotkey_ok: bool = True
@@ -219,9 +281,61 @@ class SettingsValues:
     opaque: bool = False
     exporting: bool = False
     lowend: bool = False
+    big_cores: bool = False
+    big_core_gain: float | None = None
+    report_enabled: bool = True
     update_auto: bool = True
     update_note: str = ""
     update_busy: bool = False
+
+
+def big_cores_shown(values: SettingsValues | None = None) -> bool:
+    """有大小核的电脑上「只用大核」一项出不出现（有没有大小核另看，见 shown_items）：开关开着时一律出现（玩家要能关掉）；
+    关着、性能自检比过、比出来已经在大核上（values.big_core_gain 不到 sysinfo.BIG_CORE_GAIN_MIN，sysinfo.on_small_cores 为
+    False）时不出现：打开也快不了。没比过的照旧出现（结果良好、还没自检、忽快忽慢、效率模式等时不比；结果一般、较差时才比）。
+    values 为 None 时按出现。纯函数，不导入 Qt 的部分也能用。"""
+    if values is None or values.big_cores:
+        return True
+    return sysinfo.on_small_cores(values.big_core_gain) is not False
+
+
+def big_cores_desc(values: SettingsValues, cpu: str | None = None) -> str:
+    """「只用大核」一项的说明，两行：第一行写处理器名称（cpu，sysinfo.cpu_label 取的；读不到、为空时不写名称）；第二行在开关
+    开着时写现在只在大核上（BIG_CORES_ON），关着、性能自检比出来文字识别确实排在小核上时（sysinfo.on_small_cores 为 True）
+    写 BIG_CORES_SMALL，关着、没比过（或比出来不到分界）时只写打开以后怎样（BIG_CORES_EFFECT）。纯函数，不导入 Qt 的部分也能用。"""
+    first = BIG_CORES_CPU.format(name=cpu) if cpu else BIG_CORES_CPU_UNKNOWN
+    if values.big_cores:
+        second = BIG_CORES_ON
+    elif sysinfo.on_small_cores(values.big_core_gain) is True:
+        second = BIG_CORES_SMALL
+    else:
+        second = BIG_CORES_EFFECT
+    return first + "\n" + second
+
+
+# 游戏平台下拉框的文字两边留的地方：左边内边距、右边的箭头（皮肤自己画的三角，或系统的箭头）加起来的宽度，另留一点
+# 余量。按最长的一项定下拉框的最小宽度时加这么多，收起时整项都写得出（最长的是「TapTap端（自动识别）」；各套皮肤
+# 内边距不同，最宽的是经典主题-白，右边留 34 像素放自己画的三角）
+PLATFORM_COMBO_ROOM = 88
+
+
+def platform_choices(platform_seen: str = "steam") -> list[tuple[str | None, str]]:
+    """游戏平台下拉框的几项：（值, 文字）。第一项是自动识别（值 None），文字照上一次认出的端写（PLATFORM_AUTO）；下面
+    按 capture.PLATFORM_TITLES 的先后是两个端，最后一项是两个客户端同时识别（capture.BOTH、capture.BOTH_NAME），名字都
+    取 capture 里的（不另写一份），显示时转（capture 不调 localize，端名是界面上显示的文字）。认不出的端名按 Steam。"""
+    from ...vision import capture
+
+    seen = platform_seen if platform_seen in capture.PLATFORM_NAMES else capture.STEAM
+    choices = [(None, PLATFORM_AUTO.format(name=lang.t(capture.PLATFORM_NAMES[seen])))]
+    choices += [(key, lang.t(capture.PLATFORM_NAMES[key])) for key in capture.PLATFORM_TITLES]
+    choices.append((capture.BOTH, lang.t(capture.BOTH_NAME)))
+    return choices
+
+
+def fit_platform_combo(combo, choices) -> None:
+    """按最长的一项定下拉框的最小宽度：收起时整项都写得出，不被右端的箭头压住；说明那一栏照旧占满剩下的宽度。"""
+    widest = max(combo.fontMetrics().horizontalAdvance(text) for _, text in choices)
+    combo.setMinimumWidth(widest + PLATFORM_COMBO_ROOM)
 
 
 def settings_texts(state, found: bool = True) -> tuple[str, str]:
@@ -255,8 +369,8 @@ def hotkey_texts(values: SettingsValues) -> tuple[str, str, str]:
     if not values.hotkey_ok:
         try:
             parse_hotkey(key)
-        except ValueError as e:  # 设置文件里的写法无效
-            desc = HOTKEY_INVALID_DESC.format(error=e)
+        except ValueError as e:  # 设置文件里的写法无效（parse_hotkey 的原句是简体，显示时转）
+            desc = HOTKEY_INVALID_DESC.format(error=lang.t(str(e)))
         else:
             desc = HOTKEY_BUSY_DESC.format(key=key)
         return key, values.hotkey_note or desc, "warn"
@@ -270,7 +384,14 @@ def manual_desc(values: SettingsValues) -> str:
     return MODE_MANUAL_NO_KEY
 
 
-# 排法、行部件、调色盘图标的交互在下面导入：它们从本模块取文字常量，所以要等常量定义完再导入（同 theme 末尾导入皮肤包）。
+# 界面是繁体时，把上面这些文字常量统一转成繁体。要放在 layouts、palette、widgets 导入本模块以前：它们从本模块取
+# 常量，导入时就拷走了。HANT_KEEP 里是不转的常量：两项语言名各用自己的字写，换成哪种界面都不变；NOTE_SECTIONS 是打开
+# 「关于」窗口时用的节名，要和 version.about_sections 的标题对上（那一份还没转）。
+HANT_KEEP = ("LANG_CHOICES", "NOTE_SECTIONS")
+lang.localize(globals())
+
+# 排法、行部件、调色盘图标的交互在下面导入：它们从本模块取文字常量，所以要等常量定义完、转好以后再导入（同 theme 末尾
+# 导入皮肤包）。
 from .layouts import LAYOUTS  # noqa: E402
 from .palette import PaletteTrap, RowFlash, StarFlight, _valid  # noqa: E402
 from .widgets import Chevron, KeyCap, ModeTile, SkinRow, StatusChip, Switch, _button  # noqa: E402
@@ -298,9 +419,11 @@ class SettingsDialog(SkinnedWindow, chrome.HideNotice, QDialog):
         # 皮肤解锁：调色盘图标点了两下以后飞的星、「皮肤」一行的金光（正在动的时候有，测试看这两个）
         self.star_flight: StarFlight | None = None
         self.row_flash: RowFlash | None = None
+        self.dual_prompt = None  # 选了「Steam端+TapTap端」时打开的性能测试对话框（关掉后为 None）
         self.setWindowTitle(SETTINGS_TITLE)
         self.setWindowFlags(self.FLAGS)
         self._values = values or SettingsValues()
+        self._relaying = False  # set_values 正在按新的值重建窗口内容（重建里再调 set_values 时不再重建）
         self._texts: tuple[str, str] = ("", "")
         self._state, self._found = state, found
         self.page = self._build_page()
@@ -334,17 +457,37 @@ class SettingsDialog(SkinnedWindow, chrome.HideNotice, QDialog):
     def _build_page(self) -> QFrame:
         """按当前皮肤搭窗口的内容：样式表、控件（_build_controls）、排法（LAYOUTS）。返回排好的一页；每一项的控件、排好的
         行记在窗口上（controls、rows 等）。排法自己放了「返回」时（皮肤自己画外框，chrome.py）去掉系统标题栏，否则用系统
-        标题栏。整行可点的「关于」只有单页的排法有（about_row，没有时为 None）。有哪些项按现在的截取状态（shown_items）。"""
-        self.items = {item.key: item for item in shown_items(self._state)}
+        标题栏。整行可点的「关于」只有单页的排法有（about_row，没有时为 None）；「隐私与数据」一组开关说明下面能点的
+        「我的统计」七种排法都有（stats_link）。有哪些项按现在的截取状态和窗口里的值（shown_items）。有「只用大核」一项时
+        这时读一次处理器名称（sysinfo.cpu_label，写在这一项的说明里）。"""
+        self.items = {item.key: item for item in shown_items(self._state, self._values)}
+        self.cpu_name = sysinfo.cpu_label() if "big_cores" in self.items else None
         self.setStyleSheet(theme.settings_style())
         self.controls = self._build_controls()
         self.layout_key = self.layout_name()
         layout = LAYOUTS[self.layout_key]()
         page, self.rows = layout.build(self.items, self.controls, self._call)
+        # 「界面语言」一项下面的重开那一行（选的值和这次启动的语言不同时显示，见 set_values）：按钮交给悬浮窗的 restart_app
+        self.relaunch = None
+        lang_row = self.rows.get("ui_lang")
+        if lang_row is not None:
+            self.relaunch = lang_row.note
+            self.relaunch.button.clicked.connect(lambda: self._call(RESTART_ACTION))
         about = self.rows.get("about")
         self.about_row = about.row if about is not None else None
         if about is not None:
             about.row.clicked.connect(lambda: self._call(self.items["about"].action))
+        # 说明下面能点的字（SettingItem.link，「隐私与数据」一组开关下面的「我的统计」）：点了调用悬浮窗的 link_action，开关
+        # 关着时也能点。Tab 键先走到这一项右边的控件、再走到这几个字（排法里字先放进去，不调的话 Tab 键先走到字）
+        for key, parts in self.rows.items():
+            if parts.link is None:
+                continue
+            parts.link.clicked.connect(lambda _=False, name=self.items[key].link_action: self._call(name))
+            control = self.controls.get(key)
+            if control is not None and control.focusPolicy() & Qt.TabFocus:
+                QWidget.setTabOrder(control, parts.link)
+        report = self.rows.get("report")
+        self.stats_link = report.link if report is not None else None
         self.back = getattr(layout, "back", None)
         self.tabs = getattr(layout, "tabs", {})
         # 解锁「霓虹贴纸」皮肤的机关：调色盘图标（排法画了这一行的图标、系统里有图标字体时才有）
@@ -386,7 +529,8 @@ class SettingsDialog(SkinnedWindow, chrome.HideNotice, QDialog):
     def refresh_unlock(self) -> None:
         """皮肤的解锁情况变了（悬浮窗解锁了一套时调用）：要显示的项（「皮肤」一行）或调色盘图标的机关变了时按当前皮肤重建
         窗口内容（同 apply_skin：显示的值和原来那一页照旧）。没变时什么都不做。"""
-        if (tuple(item.key for item in shown_items(self._state)), unlock.palette_mode()) == self._unlock_state:
+        if (tuple(item.key for item in shown_items(self._state, self._values)),
+                unlock.palette_mode()) == self._unlock_state:
             return
         self.apply_skin()
 
@@ -426,6 +570,21 @@ class SettingsDialog(SkinnedWindow, chrome.HideNotice, QDialog):
 
     def _build_controls(self) -> dict[str, QWidget]:
         items = self.items
+        # 游戏平台：下拉框（设置页会滚动，滚轮不能顺手改掉选项），第一项是自动识别，文字照上一次认出的端写；选了以后
+        # 调用悬浮窗的 set_platform。各项在 set_values 里按悬浮窗给的值填
+        self.platform_combo = WheelLockedCombo()
+        self.platform_combo.setToolTip(tip_paragraphs_html(PLATFORM_TIP))
+        draw_combo_rows(self.platform_combo)
+        self.platform_combo.currentIndexChanged.connect(self._platform_changed)
+        fit_platform_combo(self.platform_combo, platform_choices())
+        # 界面语言：两项各用自己的字写（换成哪种界面都不变）；选了以后调用悬浮窗的 set_ui_lang。和这次启动的语言不同时，
+        # 说明下面显示重开那一行（set_values、_lang_changed）
+        self.lang_combo = WheelLockedCombo()
+        for data, text in LANG_CHOICES:
+            self.lang_combo.addItem(text, data)
+        # 下拉列表每一行、右端的箭头同「游戏平台」（皮肤的样式表去掉了系统的箭头、由 draw_combo_rows 自己画，不接上就没有箭头）
+        draw_combo_rows(self.lang_combo)
+        self.lang_combo.currentIndexChanged.connect(self._lang_changed)
         # 识别模式：两块方块（False 自动 / True 手动）
         self.mode_tiles = {False: ModeTile(MODE_AUTO, MODE_AUTO_DESC), True: ModeTile(MODE_MANUAL)}
         if self._mode_group is not None:
@@ -468,6 +627,12 @@ class SettingsDialog(SkinnedWindow, chrome.HideNotice, QDialog):
         self.lowend_switch = Switch()
         self.lowend_switch.setToolTip(tip_paragraphs_html(LOWEND_TIP))
         self.lowend_switch.clicked.connect(lambda checked: self._call(items["lowend"].action, bool(checked)))
+        # 只用大核（有大小核的电脑才有）：开关。设不上时悬浮窗不存「开着」，刷新设置窗口时开关回到关
+        self.big_cores_switch: Switch | None = None
+        if "big_cores" in items:
+            self.big_cores_switch = controls["big_cores"] = Switch()
+            self.big_cores_switch.setToolTip(tip_paragraphs_html(BIG_CORES_TIP))
+            self.big_cores_switch.clicked.connect(lambda checked: self._call(items["big_cores"].action, bool(checked)))
         # 皮肤（登记了两套以上皮肤时才有）：当前这套的小缩略图和名称，「更换」打开「皮肤」窗口（悬浮窗的 show_skins；在那里
         # 点缩略图换皮肤）。缩略图用悬浮窗的预览图（previews，没有时画主色）
         self.skin_row: SkinRow | None = None
@@ -492,14 +657,100 @@ class SettingsDialog(SkinnedWindow, chrome.HideNotice, QDialog):
         pair.setSpacing(12)
         pair.addWidget(self.update_switch, 0, Qt.AlignVCenter)
         pair.addWidget(self.update_btn, 0, Qt.AlignVCenter)
-        controls.update({"mode": mode, "hotkey": hotkey, "lowend": self.lowend_switch,
-                         "opaque": self.opaque_switch, "export": self.export_btn, "update": update, "about": Chevron()})
+        # 隐私与数据：对局报告的开关（说明是定稿的措辞；说明下面能点的「我的统计」由排法放，见 _build_page）
+        self.report_switch = Switch()
+        self.report_switch.clicked.connect(lambda checked: self._call(items["report"].action, bool(checked)))
+        controls.update({"platform": self.platform_combo, "ui_lang": self.lang_combo, "mode": mode, "hotkey": hotkey,
+                         "lowend": self.lowend_switch,
+                         "opaque": self.opaque_switch, "export": self.export_btn, "update": update, "about": Chevron(),
+                         "report": self.report_switch})
         return controls
 
-    def _call(self, name: str | None, *args) -> None:
+    def _call(self, name: str | None, *args):
+        """调用悬浮窗上名为 name 的方法（没有这个方法时什么都不做）；返回它的返回值，给要取结果的调用处用。"""
         fn = getattr(self._host, name, None) if name else None
-        if callable(fn):
-            fn(*args)
+        return fn(*args) if callable(fn) else None
+
+    def _platform_changed(self, index: int) -> None:
+        """下拉框选了（set_values 刷新时挡住了信号，不会走到这里）：第一项是 None（自动识别）；两个客户端同时识别先弹
+        对话框做性能测试，测试通过才交给悬浮窗的 set_platform，这一步不改设置。"""
+        from ...vision import capture
+
+        item = self.items.get("platform")
+        if item is None:
+            return
+        value = self.platform_combo.itemData(index)
+        if value == capture.BOTH:
+            if self._values.platform == capture.BOTH:  # 已经开着：再选一次不弹
+                return
+            self.ask_dual()
+            return
+        self._call(item.action, value)
+
+    def ask_dual(self) -> None:
+        """选了「Steam端+TapTap端」：先弹对话框警告并做性能测试，测试通过才开启；取消时下拉框回到原来选的那一项。
+        没有悬浮窗、悬浮窗还没有这几个方法时（预览工具直接画窗口）不弹，下拉框也回到原来那一项。"""
+        from ...vision import capture
+        from .dual_prompt import DualPromptDialog
+
+        previous = self._values.platform
+        if not callable(getattr(self._host, "start_dual_test", None)):
+            self._set_platform(previous, self._values.platform_seen)
+            return
+        prompt = DualPromptDialog(self._host, parent=self, lowend=self._values.lowend)
+        self.dual_prompt = prompt
+        try:
+            prompt.exec()
+        finally:
+            self.dual_prompt = None
+            prompt.deleteLater()
+        if prompt.applied:
+            self._values = replace(self._values, platform=capture.BOTH)
+            self._set_platform(capture.BOTH, self._values.platform_seen)
+        else:
+            self._set_platform(previous, self._values.platform_seen)
+
+    def _lang_changed(self, index: int) -> None:
+        """界面语言选了（set_values 刷新时挡住了信号）：把值交给悬浮窗的 set_ui_lang；和这次启动的语言不同时显示重开那一行，
+        选回相同的就收起。"""
+        value = self.lang_combo.itemData(index)
+        item = self.items.get("ui_lang")
+        if item is not None:
+            self._call(item.action, value)
+        self._show_relaunch(value != lang.CURRENT)
+        self.fit_size()
+
+    def _set_lang(self, value) -> None:
+        """按悬浮窗给的值填下拉框（不触发「选了」的回调，免得刷新一次又存一次设置）。不认识的值按当前语言。"""
+        index = next((i for i, (data, _) in enumerate(LANG_CHOICES) if data == value), 0)
+        self.lang_combo.blockSignals(True)
+        try:
+            self.lang_combo.setCurrentIndex(index)
+        finally:
+            self.lang_combo.blockSignals(False)
+
+    def _show_relaunch(self, show: bool) -> None:
+        """显示或收起「界面语言」一项下面的重开那一行。"""
+        line = getattr(self, "relaunch", None)
+        if line is not None:
+            line.setVisible(bool(show))
+
+    def _set_platform(self, platform, seen: str) -> None:
+        """按悬浮窗给的值填下拉框：第一项的字照 seen 写，选中项照 platform。刷新时不触发「选了」的回调（挡住信号），
+        免得刷新一次又存一次设置。"""
+        choices = platform_choices(seen)
+        combo = self.platform_combo
+        combo.blockSignals(True)
+        try:
+            if (combo.count() != len(choices)
+                    or any(combo.itemText(i) != text for i, (_, text) in enumerate(choices))):
+                combo.clear()
+                for data, text in choices:
+                    combo.addItem(text, data)
+            fit_platform_combo(combo, choices)
+            combo.setCurrentIndex(next((i for i, (data, _) in enumerate(choices) if data == platform), 0))
+        finally:
+            combo.blockSignals(False)
 
     def _change_clicked(self) -> None:
         """「更改」：开始等待按键；等待时按钮是「取消」：取消。"""
@@ -534,9 +785,21 @@ class SettingsDialog(SkinnedWindow, chrome.HideNotice, QDialog):
     # ---- 显示的值
 
     def set_values(self, values: SettingsValues) -> None:
-        """按悬浮窗给的值更新模式、热键、低配模式、背景不透明、导出按钮、软件内更新那一行（开关、「检查更新」能不能点、
-        检查的结果那一句：有字时代替说明显示，没有时显示说明）。"""
+        """按悬浮窗给的值更新模式、热键、低配模式、只用大核（开关和说明：说明的第二行跟着开关和比出来的收益换，见
+        big_cores_desc）、背景不透明、导出按钮、软件内更新那一行（开关、「检查更新」能不能点、检查的结果那一句：有字时代替
+        说明显示，没有时显示说明）。
+
+        「只用大核」一项该不该出现（big_cores_shown）变了时：窗口关着就按当前皮肤重建内容（同 set_state 里的「识别画面」），
+        下次打开（Dialogs.show_settings 先更新再显示）出不出现是对的；开着时不重建，免得玩家正在看、正在点的一行忽然没了
+        （例如刚在这里关掉开关），关了再开时按新的排。"""
         self._values = values
+        if not self.isVisible() and not self._relaying and self._big_cores_stale():
+            self._relaying = True
+            try:
+                self.apply_skin()  # 重建时按新的值排，再回到这里更新各项
+            finally:
+                self._relaying = False
+            return
         for manual, tile in self.mode_tiles.items():
             tile.setChecked(manual == values.manual)
         self.mode_tiles[True].set_desc(manual_desc(values))
@@ -547,8 +810,18 @@ class SettingsDialog(SkinnedWindow, chrome.HideNotice, QDialog):
         self.change_btn.setToolTip(tip_paragraphs_html(HOTKEY_WAIT_TIP if values.capturing else HOTKEY_CHANGE_TIP))
         self._set_text(self.rows["hotkey"].desc, desc)
         self.lowend_switch.setChecked(values.lowend)
+        if self.big_cores_switch is not None:
+            self.big_cores_switch.setChecked(values.big_cores)
+        big = self.rows.get("big_cores")
+        if big is not None:
+            self._set_text(big.desc, big_cores_desc(values, self.cpu_name))
+        self._set_platform(values.platform, values.platform_seen)
+        ui_lang = values.ui_lang if values.ui_lang in lang.LANGUAGES else lang.CURRENT
+        self._set_lang(ui_lang)
+        self._show_relaunch(ui_lang != lang.CURRENT)
         self.opaque_switch.setChecked(values.opaque)
         self.export_btn.setEnabled(not values.exporting)
+        self.report_switch.setChecked(values.report_enabled)
         self.update_switch.setChecked(values.update_auto)
         self.update_btn.setEnabled(not values.update_busy)
         update = self.rows.get("update")
@@ -573,6 +846,11 @@ class SettingsDialog(SkinnedWindow, chrome.HideNotice, QDialog):
             self.no_game.setVisible(not found)
             self._set_text(self.rows["capture"].desc, self._texts[1])
         self.fit_size()
+
+    def _big_cores_stale(self) -> bool:
+        """「只用大核」一项现在该不该出现（shown_items：按截取状态和窗口里的值）和窗口里排着的不一样。"""
+        wanted = any(item.key == "big_cores" for item in shown_items(self._state, self._values))
+        return wanted != ("big_cores" in self.items)
 
     @staticmethod
     def _set_text(label: TextLabel, text: str) -> None:
@@ -613,17 +891,19 @@ class SettingsDialog(SkinnedWindow, chrome.HideNotice, QDialog):
 
         文字刚改过时，各层布局缓存的高度要等事件循环处理完才更新（改了文字的标签只通知到它所在的那一层）：显示着的部件
         逐个通知一遍、嵌套的布局逐个清掉缓存，再量（同悬浮窗的 _layout_height）。
-        皮肤写了窗口高度（SettingsLook.HEIGHT，分页的排法）时按那个高度，同样不超过 max_height。"""
+        皮肤写了窗口高度（SettingsLook.HEIGHT，分页的排法）时按那个高度，有「只用大核」一行时再加 BIG_CORES_EXTRA，同样不超过
+        max_height。"""
         self.ensurePolished()
         width = L.WIDTH
         self.setFixedWidth(width)
         if L.HEIGHT > 0:
+            height = L.HEIGHT + (L.BIG_CORES_EXTRA if self.big_cores_switch is not None else 0)
             limit = self.max_height()
-            short = 0 < limit < L.HEIGHT
+            short = 0 < limit < height
             scroll = getattr(self, "scroll", None)
             if scroll is not None:  # 屏幕放不下时整页在窗口内滚动
                 scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded if short else Qt.ScrollBarAlwaysOff)
-            self.setFixedHeight(limit if short else L.HEIGHT)
+            self.setFixedHeight(limit if short else height)
             return
         page = self.page
         for widget in page.findChildren(QWidget):

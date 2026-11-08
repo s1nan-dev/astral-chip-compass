@@ -5,7 +5,7 @@
                 名字、别名、编号是同一个角色时共用；认不得的角色按原文分开（原因里写着这个名字）。
   查看筹码面板  收 BGRA 时，找自己那一行用的也是去掉透明通道的图（透明通道为 0 的截图交给文字识别会变成一片白）；
                 收 Frame 时把同一个 Frame 交给玩家列表的识别，和读星数共用这一帧找到的玩家列表。
-  Frame 本身    收 ndarray 时包一层、已经是 Frame 时原样返回；界面缩放、玩家列表的布局同一帧只算一次。
+  Frame 本身    收 ndarray 时包一层、已经是 Frame 时原样返回；界面缩放、玩家列表的布局、三选一预筛第一段同一帧只算一次。
 除 Frame 本身那两条（全黑的画面）以外用实机截图；不做文字识别（按名字找自己那一行换成假的）。
 """
 import unittest
@@ -181,6 +181,15 @@ class FrameTest(unittest.TestCase):
             self.assertIsNotNone(frame._stars_layout)  # 布局记在 Frame 上
             stars.diagnose(frame, "凛")  # 同一个角色：直接用记下的结果
         self.assertEqual(layout.call_count, 1)
+
+    def test_dark_band_cached(self):
+        """三选一预筛第一段记在 Frame 上：预筛和预筛没过时分情况共用，结果是假的也不重算。"""
+        frame = Frame(np.zeros((1080, 1920, 3), np.uint8))
+        with mock.patch.object(chip_select, "dark_band", return_value=False) as dark:
+            self.assertFalse(frame.dark_band())
+            self.assertFalse(chip_select.looks_like_overlay_screen(frame))
+            self.assertFalse(frame.dark_band())
+        self.assertEqual(dark.call_count, 1)
 
 
 if __name__ == "__main__":

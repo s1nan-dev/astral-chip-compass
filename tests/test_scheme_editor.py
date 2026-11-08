@@ -606,13 +606,16 @@ class WindowTest(_EditorCase):
 
     def test_hero_box_rows_drawn_like_overlay(self):
         """角色下拉框的下拉列表每一行和悬浮窗同一种画法（widgets.ComboRowDelegate：鼠标所在的行亮灰圆角框，当前的值左边
-        一根短条）。编辑窗口只有这一个下拉框。"""
+        一根短条）。编辑窗口有角色和适用地图两个下拉框。"""
         from advisor.ui.widgets import ComboRowDelegate
 
         ed = self.editor()
         self.assertIsInstance(ed.hero_box.itemDelegate(), ComboRowDelegate)
         self.assertIs(ed.hero_box.view().itemDelegate(), ed.hero_box.itemDelegate())
-        self.assertEqual([c for c in ed.findChildren(QComboBox)], [ed.hero_box])
+        combos = ed.findChildren(QComboBox)
+        self.assertIn(ed.hero_box, combos)
+        self.assertIn(ed.maps_box.combo, combos)
+        self.assertEqual(len(combos), 2)
 
     def test_old_controls_gone(self):
         """目标流派不能手选、没有「仅限目标流派」勾选框；目标流派一栏只显示。"""
@@ -1726,6 +1729,388 @@ class ReadOnlyTest(_EditorCase):
         self.assertEqual(store.get(s.id).tiers, {"缓冲盾牌": "core"})
         self.assertEqual(self.path.read_bytes(), before)
         self.assertEqual(self.signals, [])
+
+
+class MapsTest(_EditorCase):
+    """适用地图：一行下拉多选，每张能标的地图一项，勾上、取消都立即存（normalize_maps 排序），发 schemes_changed；默认
+    推荐不显示这一项，只读的方案文件只能看；新建空方案、复制为我的方案是通用的，复制带着原来的地图；下拉框上写标了哪几张，
+    点开以后列着每张能标的地图，勾选时不收起；七种排法都建得出这一项，矮屏幕上整个露在窗口里。"""
+
+    def combo(self, ed):
+        return ed.maps_box.combo
+
+    def names(self, ed) -> list[str]:
+        return list(self.combo(ed).names())
+
+    def checked(self, ed) -> tuple[str, ...]:
+        return ed.maps_box.maps()
+
+    def click(self, ed, name: str) -> None:
+        """按下拉列表里的这一项（和真的点一下走同一条路）。"""
+        combo = self.combo(ed)
+        row = self.names(ed).index(name)
+        combo.view().pressed.emit(combo.model().index(row, 0))
+        settle()
+
+    def test_toggle_saves_and_signals(self):
+        from advisor.schemes import taggable_maps
+
+        ed = self.editor()
+        names = list(taggable_maps(self.db))
+        self.assertEqual(self.names(ed), names)
+        s = self.new_scheme(ed)
+        self.assertEqual(s.maps, ())
+        self.assertEqual(self.checked(ed), ())
+        self.assertEqual(self.combo(ed).display_text(), "全地图通用")
+        self.signals.clear()
+        # 先点编号靠后的，存进去按地图编号排
+        self.click(ed, "魔法学院")
+        self.assertEqual(self.store.get(s.id).maps, ("魔法学院",))
+        self.assertEqual(list(self.store.get(s.id).maps), ["魔法学院"])
+        self.click(ed, "龙宫游乐园")
+        self.assertEqual(self.store.get(s.id).maps, ("龙宫游乐园", "魔法学院"))
+        self.assertEqual(ed.scheme.maps, ("龙宫游乐园", "魔法学院"))
+        self.assertEqual(self.checked(ed), ("龙宫游乐园", "魔法学院"))
+        self.assertEqual(self.combo(ed).display_text(), "龙宫游乐园、魔法学院")
+        self.assertEqual(self.combo(ed).toolTip(),
+                         E.MAPS_HINT + "\n" + E.MAPS_TIP_CHECKED.format(maps="龙宫游乐园、魔法学院"))
+        self.assertEqual(self.signals, ["芬妮", "芬妮"])
+        item = next(ed.scheme_list.item(i) for i in range(ed.scheme_list.count())
+                    if ed.scheme_list.item(i).data(E._ID_ROLE) == s.id)
+        self.assertEqual(item.toolTip(), "适用地图：龙宫游乐园、魔法学院")
+        # 再点一下弹起，去掉这张
+        self.click(ed, "龙宫游乐园")
+        self.assertEqual(self.store.get(s.id).maps, ("魔法学院",))
+        self.assertEqual(item.toolTip(), "适用地图：魔法学院")
+        self.click(ed, "魔法学院")
+        self.assertEqual(self.store.get(s.id).maps, ())
+        self.assertEqual(item.toolTip(), "")
+        self.assertEqual(self.combo(ed).display_text(), "全地图通用")
+        self.assertEqual(len(self.signals), 4)
+
+    def test_narrow_box_writes_count(self):
+        """下拉框放不下时：标了几张的改写张数（「2 张」），张数也放不下才在末尾省略；只标一张的照旧省略地图名
+        （前几个字比「1 张」看得出是哪一张）；放得下写全。悬停说明照样写全标了哪几张。"""
+        from PySide6.QtGui import QFontMetrics
+
+        ed = self.editor()
+        self.new_scheme(ed)
+        combo = self.combo(ed)
+        metrics = QFontMetrics(combo.font())
+        one, both = "龙宫游乐园", "龙宫游乐园、魔法学院"
+        count = E.MAPS_COUNT.format(n=2)
+        self.assertEqual(count, "2 张")
+        narrow = metrics.horizontalAdvance(count) + 2  # 写得下张数，写不下一张地图的全名
+        self.assertLess(narrow, metrics.horizontalAdvance(one))
+        self.click(ed, one)
+        self.assertEqual(combo._display_text(metrics.horizontalAdvance(one) + 2), one)
+        self.assertEqual(combo._display_text(narrow), metrics.elidedText(one, Qt.ElideRight, narrow))
+        self.click(ed, "魔法学院")
+        self.assertEqual(combo._display_text(metrics.horizontalAdvance(both) + 2), both)
+        self.assertEqual(combo._display_text(narrow), count)
+        tiny = metrics.horizontalAdvance("2…") + 1
+        self.assertEqual(combo._display_text(tiny), metrics.elidedText(count, Qt.ElideRight, tiny))
+        self.assertEqual(combo.display_text(), both)
+        self.assertEqual(combo.toolTip(), E.MAPS_HINT + "\n" + E.MAPS_TIP_CHECKED.format(maps=both))
+
+    def test_popup_lists_maps_and_stays_open(self):
+        """点开以后列着每张能标的地图；勾一项不收起，可以接着勾第二项；Esc 收起。"""
+        from advisor.schemes import taggable_maps
+
+        ed = self.editor()
+        s = self.new_scheme(ed)
+        combo = self.combo(ed)
+        combo.showPopup()
+        settle()
+        view = combo.view()
+        self.assertTrue(view.isVisible())
+        self.assertEqual([combo.itemText(i) for i in range(combo.count())], list(taggable_maps(self.db)))
+        self.assertFalse(combo._row_checked(0))
+        for name in ("龙宫游乐园", "魔法学院"):
+            row = self.names(ed).index(name)
+            QTest.mouseClick(view.viewport(), Qt.LeftButton, Qt.NoModifier,
+                             view.visualRect(combo.model().index(row, 0)).center())
+            settle()
+            self.assertTrue(view.isVisible())
+        self.assertEqual(self.checked(ed), ("龙宫游乐园", "魔法学院"))
+        self.assertEqual(self.store.get(s.id).maps, ("龙宫游乐园", "魔法学院"))
+        QTest.keyClick(view, Qt.Key_Escape)
+        settle()
+        self.assertFalse(view.isVisible())
+
+    def test_popup_stays_open_with_real_clicks(self):
+        """真的点（按下和松开之间事件循环照常跑，QTest.mouseClick 是一口气按下松开）：连着点两项都勾上、不收起；下拉列表
+        里按回车也是勾选、不收起；按下以后拖到外面才松开，接着按 Esc 照常收起，点在下拉框外面也收起。"""
+        ed = self.editor()
+        s = self.new_scheme(ed)
+        combo = self.combo(ed)
+        combo.showPopup()
+        settle()
+        view = combo.view()
+
+        def press_release(name: str, away: bool = False) -> None:
+            pos = view.visualRect(combo.model().index(self.names(ed).index(name), 0)).center()
+            QTest.mousePress(view.viewport(), Qt.LeftButton, Qt.NoModifier, pos)
+            settle()  # 按住的这段时间里事件循环照常跑
+            end = QPoint(view.viewport().width() + 40, pos.y()) if away else pos
+            QTest.mouseRelease(view.viewport(), Qt.LeftButton, Qt.NoModifier, end)
+            settle()
+
+        for name in ("龙宫游乐园", "魔法学院"):
+            press_release(name)
+            self.assertTrue(view.isVisible(), name)
+        self.assertEqual(self.store.get(s.id).maps, ("龙宫游乐园", "魔法学院"))
+        view.setCurrentIndex(combo.model().index(self.names(ed).index("龙宫游乐园"), 0))
+        QTest.keyClick(view, Qt.Key_Return)
+        settle()
+        self.assertTrue(view.isVisible())
+        self.assertEqual(self.store.get(s.id).maps, ("魔法学院",))
+        press_release("龙宫游乐园", away=True)
+        self.assertTrue(view.isVisible())
+        self.assertEqual(self.store.get(s.id).maps, ("龙宫游乐园", "魔法学院"))
+        QTest.keyClick(view, Qt.Key_Escape)
+        settle()
+        self.assertFalse(view.isVisible())
+        combo.showPopup()
+        settle()
+        popup = view.window()
+        QTest.mouseClick(popup, Qt.LeftButton, Qt.NoModifier, QPoint(popup.width() + 50, popup.height() + 50))
+        settle()
+        self.assertFalse(view.isVisible())
+
+    def test_keyboard_opens_and_checks(self):
+        """Tab 走到下拉框以后：空格点开，上下键移动，空格勾选（不收起）。"""
+        ed = self.editor()
+        self.new_scheme(ed)
+        combo = self.combo(ed)
+        combo.setFocus()
+        QTest.keyClick(combo, Qt.Key_Space)
+        settle()
+        view = combo.view()
+        self.assertTrue(view.isVisible())
+        QTest.keyClick(view, Qt.Key_Down)
+        QTest.keyClick(view, Qt.Key_Space)
+        settle()
+        self.assertEqual(self.checked(ed), ("星趴·梦想号",))
+        self.assertTrue(view.isVisible())
+        QTest.keyClick(view, Qt.Key_Escape)
+        settle()
+        self.assertFalse(view.isVisible())
+
+    def test_wheel_does_not_change_maps(self):
+        """鼠标滚轮停在下拉框上不换项、也不改勾选：滚动编辑区时不会把地图勾掉。"""
+        from PySide6.QtGui import QWheelEvent
+
+        ed = self.editor()
+        self.new_scheme(ed)
+        combo = self.combo(ed)
+        combo.setCurrentIndex(0)
+        self.click(ed, "龙宫游乐园")
+        before = self.checked(ed)
+        center = combo.rect().center()
+        event = QWheelEvent(center, combo.mapToGlobal(center), QPoint(0, 0), QPoint(0, 120),
+                            Qt.NoButton, Qt.NoModifier, Qt.NoScrollPhase, False)
+        QApplication.sendEvent(combo, event)
+        settle()
+        self.assertEqual(self.checked(ed), before)
+        self.assertEqual(combo.currentIndex(), 0)
+
+    def test_default_view_and_read_only(self):
+        # 默认推荐：这一项和名称、作者、说明一起藏起来
+        ed = self.editor("凛")
+        self.assertFalse(ed.maps_box.isVisibleTo(ed))
+        # 只读的方案文件：下拉框不能用（方案文件里存地图由另一处实现，这里只查内存里的结果）
+        s = self.store.add(Scheme(hero="芬妮", name="锁", maps=("龙宫游乐园",)))
+        self.store.read_only = True
+        ed = self.editor(store=self.store)
+        ed.select(s.id)
+        settle()
+        self.assertTrue(ed.maps_box.isVisibleTo(ed))
+        self.assertFalse(self.combo(ed).isEnabled())
+        self.assertEqual(self.checked(ed), ("龙宫游乐园",))
+        self.signals.clear()
+        self.click(ed, "龙宫游乐园")  # 不能用的下拉框点了也不改
+        settle()
+        self.assertEqual(self.store.get(s.id).maps, ("龙宫游乐园",))
+        self.assertEqual(self.signals, [])
+
+    def test_new_copy_and_copy_default(self):
+        ed = self.editor()
+        s = self.mine(ed, {"缓冲盾牌": "first"}, maps=("龙宫游乐园", "魔法学院"))
+        self.assertEqual(self.checked(ed), ("龙宫游乐园", "魔法学院"))
+        # 复制：带着原来的地图
+        ed.copy_btn.click()
+        settle()
+        copy = ed.scheme
+        self.assertNotEqual(copy.id, s.id)
+        self.assertEqual(copy.maps, ("龙宫游乐园", "魔法学院"))
+        self.assertEqual(self.store.get(copy.id).maps, ("龙宫游乐园", "魔法学院"))
+        # 新建空方案、复制为我的方案：通用
+        ed.new_btn.click()
+        settle()
+        self.assertEqual(ed.scheme.maps, ())
+        ed.select("")
+        settle()
+        ed.copy_default_btn.click()
+        settle()
+        self.assertEqual(ed.scheme.maps, ())
+
+    def test_ended_map_listed_only_for_its_scheme(self):
+        """标了以后才结束的地图（有编号、资料里写明已结束）：标了它的那套方案多列一项，去掉别的地图时它留着，它自己
+        也能去掉；换显示别的方案时这一项拿掉，结束的地图不会被标到别的方案上。"""
+        import dataclasses
+
+        from advisor.schemes import map_codes, taggable_maps
+
+        info = self.db.map_info["魔法学院"]
+        self.db = dataclasses.replace(self.db, map_info={**self.db.map_info,
+                                                          "魔法学院": dataclasses.replace(info, ended=True)})
+        self.assertIn("魔法学院", map_codes(self.db))
+        self.assertNotIn("魔法学院", taggable_maps(self.db))
+        a = self.store.add(Scheme(hero="芬妮", name="甲", maps=("龙宫游乐园", "魔法学院")))
+        b = self.store.add(Scheme(hero="芬妮", name="乙"))
+        ed = self.editor()
+        ed.select(a.id)
+        settle()
+        self.assertEqual(self.names(ed), [*taggable_maps(self.db), "魔法学院"])
+        self.assertEqual(self.checked(ed), ("龙宫游乐园", "魔法学院"))
+        self.assertTrue(self.combo(ed)._row_checked(self.names(ed).index("魔法学院")))
+        self.click(ed, "龙宫游乐园")  # 去掉别的地图：结束的那一张留着
+        self.assertEqual(self.store.get(a.id).maps, ("魔法学院",))
+        self.click(ed, "魔法学院")  # 它自己也能去掉
+        self.assertEqual(self.store.get(a.id).maps, ())
+        self.assertIn("魔法学院", self.names(ed))  # 还显示着这一套：这一项留着，点错了能点回来
+        ed.select(b.id)
+        settle()
+        self.assertEqual(self.names(ed), list(taggable_maps(self.db)))
+        ed.select(a.id)
+        settle()
+        self.assertEqual(self.names(ed), list(taggable_maps(self.db)))
+
+    def test_every_layout_has_maps(self):
+        from advisor.schemes import taggable_maps
+        from advisor.ui import theme
+
+        self.addCleanup(theme.set_skin, theme.DEFAULT_KEY)
+        scheme = self.store.add(Scheme(hero="芬妮", name="带地图的", maps=("龙宫游乐园",)))
+        names = list(taggable_maps(self.db))
+        for skin in theme.skins():
+            theme.set_skin(skin.key)
+            with self.subTest(skin=skin.key):
+                ed = self.editor("芬妮")
+                ed.select(scheme.id)
+                settle()
+                self.assertEqual(self.names(ed), names)
+                self.assertTrue(ed.maps_box.isVisibleTo(ed))
+                self.assertEqual(self.checked(ed), ("龙宫游乐园",))
+                self.assertGreater(ed.maps_box.height(), 0)
+                self.assertEqual(ed.maps_box.height(), ed.maps_box.combo.height())
+
+    def test_all_maps_text_not_cut_every_skin(self):
+        """没标地图时下拉框上的字七套皮肤都不省略：放得下写「全地图通用」，窄的排法里（游戏内风格，下拉框和说明并排）
+        写「通用」，不写成「全…」。宽的排法照旧写全。"""
+        from PySide6.QtWidgets import QStyle, QStyleOptionComboBox
+
+        from advisor.ui import theme
+        from advisor.ui.scheme_editor import MAPS_ALL, MAPS_ALL_SHORT
+
+        self.addCleanup(theme.set_skin, theme.DEFAULT_KEY)
+        scheme = self.store.add(Scheme(hero="芬妮", name="通用的"))
+        for skin in theme.skins():
+            theme.set_skin(skin.key)
+            with self.subTest(skin=skin.key, layout=skin.layouts.EDITOR):
+                ed = self.editor("芬妮")
+                ed.select(scheme.id)
+                settle()
+                combo = self.combo(ed)
+                option = QStyleOptionComboBox()
+                combo.initStyleOption(option)
+                edit = combo.style().subControlRect(QStyle.CC_ComboBox, option, QStyle.SC_ComboBoxEditField, combo)
+                width = edit.width() - 2  # 同 paintEvent
+                shown = combo._display_text(width)
+                self.assertIn(shown, (MAPS_ALL, MAPS_ALL_SHORT))
+                fits = combo.fontMetrics().horizontalAdvance(MAPS_ALL) <= width
+                self.assertEqual(shown, MAPS_ALL if fits else MAPS_ALL_SHORT)
+                if skin.key in ("default", "neon_sticker", "carbon_flow", "white_seaview"):
+                    self.assertEqual(shown, MAPS_ALL)  # 宽的排法照旧写全
+                self.assertEqual(combo.display_text(), MAPS_ALL)  # 全文照旧（悬停说明、测试用）
+
+    def test_short_screen_all_skins(self):
+        """七种排法按 1280×600 的屏幕缩小：窗口缩得到（不超过 600），地图这一项在窗口里（card_row 的表单在滚动区里，
+        由用户滚动，同名称、作者、说明几项）。"""
+        from advisor.ui import theme
+
+        self.addCleanup(theme.set_skin, theme.DEFAULT_KEY)
+        scheme = self.store.add(Scheme(hero="芬妮", name="带地图的", maps=("龙宫游乐园", "魔法学院")))
+        for skin in theme.skins():
+            theme.set_skin(skin.key)
+            ed = self.editor("芬妮")
+            ed.select(scheme.id)
+            settle()
+            ed.fit_to_screen(QRect(0, 0, 1280, 600))
+            settle()
+            with self.subTest(skin=skin.key, layout=skin.layouts.EDITOR):
+                self.assertLessEqual(ed.height(), 600)
+                if skin.layouts.EDITOR != "card_row":
+                    pos, size = ed.maps_box.mapTo(ed, QPoint(0, 0)), ed.maps_box.size()
+                    self.assertTrue(ed.rect().contains(QRect(pos, size)))
+
+    def test_short_screen_560_maps_visible(self):
+        """屏幕高 560 时，七套皮肤的窗口都放得下，适用地图这一项整个露在窗口里，点开列着每张能标的地图。经典主题-黑的
+        表单在滚动区里，先滚到底（同名称、作者、说明几项）。"""
+        from PySide6.QtWidgets import QScrollArea
+
+        from advisor.schemes import taggable_maps
+        from advisor.ui import theme
+
+        self.addCleanup(theme.set_skin, theme.DEFAULT_KEY)
+        scheme = self.store.add(Scheme(hero="芬妮", name="带地图的", maps=("龙宫游乐园", "魔法学院")))
+        for skin in theme.skins():
+            theme.set_skin(skin.key)
+            ed = self.editor("芬妮")
+            ed.select(scheme.id)
+            settle()
+            ed.fit_to_screen(QRect(0, 0, 1280, 560))
+            settle()
+            with self.subTest(skin=skin.key, layout=skin.layouts.EDITOR):
+                self.assertLessEqual(ed.height(), 560)
+                form = ed.findChild(QScrollArea, "formScroll")
+                if form is not None:
+                    form.verticalScrollBar().setValue(form.verticalScrollBar().maximum())
+                    settle()
+                area = QRect(ed.maps_box.mapTo(ed, QPoint(0, 0)), ed.maps_box.size())
+                self.assertTrue(ed.rect().contains(area))
+                parent = ed.maps_box.parentWidget()
+                while parent is not None and parent is not ed:
+                    if parent.objectName() == "qt_scrollarea_viewport":
+                        break
+                    box = QRect(parent.mapTo(ed, QPoint(0, 0)), parent.size())
+                    self.assertTrue(box.contains(area), (skin.key, parent.objectName()))
+                    parent = parent.parentWidget()
+                combo = self.combo(ed)
+                combo.showPopup()
+                settle()
+                self.assertTrue(combo.view().isVisible())
+                self.assertEqual([combo.itemText(i) for i in range(combo.count())], list(taggable_maps(self.db)))
+                combo.hidePopup()
+                settle()
+
+    def test_short_screen_only_list_shrinks(self):
+        """新加的适用地图不把别的部分挤出去：窗口按矮屏幕缩小以后，只有筹码列表变短，地图这一项和其余部分都在窗口里。"""
+        ed = self.editor()
+        self.mine(ed, {"缓冲盾牌": "core"}, maps=("龙宫游乐园", "魔法学院"))
+        ed.chip_list.set_group_open("地图专属", True)
+        settle()
+        view = ed.chip_list.viewport().height()
+        ed.fit_to_screen(QRect(0, 0, 1280, 600))
+        settle()
+        self.assertLessEqual(ed.height(), 600)
+        self.assertLess(ed.chip_list.viewport().height(), view)
+        for name in ("maps_box", "name_edit", "author_edit", "note_edit", "targets", "search_edit", "hints_box",
+                     "new_btn", "copy_btn", "delete_btn", "close_btn"):
+            widget = getattr(ed, name)
+            pos, size = widget.mapTo(ed, QPoint(0, 0)), widget.size()
+            self.assertTrue(ed.rect().contains(QRect(pos, size)), name)
 
 
 class StaleAndHintsTest(_EditorCase):

@@ -19,9 +19,10 @@ from PySide6.QtCore import QPointF, QRect  # noqa: E402
 from PySide6.QtGui import QColor, QFont, QFontDatabase, QImage  # noqa: E402
 from PySide6.QtWidgets import QLabel  # noqa: E402
 
+from advisor import paths  # noqa: E402
 from advisor.data import load_db  # noqa: E402
 from advisor.schemes import Scheme, SchemeStore, Tiers, get_catalog  # noqa: E402
-from advisor.ui import about, text, theme, widgets  # noqa: E402
+from advisor.ui import about, lang, text, theme, widgets  # noqa: E402
 from advisor.ui.overlay_parts import app as overlay_app
 from advisor.ui import overlay as ov  # noqa: E402
 from advisor.ui.overlay_parts import app as app_mod  # noqa: E402  build()、main() 在这里：按实际所在模块打桩
@@ -155,7 +156,7 @@ class SkinDataTest(unittest.TestCase):
                          ("Microsoft YaHei UI", 10, "", "", ()))
         self.assertEqual((d.layouts.SETTINGS, d.layouts.EDITOR, d.layouts.SHARE, d.layouts.OVERLAY), ("cards",) +
                          ("default",) * 3)
-        self.assertEqual(d.overlay.WIDTH, 430)
+        self.assertEqual(d.overlay.WIDTH, 459)
         self.assertIn("#panel { background: rgba(18, 20, 30, 225); border: 1px solid rgba(255,255,255,40); "
                       "border-radius: 12px; }", theme.overlay_style(d))
         self.assertEqual(d.widgets.TONES["warn"], ((255, 184, 107, 150), None, "#ffb86b"))
@@ -334,6 +335,61 @@ class FontFilesTest(SkinCase):
         skin = self.skin_with("bundled.ttf", family="Arial")
         self.assertIn("Arial", theme.load_fonts(skin, folder))
         self.assertEqual(theme.family("body", skin), "Arial")
+
+    def _with_lang(self, language: str) -> None:
+        self.addCleanup(setattr, lang, "CURRENT", lang.CURRENT)
+        self.addCleanup(theme.unload_fonts)
+        lang.CURRENT = language
+
+    def test_hant_loads_traditional_subset(self):
+        """繁体界面装的是繁体子集：皮肤写的简体子集文件换成同字重的繁体文件（字体名仍是 ACC Heading）。"""
+        folder = temp_dir(self) / "fonts-hant"
+        folder.mkdir()
+        shutil.copy2(paths.fonts_dir() / "ACCHeadingTC-Heavy.otf", folder / "ACCHeadingTC-Heavy.otf")
+        self._with_lang(lang.HANT)
+        self.assertIn("ACC Heading", theme.load_fonts(self.skin_with("ACCHeading-Heavy.otf"), folder))
+
+    def test_hant_missing_falls_back_to_simplified(self):
+        """繁体文件不在：退回简体子集，记一条警告、不报错。"""
+        folder = temp_dir(self) / "fonts-hant-missing"
+        folder.mkdir()
+        shutil.copy2(paths.fonts_dir() / "ACCHeading-Heavy.otf", folder / "ACCHeading-Heavy.otf")
+        self._with_lang(lang.HANT)
+        with self.assertLogs("advisor.ui.theme", "WARNING"):
+            self.assertIn("ACC Heading", theme.load_fonts(self.skin_with("ACCHeading-Heavy.otf"), folder))
+
+    def test_simplified_does_not_load_traditional_subset(self):
+        """简体界面照旧只装简体子集（文件夹里只有繁体文件时报文件不在）。"""
+        folder = temp_dir(self) / "fonts-hans"
+        folder.mkdir()
+        shutil.copy2(paths.fonts_dir() / "ACCHeadingTC-Heavy.otf", folder / "ACCHeadingTC-Heavy.otf")
+        self._with_lang(lang.HANS)
+        with self.assertLogs("advisor.ui.theme", "WARNING"):
+            self.assertEqual(theme.load_fonts(self.skin_with("ACCHeading-Heavy.otf"), folder), [])
+
+    def test_hant_body_font_uses_jhenghei(self):
+        """繁体界面、系统装着微软正黑体时正文字体用它；没有时照旧用雅黑；简体界面不换。"""
+        saved = lang.CURRENT
+        self.addCleanup(setattr, lang, "CURRENT", saved)
+        lang.CURRENT = lang.HANT
+        with mock.patch.object(theme, "available", side_effect=lambda name: name in (theme.BODY_FAMILY, theme.BODY_FAMILY_HANT)):
+            self.assertEqual(theme.body_family(), theme.BODY_FAMILY_HANT)
+            self.assertEqual(theme.family("body"), theme.BODY_FAMILY_HANT)
+        with mock.patch.object(theme, "available", side_effect=lambda name: name == theme.BODY_FAMILY):
+            self.assertEqual(theme.body_family(), theme.BODY_FAMILY)
+            self.assertEqual(theme.family("body"), theme.BODY_FAMILY)
+        lang.CURRENT = lang.HANS
+        with mock.patch.object(theme, "available", return_value=True):
+            self.assertEqual(theme.body_family(), theme.BODY_FAMILY)
+
+    def test_hant_body_font_keeps_skin_family(self):
+        """皮肤自己写了正文字体的（不是雅黑）：繁体界面也不换。"""
+        saved = lang.CURRENT
+        self.addCleanup(setattr, lang, "CURRENT", saved)
+        lang.CURRENT = lang.HANT
+        skin = self.skin_with(family="SimSun")
+        with mock.patch.object(theme, "available", return_value=True):
+            self.assertEqual(theme.body_family(skin), "SimSun")
 
     def test_switch_with_missing_fonts(self):
         """换到字体文件不在的皮肤：照常换颜色，程序字体退回默认皮肤的正文字体，不报错不弹窗。"""
@@ -847,8 +903,9 @@ class RememberSkinTest(SkinCase):
         self.addCleanup(dispose, d)
         self.assertNotIn("skin", d.rows)
         self.assertIsNone(d.skin_row)
-        # 顶部一个、七项各一个（没有「皮肤」；没有截取状态时也没有「识别画面」）
-        self.assertEqual(len([b for b in d.page.findChildren(st.GlyphBox)]), 8)
+        # 顶部一个、各项一个（没有「皮肤」；没有截取状态时也没有「识别画面」；「界面语言」只在繁体界面打开时有）
+        rows = 10 if lang.HANT_ENABLED else 9
+        self.assertEqual(len([b for b in d.page.findChildren(st.GlyphBox)]), 1 + rows)
         self.assertEqual(d.styleSheet(), theme.settings_style())
         theme.register(TEST_SKIN)
         d2 = st.SettingsDialog()
@@ -897,7 +954,7 @@ class LayoutEntryTest(SkinCase):
         theme.set_skin(skin.key)
         settle()
         self.assertEqual(d.layout_name(), "test-reversed")
-        self.assertEqual(sections()[0], st.GROUP_DIAG)
+        self.assertEqual(sections()[0], st.CardsLayout.CARDS[-1][0])  # 倒过来排：最上面是原来最下面的那一组
         self.assertEqual(set(d.rows), {i.key for i in st.shown_items()})
 
     def test_unknown_layout_is_default(self):

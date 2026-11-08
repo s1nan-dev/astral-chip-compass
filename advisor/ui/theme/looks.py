@@ -127,7 +127,7 @@ SEE_THROUGH = (PANEL_ALPHA / 255, PANEL_PAUSED_ALPHA / 255)
 
 @dataclass(frozen=True)
 class OverlayLook:
-    """悬浮窗：宽度和面板的边距，样式表（overlay_style）里的颜色、圆角、内边距，「筹码方案」卡片的两个图标按钮，推荐卡片里
+    """悬浮窗：宽度和面板的边距，样式表（overlay_style）里的颜色、圆角、内边距，「筹码方案」卡片的三个图标按钮，推荐卡片里
     推荐度、位次的颜色和筹码名按钮，已有筹码的图标格子。"""
 
     WIDTH: int
@@ -204,7 +204,7 @@ class OverlayLook:
     SCROLL_RADIUS: int
     SCROLL_HANDLE_MIN: int
     CLOSE_PADDING: str  # 标题栏的「×」（只有一个字，左右内边距小一些）
-    SCHEME_TOOL_ICON_PX: int  # 「编辑方案」「导入/导出」：图标大小、图标和字的颜色、不可用时的颜色、图标和字之间、内边距（左右, 上下）
+    SCHEME_TOOL_ICON_PX: int  # 「编辑方案」「导入/导出」「作业站」：图标大小、图标和字的颜色、不可用时的颜色、图标和字之间、内边距（左右, 上下）
     SCHEME_TOOL_COLOR: str
     SCHEME_TOOL_DISABLED: str
     SCHEME_TOOL_GAP: int
@@ -283,7 +283,7 @@ class OverlayLook:
         t = c.TINT
         opaque = "#12141e"
         return cls(
-            WIDTH=430, PANEL_MARGINS=(10, 8, 10, 10), PANEL_SPACING=8, HEAD_SPACING=5,
+            WIDTH=459, PANEL_MARGINS=(10, 8, 10, 10), PANEL_SPACING=8, HEAD_SPACING=5,
             PANEL_BG=rgba(opaque, PANEL_ALPHA, spaced=True), PANEL_BORDER=rgba(t, 40), PANEL_RADIUS=12,
             PANEL_PAUSED_BG=rgba(opaque, PANEL_PAUSED_ALPHA, spaced=True), PANEL_PAUSED_BORDER=rgba(t, 120),
             PANEL_ATTENTION_BORDER=c.WARN_COLOR, PANEL_OPAQUE_BG=opaque,
@@ -311,8 +311,8 @@ class OverlayLook:
             REMOVE_PADDING="0px 5px", REMOVE_RADIUS=5,
             SCROLL_WIDTH=8, SCROLL_HANDLE=rgba(t, 60), SCROLL_RADIUS=4, SCROLL_HANDLE_MIN=24,
             CLOSE_PADDING="3px 6px",
-            SCHEME_TOOL_ICON_PX=18, SCHEME_TOOL_COLOR=c.TEXT_COLOR, SCHEME_TOOL_DISABLED=c.DISABLED_COLOR,
-            SCHEME_TOOL_GAP=3, SCHEME_TOOL_PADDING=(7, 5),
+            SCHEME_TOOL_ICON_PX=14, SCHEME_TOOL_COLOR=c.TEXT_COLOR, SCHEME_TOOL_DISABLED=c.DISABLED_COLOR,
+            SCHEME_TOOL_GAP=2, SCHEME_TOOL_PADDING=(7, 4),
             MARK_BEST_COLOR="#ffffff", MARK_COLOR="#b8bfd0",
             NAME_BORDER_ALPHA=150, UNREADABLE_BORDER_ALPHA=190, NAME_PADDING="0px 8px", NAME_WEIGHT_BEST=700,
             NAME_WEIGHT=500, PICKED_WEIGHT=600,
@@ -495,8 +495,11 @@ class SettingsLook:
     SWITCH_KNOB_INSET: float
     ROW_INSET: int  # 整行可点的一行：变亮的圆角框比整行缩进多少
     # 以下几项默认皮肤不用：
+    # 性能测试的结果档名：余裕、正常、危险、临界、过载（键是 dual_check 的档位取值）。浅色底用深色，深色底用亮色
+    LEVEL_COLOR: Mapping = field(default_factory=dict)
     SHEET_EXTRA: str = ""  # 接在样式表最后的几条规则
     HEIGHT: int = 0  # 窗口高度：0 为按内容（默认的单页分组卡片）；分页的排法用固定的高度
+    BIG_CORES_EXTRA: int = 0  # 固定高度的排法：多了「只用大核」一行（有大小核的电脑）时窗口再高这么多（这一行连同间距）
     CHIP_BADGE: str = ""  # 状态标签左边的圆点里写的字（截取屏幕等需要留意的状态，例如「!」）；空为只画圆点
     # 选中的模式方块右上角的对勾圆标：（底, 框线, 对勾）；空为不画。RADIO_SIZE 为 0 时不画左上的圆点
     TILE_BADGE: tuple = ()
@@ -524,6 +527,8 @@ class SettingsLook:
             WINDOW_BG=c.WINDOW_BG, TEXT_COLOR=c.TEXT_COLOR, DIM_COLOR=c.DIM_COLOR, WARN_COLOR=c.WARN_COLOR,
             CARD_BG="#1e2232", CARD_BORDER="#2a2f42", DIVIDER_COLOR="#2a2f42",
             ICON_BG=rgba(t, 14), ICON_COLOR=c.SOFT_COLOR, SELECTED_COLOR=c.MAP_COLOR,
+            LEVEL_COLOR={"easy": c.OK_COLOR, "normal": c.RARITY_COLOR.get("蓝", "#5cc8ff"),
+                         "danger": c.MAP_COLOR, "critical": "#ff9a3c", "overload": "#ff5d6c"},
             TILE_BG="#191c29", TILE_BORDER="#2f3550", TILE_HOVER_BORDER="#4a5274", TILE_ON_BG=rgba(c.MAP_COLOR, 18),
             RADIO_OFF_COLOR=c.DISABLED_COLOR,
             KEYCAP_BG="#2a2f42", KEYCAP_BORDER="#3a4160", KEYCAP_EDGE="#0f111a",

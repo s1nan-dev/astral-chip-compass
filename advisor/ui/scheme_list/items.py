@@ -10,6 +10,7 @@ from PySide6.QtGui import QPainter, QPen
 from PySide6.QtWidgets import QApplication, QToolTip, QVBoxLayout, QWidget
 
 from ...data import TIER_LABEL, TIERS
+from .. import lang, names
 from ..widgets import chip_icon, scaled_pixmap
 from .specs import (
     FRAME_MS,
@@ -91,6 +92,7 @@ class _RowItem(_Item):
         super().__init__(owner, ghost)
         self.chip = chip
         self.data = owner.db.chips.get(chip)
+        self.shown_name = names.chip_in(owner.db, chip)  # 画在行首的名字（繁体界面为繁体名，chip 仍作程序用的键）
         self.spec = RowSpec(chip)
         self.block = ""
         self.group: str | None = None
@@ -185,12 +187,13 @@ class _RowItem(_Item):
         p.setPen(_color(C.RARITY_COLOR.get(rarity, L.NAME_COLOR)))
         name = m.name_rect(h)
         p.drawText(name, Qt.AlignVCenter | Qt.AlignLeft,
-                   m.fm_row.elidedText(self.chip, Qt.ElideRight, int(name.width())))
+                   m.fm_row.elidedText(self.shown_name, Qt.ElideRight, int(name.width())))
         p.setFont(m.font_small)
         if self.spec.school:
             p.setPen(_color(L.SCHOOL_COLOR))
             school = m.school_rect(h)
-            shown = m.fm_small.elidedText(self.spec.school, Qt.ElideRight, int(school.width()) - (10 if L.SCHOOL_FILL else 0))
+            shown = m.fm_small.elidedText(lang.t(self.spec.school), Qt.ElideRight,
+                                          int(school.width()) - (10 if L.SCHOOL_FILL else 0))
             if L.SCHOOL_FILL is not None:  # 皮肤把流派写在小胶囊里（白色海景房）
                 pill = QRectF(school.left(), school.center().y() - 9, m.fm_small.horizontalAdvance(shown) + 12, 18)
                 _round_rect(p, pill, L.SCHOOL_FILL, None, 9)
@@ -209,7 +212,7 @@ class _RowItem(_Item):
                 rect = m.button_rect(i, h).adjusted(0.5, 0.5, -0.5, -0.5)
                 _round_rect(p, rect, fill, border, L.BUTTON_RADIUS)
                 p.setPen(_color(text))
-                p.drawText(rect, Qt.AlignCenter, TIER_LABEL[tier])
+                p.drawText(rect, Qt.AlignCenter, lang.t(TIER_LABEL[tier]))
                 if not self.ghost and self.owner._ring_on(("button", self.chip, i)):
                     _focus_ring(p, m.button_rect(i, h), L.BUTTON_RADIUS, QRectF(self.rect()))
         end = m.end_rect(w, h)
@@ -248,7 +251,7 @@ class _RowItem(_Item):
             seg = m.button_rect(i, h)
             p.fillRect(seg, _color(fill))
             p.setPen(_color(text))
-            p.drawText(seg, Qt.AlignCenter, TIER_LABEL[tier])
+            p.drawText(seg, Qt.AlignCenter, lang.t(TIER_LABEL[tier]))
             p.setPen(Qt.NoPen)
         p.restore()
         border = _color(L.SEGMENT_BORDER if L.SEGMENT_BORDER is not None else L.BUTTON_LOOK["normal"][2])
@@ -280,7 +283,7 @@ class _RowItem(_Item):
                 knob = seg.adjusted(2, 2, -2, -2)
                 _round_rect(p, knob, fill, None, knob.height() / 2)
             p.setPen(_color(text))
-            p.drawText(seg, Qt.AlignCenter, TIER_LABEL[tier])
+            p.drawText(seg, Qt.AlignCenter, lang.t(TIER_LABEL[tier]))
         for i in range(len(TIERS)):
             if not self.ghost and self.owner._ring_on(("button", self.chip, i)):
                 _focus_ring(p, m.button_rect(i, h), m.button_rect(i, h).height() / 2, QRectF(self.rect()))
@@ -395,7 +398,7 @@ class _RowItem(_Item):
         if event.type() == QEvent.ToolTip:
             text, rect = self.tip_at(QPointF(event.pos()))
             if text and self.owner._drag is None:
-                QToolTip.showText(event.globalPos(), _tip_html(text), self, rect)
+                QToolTip.showText(event.globalPos(), _tip_html(lang.t(text)), self, rect)
             else:
                 QToolTip.hideText()
                 event.ignore()

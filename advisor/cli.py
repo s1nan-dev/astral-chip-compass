@@ -377,9 +377,11 @@ def render(db: DB, adv: Advice) -> str:
             kind_text = chip.group
         mark = f"{'—':>4}  " if item.superseded_by and ranking is None else percent
         note = f"  {SUPERSEDED.format(x=item.superseded_by)}" if item.superseded_by else ""
+        formula = (f" = 内置分 {item.official:.0f} + 适配分 {item.immediate - item.official:.0f}"
+                   if item.official else f" = 适配分 {item.immediate:.0f}")
         lines.append(
             f"{mark}{place}{chip.name}（{chip.rarity}·{kind_text}）{note}  总分 {item.total:.0f}"
-            f" = 内置分 {item.official:.0f} + 适配分 {item.immediate - item.official:.0f} + 前瞻分 {item.lookahead:+.0f}"
+            f"{formula} + 前瞻分 {item.lookahead:+.0f}"
         )
         lines.append(f"        效果：{chip.effect}")
         lines.extend(f"        {v}" for v in versus_lines(adv, item))

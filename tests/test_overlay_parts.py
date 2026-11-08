@@ -5,9 +5,11 @@
 """
 import unittest
 from types import SimpleNamespace
+from unittest import mock
 
 from advisor import unlock
 from advisor.data import load_db
+from advisor.session import SchemeChoice
 from advisor.ui.overlay_parts import notices, records, state, status
 from advisor.ui.overlay_parts.geometry import window_plan
 from advisor.ui.overlay_parts.wording import (
@@ -25,6 +27,7 @@ from advisor.ui.overlay_parts.wording import (
     RUNNING_TIP,
 )
 from advisor.ui.services import Services
+from advisor.ui.text import SCHEME_DEFAULT
 from tests.support.fakes import FakeLogbook
 
 DB = load_db()
@@ -39,14 +42,16 @@ _STATE_FIELDS = {"seen_hero", "progress", "progress_cap", "teammates", "game_ove
 def fake_session(**fields):
     """take_view 读的各项（state.SessionAPI 里刷新要读的那些），没给的都是「没读到」：状态字段放在 game 上，和真实的
     Session 一样。"""
-    settings = SimpleNamespace(hero=HERO, round=3, star=1, star_read=True, map=None, owned=["标靶", "书签"])
+    settings = SimpleNamespace(hero=HERO, round=3, star=1, star_read=True, map=None, owned=["标靶", "书签"],
+                               ui_lang="", hant_notice_closed=False)
     game = SimpleNamespace(seen_hero=HERO, map_ask=False, map_candidates=[], missed_offer=None, unrecorded=0,
                            progress=None, progress_cap=None, teammates=[], game_over=False, coins=None,
                            panel_needed=None, mutators=[], result_read=False)
     session = SimpleNamespace(settings=settings, hero_source="auto", game=game, map_source=None, map_confidence=None,
                               game_over_info=None, games=0, unsupported=[], can_undo_new_game=False,
                               can_restore_chip=False, difficulty_info=None, next_star_cost=lambda: None,
-                              take_ledger=lambda: [])
+                              take_ledger=lambda: [], scheme_choice=lambda hero=None: SchemeChoice(),
+                              take_map_switch=lambda: None, hant_game=False, game_quiet=False)
     for name, value in fields.items():
         setattr(game if name in _STATE_FIELDS else session, name, value)
     return session
@@ -136,6 +141,63 @@ class TakeViewTest(unittest.TestCase):
         self.assertEqual((view.map_source, view.progress, view.progress_cap, view.hero), ("task", None, 9, HERO))
         self.assertIn("RuntimeError: 也坏了", view.read_error)
         self.assertEqual(state.take_view(fake_session()).read_error, "")
+
+    def test_hant_notice(self):
+        """认出游戏是繁体、界面还是简体、设置里没选繁體、这条也没关过时才有 hant_notice；繁体界面关着（lang.HANT_ENABLED）
+        时一律没有。"""
+        saved = state.lang.CURRENT
+        self.addCleanup(setattr, state.lang, "CURRENT", saved)
+        state.lang.CURRENT = state.lang.HANS
+        with mock.patch.object(state.lang, "HANT_ENABLED", False):
+            self.assertFalse(state.take_view(fake_session(hant_game=True)).hant_notice)
+        switch = mock.patch.object(state.lang, "HANT_ENABLED", True)
+        switch.start()
+        self.addCleanup(switch.stop)
+        session = fake_session(hant_game=True)
+        self.assertTrue(state.take_view(session).hant_notice)
+        for field, value in (("ui_lang", state.lang.HANT), ("hant_notice_closed", True)):
+            with self.subTest(field=field):
+                session = fake_session(hant_game=True)
+                setattr(session.settings, field, value)
+                self.assertFalse(state.take_view(session).hant_notice)
+        state.lang.CURRENT = state.lang.HANT
+        self.assertFalse(state.take_view(fake_session(hant_game=True)).hant_notice)
+
+    def test_scheme_choice(self):
+        """筹码方案：这一局实际用的、保存的、按哪张地图换的三项同一刻取（Session.scheme_choice）；刚按地图换上的那一次是
+        「取走」式的读，只在要的时候取（switch）。方案名默认推荐写 SCHEME_DEFAULT。读出错时这几项按没读到算，刚换上的
+        那一次也不取（留到下一轮）。"""
+        saved, used = SimpleNamespace(id="u", name="通用"), SimpleNamespace(id="l", name="龙宫专用")
+        choice = SchemeChoice(saved, used, "龙宫游乐园")
+        taken = []
+        session = fake_session(scheme_choice=lambda hero=None: choice,
+                               take_map_switch=lambda: taken.append(1) or choice)
+        view = state.take_view(session)
+        self.assertEqual(taken, [])
+        self.assertIsNone(view.map_switch)
+        self.assertTrue(view.scheme_read)
+        self.assertTrue(view.map_switched)
+        self.assertEqual((view.scheme, view.saved_scheme, view.scheme_map), (used, saved, "龙宫游乐园"))
+        self.assertEqual((view.scheme_name, view.saved_scheme_name), ("龙宫专用", "通用"))
+        view = state.take_view(session, switch=True)
+        self.assertEqual(taken, [1])
+        self.assertIs(view.map_switch, choice)
+        plain = state.take_view(fake_session(), switch=True)
+        self.assertTrue(plain.scheme_read)
+        self.assertFalse(plain.map_switched)
+        self.assertIsNone(plain.map_switch)
+        self.assertEqual((plain.scheme_name, plain.saved_scheme_name), (SCHEME_DEFAULT, SCHEME_DEFAULT))
+        self.assertFalse(state.SessionView().scheme_read)  # 整份快照是默认值：不拿方案判断换没换
+
+        def boom(hero=None):
+            raise RuntimeError("坏了")
+
+        broken = state.take_view(fake_session(scheme_choice=boom, take_map_switch=lambda: taken.append(2)),
+                                 switch=True)
+        self.assertFalse(broken.scheme_read)
+        self.assertEqual((broken.scheme, broken.map_switch, broken.hero), (None, None, HERO))
+        self.assertEqual(taken, [1])
+        self.assertIn("RuntimeError: 坏了", broken.read_error)
 
 
 def view_of(**fields) -> state.SessionView:
@@ -386,12 +448,40 @@ class OfferLogTest(unittest.TestCase):
         self.assertEqual(self.log.pick_offer_ids, {"B": first})
         self.assertEqual(self.logbook.games_log, [("new", "g1"), ("undo", "g1")])
 
+    def test_supplement_via(self):
+        """补录的选择记 via="supplement"：和正常选的、面板改正的分得出来。"""
+        self.log.on_advice(advice_ev(["A", "B", "C"], 3), False, self.egg)
+        first = self.log.offer_id
+        self.log.supplement("B", first)
+        self.assertEqual(self.logbook.picks[-1], (first, "B", "supplement"))
+
+    def test_client_only_when_known(self):
+        """认得出客户端时随 offer 传给推荐日志；认不出时不传这个参数（假的推荐日志不认它也不出错）。"""
+        known = records.OfferLog(lambda: self.services, client=lambda: "taptap")
+        known.on_advice(advice_ev(["A", "B", "C"], 3), False, self.egg)
+        self.assertEqual(self.logbook.offers[-1], (known.offer_id, ("A", "B", "C"), "taptap"))
+        unknown = records.OfferLog(lambda: self.services, client=lambda: None)
+        unknown.on_advice(advice_ev(["A", "B", "C"], 3), False, self.egg)
+        self.assertEqual(self.logbook.offers[-1], (unknown.offer_id, ("A", "B", "C")))
+
     def test_game_over_once_per_game(self):
         self.log.game_over({"why": "结算"}, 2)
         self.log.game_over({"why": "结算"}, 2)
         self.log.game_over(None, 3)
         self.log.game_over({"why": "结算"}, 3)
         self.assertEqual(self.logbook.game_overs, [{"why": "结算"}, {"why": "结算"}])
+
+    def test_game_over_again_when_result_changes(self):
+        """同一局的胜负结束以后才定（或改了）：再记一条，别的项照旧；胜负没变的不再记，别的项变了也不记。"""
+        undecided = {"why": "结算", "outcome": None, "how": None}
+        lost = {**undecided, "outcome": "loss", "how": "reward"}
+        self.assertTrue(self.log.game_over(undecided, 2))
+        self.assertFalse(self.log.game_over({**undecided, "why": "结算画面"}, 2))
+        self.assertTrue(self.log.game_over(lost, 2))
+        self.assertFalse(self.log.game_over(lost, 2))
+        self.assertTrue(self.log.game_over(undecided, 2))  # 又改回不知道（两边矛盾）：照样再记，以后一条为准
+        self.assertEqual(self.logbook.game_overs, [undecided, lost, undecided])
+        self.assertTrue(self.log.game_over(undecided, 3))  # 下一局
 
 
 if __name__ == "__main__":

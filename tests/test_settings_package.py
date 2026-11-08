@@ -1,21 +1,23 @@
 """「拾星助手设置」窗口包（advisor.ui.settings）的导入面：包上再导出的名字都取得到，和子模块里的是同一个对象，
 各子模块按任意顺序先导入都不报循环导入，排法表和行部件在包、子模块、窗口类三处是同一个对象（测试在包上往里加排法时窗口类
 要能认）。包只做再导出，窗口的代码按各子模块里的名字读：测试和工具不在包本身上替换、改写名字（打在包上的替换打不到窗口）。
+导入这个包不连带加载识别库（界面模块对识别包都是用到时才导入）。
 """
 import ast
 import json
 import os
 import subprocess
 import sys
+import textwrap
 import unittest
 from pathlib import Path
 
 from advisor.ui import settings
-from advisor.ui.settings import dialog, layouts, palette, widgets
+from advisor.ui.settings import dialog, dual_prompt, layouts, palette, widgets
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = "advisor.ui.settings"
-SUBMODULES = {"dialog": dialog, "widgets": widgets, "layouts": layouts, "palette": palette}
+SUBMODULES = {"dialog": dialog, "widgets": widgets, "layouts": layouts, "palette": palette, "dual_prompt": dual_prompt}
 
 # 能从 advisor.ui.settings 导入的名字（含测试在用的私有名字），逐个 getattr 核对
 EXPORTED = (
@@ -32,13 +34,20 @@ EXPORTED = (
     "TAB_LOOK", "TAB_RECOG", "UPDATE_BUTTON", "UPDATE_BUTTON_TIP", "UPDATE_CARD", "UPDATE_CHECK_ACTION", "UPDATE_DESC",
     "UPDATE_TITLE", "capture_shown", "hotkey_texts", "manual_desc", "settings_texts", "shown_items",
     # widgets：各排法共用的行部件
-    "Chevron", "KeyCap", "ModeTile", "RowButton", "RowParts", "SkinRow", "SkinThumb", "StatusChip", "Switch", "_button",
+    "Chevron", "KeyCap", "ModeTile", "RowButton", "RowParts", "SkinRow", "SkinThumb", "StatusChip", "Switch", "TextLink",
+    "_button",
     # layouts：各排法和只有某一种排法用的小部件
     "LAYOUTS", "BandTabsLayout", "CardsLayout", "ChevronBox", "CutRowButton", "GlyphMark", "GridLayout",
     "GroupCardsLayout", "Layout", "RowArrow", "SideTabsLayout", "TintIcon", "TopTabsLayout", "_note_buttons",
     # palette：调色盘图标的交互
     "FLASH_MS", "PALETTE_PEN", "STAR_GOLD", "STAR_MS", "PaletteFrame", "PaletteTrap", "RowFlash", "StarFlight",
     "_valid", "star_path",
+    # dual_prompt：两个客户端同时识别以前的性能测试对话框和它的文字
+    "APPLIED", "BUSY", "CANCEL", "CRITICAL", "DANGER", "DEFAULT_BUTTON_SHEET", "DIRECT_OPEN", "DualPromptDialog", "EASY",
+    "IGNORE", "IGNORE_DEFAULT", "LEVEL_MEANING", "LEVEL_NAME", "LOWEND_RETEST", "MISSING_ALL", "MISSING_ONE", "NORMAL",
+    "NO_SLOWEST", "OK", "OVERLOAD", "OWN", "PROMPT_TITLE", "REMAIN", "RESULT_TITLE", "RETEST", "RETEST_DEFAULT",
+    "SLOWEST", "START", "STOPPED_FALLBACK", "STOPPED_TITLE", "TESTING", "WARNING", "level_color", "missing_text",
+    "remain_seconds", "result_texts",
     # 从别处导入、settings 再导出的
     "paths", "unlock", "chrome", "decor", "skin_preview", "theme", "GLYPH_RATIOS", "ICON_ABOUT", "ICON_CAPTURE",
     "ICON_CHEVRON", "ICON_DIAG", "ICON_FAMILIES", "ICON_HOTKEY", "ICON_LOOK", "ICON_MODE", "ICON_SETTINGS", "ICON_SKIN",
@@ -75,9 +84,21 @@ FIRST = (
     "import advisor.ui.settings.widgets",
     "import advisor.ui.settings.layouts",
     "import advisor.ui.settings.palette",
+    "import advisor.ui.settings.dual_prompt",
     "from advisor.ui.settings.dialog import SettingsDialog",
     "from advisor.ui.settings.palette import _valid",
 )
+
+# 导入包以后不该出现的模块：识别包、截图和识别流程用的库，以及连带它们的两个界面模块（性能测试的过程、取帧）
+HEAVY_CHECK = textwrap.dedent("""
+    import json, sys
+    import advisor.ui.settings
+    heavy = sorted(m for m in sys.modules
+                   if m.split(".")[0] in ("numpy", "cv2", "mss", "onnxruntime", "rapidocr_lite")
+                   or m == "advisor.vision" or m.startswith("advisor.vision.")
+                   or m in ("advisor.ui.dual_check", "advisor.ui.screen"))
+    print(json.dumps(heavy))
+""")
 
 
 def _literal_head(node) -> str | None:
@@ -185,12 +206,17 @@ def g(settings):
 """
         self.assertEqual(package_writes(good), [])
 
-    def run_child(self, first: str) -> dict:
+    def run_child(self, first: str, check: str = CHECK):
         env = dict(os.environ, QT_QPA_PLATFORM="offscreen", PYTHONIOENCODING="utf-8")
-        proc = subprocess.run([sys.executable, "-B", "-c", f"{first}\n{CHECK}"], capture_output=True, text=True,
+        proc = subprocess.run([sys.executable, "-B", "-c", f"{first}\n{check}"], capture_output=True, text=True,
                               encoding="utf-8", cwd=ROOT, env=env, timeout=120)
         self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
         return json.loads(proc.stdout.strip().splitlines()[-1])
+
+    def test_no_vision_on_import(self):
+        """导入设置窗口包不连带加载识别库：性能测试对话框只拿结果（不导入性能测试的过程），端名在用到时才从识别包取
+        （在子进程里核对）。"""
+        self.assertEqual(self.run_child("", HEAVY_CHECK), [])
 
     def test_any_import_order(self):
         for first in FIRST:

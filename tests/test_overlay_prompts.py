@@ -8,7 +8,9 @@ import re
 import threading
 import unittest
 from types import SimpleNamespace
+from unittest import mock
 from PySide6.QtWidgets import QPushButton  # noqa: E402
+from advisor import hub  # noqa: E402
 from advisor.data import load_db, LEVEL_NIGHTMARE  # noqa: E402
 from advisor.session import Event  # noqa: E402
 from advisor.ui.overlay import Overlay
@@ -26,6 +28,7 @@ class OverlayPromptTest(unittest.TestCase):
 
     def setUp(self):
         self.db = load_db()
+        self.enterContext(mock.patch.object(hub, "ENABLED", True))
         self.session = OverlaySession(self.db, UiSettings(hero="凛"))
         self.window = Overlay(self.db, self.session, threading.Lock())
 
@@ -517,7 +520,7 @@ class OverlayPromptTest(unittest.TestCase):
         self.assertRegex(rule, r"border: 1px solid")
         self.assertRegex(rule, r"background:")
         texts = [b.text() for b in buttons(w)]
-        for t in ("补录筹码", "＋ 补录筹码", "设置", "编辑方案", "导入/导出", "全部折叠", "▾", "关闭本条提示"):
+        for t in ("补录筹码", "＋ 补录筹码", "设置", "编辑方案", "导入/导出", "作业站", "全部折叠", "▾", "关闭本条提示"):
             self.assertIn(t, texts)
         for t in ("导出诊断", "关于", "导入/导出方案"):  # 在设置窗口和「筹码方案」卡片里
             self.assertNotIn(t, texts)
@@ -529,8 +532,8 @@ class OverlayPromptTest(unittest.TestCase):
         w.handle(Event("panel_prompt"))
         w.set_expanded(True)
         texts = [*w.notice_model.texts().values(), w.status.summary_plain, w.status.summary_tip_text, *w.visible_texts(),
-                 *(tip_text(b.toolTip()) for b in (w.toggle_btn, w.settings_btn, w.edit_btn, w.share_btn, w.add_btn,
-                                                   *w.reason_buttons)),
+                 *(tip_text(b.toolTip()) for b in (w.toggle_btn, w.settings_btn, w.edit_btn, w.share_btn, w.hub_btn,
+                                                   w.add_btn, *w.reason_buttons)),
                  *(card.toggle.toolTip() for card in w.cards.values())]
         for text in texts:
             for word in BANNED + ("重选", "不认同"):

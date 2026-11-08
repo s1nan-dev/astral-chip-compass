@@ -43,7 +43,8 @@
   - `BasicTest`：声明长度的正文、分块正文、请求头只发一个 User-Agent、404/500 报 HTTP 错误、跟随 301/302、不收也不带 cookie、重定向最多跟 10 次。
   - `RedirectTest`：重定向没跟、回话是 3xx 时按 HTTP 错误报（错误码就是那个 3xx），不把 3xx 的正文当图片交回。
   - `FailureTest`：声明长度没读够报「读了一半」、等回话超时和读正文超时都按超时报、发请求出错时的中文原因。
-  - `ResendTest`：复用的长连接被服务器关掉时换一条连接重发一次（正常关和 RST 都认）；每条连接都失败只重发一次；置了停止标志就不重发。
+  - `PostTest`：`Session.post` 的正文真的发出去、请求头照传；任何状态码都交回、不抛 HTTP 错误；3xx 原样交回、不跟重定向；回话正文最多读 64 KiB；连接和发送、接收的超时分开设；置了停止标志抛「停止」。
+  - `ResendTest`：复用的长连接被服务器关掉时换一条连接重发一次（正常关和 RST 都认），POST 重发的那一次照样带着整份正文；每条连接都失败只重发一次；置了停止标志就不重发。
   - `StopTest`：正文读到一半置停止标志抛「停止」；下载层把它转成自己的「已取消」；经 `assets.download` 时很快收手、不留文件。
   - `HandleTest`：成功、HTTP 错误、没读够、重定向失败、停止这几条路径都把连接句柄和请求句柄关掉。
   - `ParallelTest`：4 个线程各一个会话同时下载互不干扰。
@@ -194,16 +195,17 @@
   - `MultithreadTest`：给显卡设备开多线程保护——先向即时上下文要、要不到向设备要、都要不到照常建好；真建设备时的先后次序。
   - `GrabStepsTest`：没用上的旧帧计数；分步计时的报告次序；步骤名集合；只要一块（`region`）时交给读回那一步，不要时照旧按整幅读。
   - `ExclusiveFullscreenTest`：系统报有程序独占全屏时，只在前台窗口属于游戏时才算（切出游戏时别的程序独占全屏不算）。
-  - `WindowGoneErrorTest`：找不到窗口、窗口最小化给玩家看的两句固定中文（找不到时不写窗口标题，国服、国际服两个标题都找过才算找不到）；都是 `RuntimeError` 的一种。
-  - `GameTitlesTest`：国服（`AstralParty_CN`）、国际服（`AstralParty_INT`）的游戏窗口都认，先找国服、再找国际服，找到哪个用哪个；只传一个标题时只找那一个；截图、前台判断和悬浮窗查看游戏窗口（`winapi.probe_game`）认的是同一个窗口；三处的标题（`capture.WINDOW_TITLES`、`winapi.GAME_TITLES`、打包脚本的 `GAME_TITLES`）相同。
+  - `WindowGoneErrorTest`：找不到窗口、窗口最小化给玩家看的固定中文（找不到时不写窗口标题，三个标题都找过才算找不到）；设了游戏平台、开着的是另一个端时给玩家看的那一句（填上那个端的名字，同 `capture.NOT_FOUND_PLATFORM`）；两个客户端同时识别、这一次明确指定了端时是「未找到「{name}」的游戏窗口。」（`NOT_FOUND_ONE`），另一个端开着也是这一句；`missing_notice` 用眼下设的平台判断同一套情形，悬浮窗定时查看游戏窗口（`probe_game`）时把它放进 `notice`，找到窗口时为空；都是 `RuntimeError` 的一种，悬浮窗认得出这几句。
+  - `PlatformTest`：`set_platform` 认 `steam`、`taptap`、`both`（两个客户端同时识别），别的值按自动识别、不抛错；指定了端时只找这个端，不看设置；设置是 `both`、又没给端时和自动识别一样（三个标题都找，两个都开着跟后启动的那个），找到后记下实际的那个端；`both` 时还没区分端的调用处找到的是后启动的那个，找不到时是 `NOT_FOUND`，不点设置的问题；找到的标题按端记，`found_title` 给了端时取那个端上一次找到的（两开时两路识别不互相覆盖），不给时照旧是最后一次找到的，`client_of` 把标题换成对局报告的客户端（`cn`、`int`、`taptap`）；`probe_game` 按端找。
+  - `GameTitlesTest`：Steam 版国服（`AstralParty_CN`）、国际服（`AstralParty_INT`）和 TapTap 版（`吉星派对`）的游戏窗口都认，先找国服、再找国际服、最后 TapTap 版，找到哪个用哪个；两个端同时开着时自动识别按进程启动时间取晚的那个；只传一个标题时只找那一个；截图、前台判断和悬浮窗查看游戏窗口（`winapi.probe_game`）认的是同一个窗口；三处的标题（`capture.WINDOW_TITLES`、`winapi.GAME_TITLES`、打包脚本的 `GAME_TITLES`）相同；打包脚本查游戏开着没有时 TapTap 版也认。
   - `ModuleRulesTest`：这个模块只导系统组件和 numpy、cv2，不导界面库、不写界面中文句子。
   - `FrameSourceTest`：会话复用、游戏窗口换了先关旧的、空闲满 30 秒关掉、最小化和找不到窗口、没有新画面时沿用最近一帧、「出错按种类处理」（不支持/拒绝立即改、显卡驱动重置累计到 3 次才改、其他错误重试一次）、改为截取屏幕后再试一次直接截取、截屏方式要求游戏或悬浮窗在前台、窗口正好关了、意外的错误、一直没画面按出错处理，以及状态、统计、快照。
   - `BlankCheckTest`：游戏在前台且连续 10 秒画面几乎全黑时才去屏幕上核对一小块，那块不黑才判为全黑并改方式；读条时屏幕上也是黑的不误判；不在前台不核对；来了一帧亮的就重新计时；少量取样和整套取样结果一致；核对的位置要避开本进程窗口和被别的窗口盖住的地方。
   - `BandSourceTest`：快速盯绿框的取帧对象（`screen.BandSource`）截取方式跟着后台识别的取帧对象：直接截取时自己建一个会话（照后台识别的系统支持请求不显示黄框）、一直复用、只要那一块、最多等 `BAND_WAIT_S`（几十毫秒以内）要新画面；游戏窗口换了先关旧的；客户区大小不对、最小化、找不到游戏窗口、还没有截取方式时不截；会话出错或建不了时关掉、`BACKOFF_S` 内不重建，错误记录只记一次；后台识别改为截取屏幕时截屏幕上的那一块、关掉自己的会话，游戏和拾星助手自己的窗口都不在前台时不截。
   - `LastStateTest`：记录最近一个取帧对象的截取方式。
   - `SystemSmokeTest`、`ReadbackSmokeTest`、`ConvertThreadTest`（子进程、真组件、Win）：真的建显卡设备、读回纹理、量颜色转换只用当前线程。
-- **检证对象**：`advisor/vision/window_capture.py`（`classify`、`CaptureError`、`_check`、`system_support`、`client_box`、`region_box`、`strip_rows`、`to_bgr`、`_Device` 的 `_protect`／`_open_fence`／`_wait_copy`／`read_bgr`、`WindowCapture` 的 `_latest`／`grab`（含 `region`）／`_read`、`stats`、`component_check`）；`advisor/ui/screen.py` 的 `FrameSource`、`BandSource`、`initial_state`、`expected_method`、`last_state`；`advisor/vision/capture.py` 的 `grab_region`、`find_window`、`find_game`、`game_in_front`、`client_rect`、`WindowGone`、`NOT_FOUND`、`WINDOW_TITLES`、`exclusive_fullscreen`；`advisor/ui/winapi.py` 的 `GAME_TITLES`、`find_game_hwnd`、`probe_game`；`tools/build_release.py` 的 `GAME_TITLES`。
-- **什么时候要跑**：改 `advisor/vision/window_capture.py` 任何一处；改 `advisor/ui/screen.py` 的 `FrameSource`、`BandSource`（选方式、出错处理、贴补之外的取帧逻辑）；改 `advisor/vision/capture.py` 的裁屏、找窗口、独占全屏、窗口位置；改游戏窗口的标题（三处一起改）。
+- **检证对象**：`advisor/vision/window_capture.py`（`classify`、`CaptureError`、`_check`、`system_support`、`client_box`、`region_box`、`strip_rows`、`to_bgr`、`_Device` 的 `_protect`／`_open_fence`／`_wait_copy`／`read_bgr`、`WindowCapture` 的 `_latest`／`grab`（含 `region`）／`_read`、`stats`、`component_check`）；`advisor/ui/screen.py` 的 `FrameSource`、`BandSource`、`initial_state`、`expected_method`、`last_state`；`advisor/vision/capture.py` 的 `grab_region`、`find_window`、`find_game`、`game_in_front`、`client_rect`、`WindowGone`、`NOT_FOUND`、`NOT_FOUND_ONE`、`WINDOW_TITLES`、`set_platform`、`platform`、`found_platform`、`missing_notice`、`PLATFORM_TITLES`、`PLATFORM_NAMES`、`NOT_FOUND_PLATFORM`、`BOTH`、`BOTH_NAME`、`exclusive_fullscreen`；`advisor/ui/winapi.py` 的 `GAME_TITLES`、`find_game_hwnd`、`probe_game`（含 `GameProbe.notice`）；`tools/build_release.py` 的 `GAME_TITLES`。
+- **什么时候要跑**：改 `advisor/vision/window_capture.py` 任何一处；改 `advisor/ui/screen.py` 的 `FrameSource`、`BandSource`（选方式、出错处理、贴补之外的取帧逻辑）；改 `advisor/vision/capture.py` 的裁屏、找窗口、游戏平台（`set_platform`、`BOTH`、`PLATFORM_TITLES`、`PLATFORM_NAMES`、`NOT_FOUND_PLATFORM`、`NOT_FOUND_ONE`）、独占全屏、窗口位置；改游戏窗口的标题（三处一起改）。
 - **怎么单独跑**：`python -B tools/run_tests.py --only test_window_capture`（上次约 6 秒）。真正开测试窗口的实机版是另一个模块 `test_window_capture_live`。
 - **需要什么**：大部分不需要；`SystemSmokeTest`、`ReadbackSmokeTest`、`ConvertThreadTest` 要 Windows + 显卡（在子进程里跑真组件），非 Windows 跳过。
 - **输出怎么看**：非 Windows 时那三个真组件的用例跳过；`ReadbackSmokeTest` 里如果这台电脑的显卡驱动用不了信号等拷贝，会跳过并说明「照常由映射自己等」；子进程崩溃算失败。
@@ -218,7 +220,8 @@
   - `BandSourceTest` 失败 → 快速盯绿框的取帧对象没跟着后台识别的截取方式、会话没复用或出错后没等就重建、截屏幕时位置没按客户区挪（`advisor/ui/screen.py` 的 `BandSource`）；`ImageTest.test_region_box`、`GrabStepsTest.test_region_passed_to_read` 失败 → 只截一块时的位置换算或交给读回那一步改了（`window_capture.py` 的 `region_box`、`grab`）。
   - `BlankCheckTest` 失败 → 全黑核对的时机或位置改了（`FrameSource._is_blank`／`_screen_differs`／`_probe_block`、`screen._near_black`）。
   - `ExclusiveFullscreenTest` 失败 → 独占全屏只认前台属于游戏的判断改了（`capture.exclusive_fullscreen`）。
-  - `GameTitlesTest` 失败 → 找游戏窗口的标题或先后改了（`capture._find`、`winapi.find_game_hwnd`），或三处的标题不一致了。
+  - `GameTitlesTest` 失败 → 找游戏窗口的标题、先后或游戏平台设置改了（`capture._find`、`capture.set_platform`、`winapi.find_game_hwnd`），或三处的标题不一致了。
+  - `WindowGoneErrorTest`／`PlatformTest` 失败 → 找不到窗口的几句、`both` 的认法（按自动识别找、两路指定端各找各的）、`missing_notice` 按端写的那一句，或 `found_platform`／`found_title` 的记法改了（`capture._chosen`、`_locate`、`_gone`、`missing_notice`）。
   - `ReadbackSmokeTest` 失败 → 读回纹理那套流程改了（`_Device.read_bgr`）。
   - `ConvertThreadTest` 失败 → 颜色转换又变回多线程了（`to_bgr`）。
   - `ModuleRulesTest` 失败 → 这个模块新导入了界面库或写了界面中文句子。
@@ -308,11 +311,12 @@
   - 声明高性能时传进去的结构和信息类（Version 1、ControlMask 1、StateMask 0、信息类 4、大小 12 字节）；设不上或调用出错只记一次、不抛出（`DeclareTest`）。
   - 读回的省电设置判成 high/eco/auto、优先级类别换成名字、别的值写 `0x…`（`PerformanceStateTest`、`PriorityClassTest`）。
   - CPU Set 缓冲区的解析：大小核分组、处理器编号区间写法、按每项的 Size 往跳、跳过别的 Type、缓冲区截断、多个处理器组（`ParseCpuSetsTest`）。
-  - 把配置写成中文几行：大小核、只有一种核心、多于两组、用电池加节电、电源计划只写名字不写原始 GUID、读不到的各项（`MachineLinesTest`、`PowerInfoTest`）。
-  - 读屏幕时本线程临时切到按每块屏幕的缩放、读完切回（出错也切回）；切不成时标明宽高可能是换算后的（`DisplaysTest`）。
-  - 在这台电脑上真调一次（只影响跑测试的这个进程）确认功能可用、类型对、够快（`RealCallTest`、`RealMachineInfoTest`、`RealDisplaysTest`）；不是 Windows 时模块照样导入、各项为 `None`（`NotWindowsImportTest`）。
+  - 设置窗口「只用大核」一项用的处理器名称：去掉 (R)、(TM)（不分大小写）、®、™，紧挨着的两个词中间留一个空格，连续的空白并成一个；读不到、去掉以后什么都不剩时为 `None`；测试里一律按读不到（`CpuLabelTest`）。性能自检比出来的收益到了 `BIG_CORE_GAIN_MIN`（1.3，正好到也算）才算排在小核上，比过、不到为假，没比过、不是有限的数时说不准（`OnSmallCoresTest`）。
+  - 把配置写成中文几行：大小核、只有一种核心、多于两组、用电池加节电、电源计划只写名字不写原始 GUID、读不到的各项；有刷新率时括号里接在最后（`MachineLinesTest`、`PowerInfoTest`）。
+  - 读屏幕时本线程临时切到按每块屏幕的缩放、读完切回（出错也切回）；切不成时标明宽高可能是换算后的；每块屏幕的刷新率（`EnumDisplaySettingsW` 的 `dmDisplayFrequency`）读得到，系统报 0、1、没有这个函数、调用抛出时为 `None`（`DisplaysTest`）。
+  - 在这台电脑上真调一次（只影响跑测试的这个进程）确认功能可用、类型对、够快，有屏幕时刷新率是 `None` 或正常的整数（`RealCallTest`、`RealMachineInfoTest`、`RealDisplaysTest`）；不是 Windows 时模块照样导入、各项为 `None`（`NotWindowsImportTest`）。
 
-- **检证对象**：`advisor/sysinfo.py` 的 `declare_high_performance`、`performance_state`、`priority_class`、`cpu_info`、`_parse_cpu_sets`、`_classes_from`、`_range_text`、`memory_info`、`power_info`、`_power_mode`、`_power_plan`、`displays`、`_per_monitor_dpi`、`gpus`、`machine_info`、`machine_lines` 及各 `_…_line`。测试把模块级的 `_kernel32`、`_user32`、`_shcore`、`_powrprof` 换成假的。
+- **检证对象**：`advisor/sysinfo.py` 的 `declare_high_performance`、`performance_state`、`priority_class`、`cpu_info`、`_parse_cpu_sets`、`_classes_from`、`_range_text`、`cpu_label`、`on_small_cores`、`BIG_CORE_GAIN_MIN`、`memory_info`、`power_info`、`_power_mode`、`_power_plan`、`displays`、`_per_monitor_dpi`、`gpus`、`machine_info`、`machine_lines` 及各 `_…_line`。测试把模块级的 `_kernel32`、`_user32`、`_shcore`、`_powrprof` 换成假的。
 
 - **什么时候要跑**：改 `advisor/sysinfo.py` 的任何部分；改 `machine_lines` 写进诊断包 `version.txt` 的那几行中文；改优先级、电源计划、电源模式的名字表。
 
@@ -331,23 +335,51 @@
   - `RealMachineInfoTest.test_types_and_fast` 失败 → `machine_info` 在真机上变慢（超过 1 秒），或某项类型不对（例如又用上会卡的 WMI）。
   - `NotWindowsImportTest` 失败 → 模块在非 Windows 上导入不了，或没按 `None` 兜底。
 
-## test_diagnostics_reports.py：测导出诊断包的写盘加固和脱敏、自动保存包的清理、另带的三选一那几帧、自检的必备数据文件、「系统」一行不查 WMI、把电脑配置写进诊断包
+## test_usage.py：测处理器占用的采样（每分钟一条、存盘、导出时现量各线程）
+
+- **测试观点**：
+  - 每分钟一条：第一次只记基准、第二次按这一段的时长出一条（字段、`state` 合进去）、不到 1 秒不出记录也不换基准、读不到、抛出时不往外抛、只留最近 `KEEP` 条（`TickTest`）。
+  - 电源状况：取到就原样放进 `power`；读不到、出错时不带这一项，这一条照记（`PowerTest`）。
+  - 存盘：没 attach 时一个文件都不写；attach 读回 12 小时以内的，丢掉更早的和坏行并重写文件，文件不存在时不新建；攒满 5 条才追加、flush 立刻写；文件超过 2 * KEEP 行时重写成最近 KEEP 条；写盘出错以后不再写、不抛异常，内存照记，只记一次错误记录；reset 清掉存盘的状态（`PersistTest`，文件都在测试自己的临时文件夹里）。
+  - 现量：真起一个空转的 Python 线程跑一小段，它在 `threads` 里、`core` 够大、`name` 对、`stacks` 里有那个函数名；每层调用栈只有文件名（不带路径分隔符和盘符）；结果里没有 `module`、`start` 这类键；调用线程自己没有调用栈；`sys._current_frames()` 抛异常时有 `stacks_error`、占用照常；不是 Windows 时为 `None`（`ProbeTest`、`SecondsDefaultTest`）。
+  - 空转的线程用 `time.sleep(0)` 走圈：一直占着处理器，同时让出 GIL，主线程才跑得动。
+
+- **检证对象**：`advisor/usage.py` 的 `tick`、`attach`、`flush`、`records`、`reset`、`_parse`、`_append`、`_rewrite`、`_fail`、`_read_power`、`probe`、`_thread_ids`、`_thread_times`、`_frames_of`、`_collect_stacks`、各常量。
+
+- **什么时候要跑**：改 `advisor/usage.py` 的任何部分；改 `advisor/perfstats.py` 的 `usage_snapshot`/`usage_percent`；改导出诊断里现量、每分钟记录的做法。
+
+- **怎么单独跑**：`python -B tools/run_tests.py --only test_usage`（上次约 2 秒）。
+
+- **需要什么**：只在 Windows 上真量线程；不需要显卡，也不开窗口。
+
+- **出错时一般是哪里不对**：
+  - `TickTest` 失败 → `tick` 的基准、时长门槛、字段或留存的条数改了。
+  - `PowerTest` 失败 → `power` 的取法或读不到时的处理改了。
+  - `PersistTest` 失败 → `attach` 读回/重写、攒多少条写一次、`flush`、文件长度上限、写盘出错后的处理、`reset` 改了；写盘出错那条要看 `append_lines` 是不是只调了一次、错误记录是不是只记了一条。
+  - `ProbeTest` 失败 → 线程枚举、线程时间、调用栈的取法或结果里的键改了；空转线程没占到处理器时看 `time.sleep(0)` 那个循环。
+
+## test_diagnostics_reports.py：测导出诊断包的写盘加固和脱敏、自动保存包的清理、另带的三选一那几帧和对局中途像打完的那一帧、同时识别时另一张悬浮窗的子文件夹、错误记录和崩溃记录、每分钟的占用记录、自检的必备数据文件、「系统」一行不查 WMI、把电脑配置写进诊断包
 
 - **测试观点**：
   - 先在「名字 `.partial`」里写、写完再改名成正式名字，不留 `.partial`；写一半出错留 `.partial` 并抛 `ExportError`；自动保存的标记只在该有时才有；另带的文件名不能冒充那个标记（大小写、末尾带点或空格）（`ExportStagingTest`）。
   - 手动导出另打的压缩包（`zip_report`）：在诊断包文件夹旁边、同名加 `.zip`，解开是同名的文件夹、文件一个不少（中文文件名照旧）、按 deflate 压缩，文件夹照旧留着，不留 `.zip.partial`；压缩包不算诊断包（`report_dirs` 只认文件夹）；已经有同名的压缩包时不覆盖；打到一半写不进、改名一直被占用（稍等再试，用完了照原样报错）时不留下 `.zip` 和 `.partial`，文件夹照旧（`ZipReportTest`）。
-  - 另带最近一次三选一有筹码没读出来时的那一帧（`select_unreadable`）：另写一张 `select-unreadable-<时分秒>.png`，内容逐像素就是交来的那一帧，`state.json` 的 `select_unreadable` 记下时刻和文件名，当时的画面 `frame.png` 照旧；没给时不多写文件、`state.json` 里也没有这一项；编码不了时原因记进 `select_unreadable_error`、不记文件名，其余内容照常写好；另带的记录不能用这个文件名开头（`SelectUnreadableTest`）。记下三选一选中项用的那一帧（`select_picked`）、被临时盖住而没有采用的那一帧（`select_covered`）同样另写 `select-picked-<时分秒>.png`、`select-covered-<时分秒>.png`，`state.json` 各记时刻、那一次的情况（第几张、哪张筹码，或读到的文字、稀有度）和文件名，那一次的情况里有同名的 `time`、`file` 时盖不掉时刻和文件名（没写成时也不留下一个文件名）；一张编码不了只记这一张的原因；另带的记录不能用这两个文件名开头（`SelectShotsTest`）。
+  - 另带最近一次三选一有筹码没读出来时的那一帧（`select_unreadable`）：另写一张 `select-unreadable-<时分秒>.png`，内容逐像素就是交来的那一帧，`state.json` 的 `select_unreadable` 记下时刻和文件名，当时的画面 `frame.png` 照旧；没给时不多写文件、`state.json` 里也没有这一项；编码不了时原因记进 `select_unreadable_error`、不记文件名，其余内容照常写好；另带的记录不能用这个文件名开头（`SelectUnreadableTest`）。记下三选一选中项用的那一帧（`select_picked`）、被临时盖住而没有采用的那一帧（`select_covered`）同样另写 `select-picked-<时分秒>.png`、`select-covered-<时分秒>.png`，`state.json` 各记时刻、那一次的情况（第几张、哪张筹码，或读到的文字、稀有度）和文件名，那一次的情况里有同名的 `time`、`file` 时盖不掉时刻和文件名（没写成时也不留下一个文件名）；一张编码不了只记这一张的原因；另带的记录不能用这两个文件名开头（`SelectShotsTest`）。对局中途像一局打完的那一帧（`finish_look`）另写 `finish-look-<时分秒>.png`，`state.json` 的 `finish_look` 记时刻、那一次的情况和文件名（`test_finish_look_written`）；另带的记录也不能用 `finish-look-` 开头。
   - 清理自动保存的包：只删最旧的、只留最近若干份，没到份数不删（`PruneTest`）；只删带标记、名字是时间、不是链接的文件夹，被别的程序占着的那份整份留着，特意传进来「不要删」的那份不删、也算在保留份数里，同一秒的几份按序号排（`PruneSafetyTest`）。
   - 路径脱敏：个人目录、应用数据目录、账户名换成 `%USERPROFILE%`/`%APPDATA%`/`%LOCALAPPDATA%`/`%USERNAME%`；账户名只作完整路径段才换（很短、是常见词时不误伤正文）；大小写、正反斜杠、`\\?\` 前缀、个人目录被重定向到别的盘或网络位置时都对；换过的不再换第二次；JSON 文字里的转义（`\n` 等）不当成路径分隔符；崩溃记录里非 ASCII 字符写成 `\uXXXX` 的用户目录、账户名也换；给了环境变量时按那一份换（`ScrubTest`、`ScrubEdgeTest`）。
   - 自检的必备数据文件清单包含 `assets_manifest.json`、`meta.json`、`mutators.json`（`RequiredDataTest`）。
+  - 每分钟的占用记录经 `extra` 写成 `usage.jsonl`，最近 12 小时的统计同样经 `extra` 写成 `stats.jsonl`，这两个名字都不占 `RESERVED`；`crash.txt`、`crash.old.txt` 占 `RESERVED`（`ExportStagingTest`）。
+  - 手动导出带上错误记录、它的旧记录和两个崩溃记录：有才带、空的不带；账户名和崩溃记录里 `\uXXXX` 的写法都换掉；不是 UTF-8 的字节不抛错、照样换；超大的只带末尾并写明，切开处那半行不要（半行里的路径不全，认不出账户名）；自动保存的不带；文件名和 `startup` 的两个相同；自检「占用采样」一项不算关键项（`LogsTest`）。
+  - 自检「占用采样」：只有一个 Python 线程时也看得出取不取得到调用栈（另起的陪量线程算进 `stack_threads`，量完结束）；枚举不到线程、量不了时抛错；取调用栈出错时把原因带进结果（`UsageCheckTest`）。
   - 「系统」一行写法同 Python 的 platform 模块、但不查 WMI（WMI 卡住时导出照常几秒内做完）（`SystemLineTest`）。
   - 导出时把这台电脑的配置和运行状况写进 `version.txt` 和 `state.json`（只取一次）；读不到时只写一行、导出照常成功（`MachineInfoExportTest`）。
+  - `version.txt` 的「作业站登录」一行只写有没有、不写昵称，只查一次凭据管理器（`wincred.exists`）；作业站的入口关着（`hub.ENABLED`）时不写这一行，也不查凭据管理器（`HubLoginLineTest`）。
+  - 同时识别两个客户端时另带另一张悬浮窗的子文件夹（`lanes`）：`<端名>/frame.png` 就是交来的那一帧、`<端名>/events.jsonl` 就是交来的记录、给了 `stats` 时另写 `<端名>/stats.jsonl`（路径照样脱敏），`state.json` 的 `lanes.<端名>` 里调用方给的状态照旧、另记没写成画面时的 `frame_error`，顶层的还是第一张的；画面为 `None`、编码不了时记的原因，端名查不过（含末尾带换行、`con`、`nul`、`com1` 这类 Windows 的设备名）时抛 `ValueError` 且不建诊断包；`snapshot` 里 `lanes` 或这一端不是字典时原来的值放进 `state` 一项、不丢；压缩包里有子文件夹；不给时没有子文件夹（`LaneReportTest`）。
 
-- **检证对象**：`advisor/diagnostics.py` 的 `export`、`zip_report`、`ZIP_SUFFIX`、`ZIP_PARTIAL_SUFFIX`、`_write_unreadable`、`_write_shot`、`SELECT_UNREADABLE`、`SELECT_UNREADABLE_PREFIX`、`SELECT_PICKED`、`SELECT_COVERED`、`SHOT_PREFIXES`、`ExportError`、`REPORT_NAME`、`AUTO_MARK`、`report_dirs`、`prune_auto_reports`、`_remove_report`、`REQUIRED_DATA`、`system_text`、`_machine_info`、`_machine_lines`；`advisor/fileio.py` 的 `staged_dir`、`PARTIAL_SUFFIX`；`advisor/paths.py` 的 `reports_dir`、`state_path`、`schemes_path`、`temp_dir`、`scrub_paths`、`_replace_path`、`_ascii_escaped`（`advisor/diagnostics.py` 照旧导出 `scrub_paths`）；`advisor/sysinfo.py` 的 `machine_info`、`machine_lines`。
+- **检证对象**：`advisor/diagnostics.py` 的 `export`、`zip_report`、`ZIP_SUFFIX`、`ZIP_PARTIAL_SUFFIX`、`USAGE`、`STATS`、`CRASH_LOGS`、`_copy_logs`、`usage_check`、`_write_unreadable`、`_write_shot`、`_lane_state`、`LANE_NAME`、`LANE_DEVICES`、`NO_FRAME`、`SELECT_UNREADABLE`、`SELECT_UNREADABLE_PREFIX`、`SELECT_PICKED`、`SELECT_COVERED`、`FINISH_LOOK`、`FINISH_LOOK_PREFIX`、`SHOT_PREFIXES`、`ExportError`、`REPORT_NAME`、`AUTO_MARK`、`report_dirs`、`prune_auto_reports`、`_remove_report`、`REQUIRED_DATA`、`system_text`、`_machine_info`、`_machine_lines`；`advisor/fileio.py` 的 `staged_dir`、`PARTIAL_SUFFIX`；`advisor/paths.py` 的 `reports_dir`、`state_path`、`schemes_path`、`temp_dir`、`scrub_paths`、`_replace_path`、`_ascii_escaped`（`advisor/diagnostics.py` 照旧导出 `scrub_paths`）；`advisor/sysinfo.py` 的 `machine_info`、`machine_lines`。
 
-- **什么时候要跑**：改了 `advisor/diagnostics.py` 的导出/清理/另带的那一帧/「系统」一行/电脑配置；改了 `advisor/paths.py` 的脱敏（`scrub_paths`，错误记录、崩溃记录也用它，同时跑 `test_errors`、`test_startup_guard`）；改了 `advisor/fileio.py` 的 `staged_dir`；改了诊断包文件夹的命名或自动保存标记；改了必备数据文件清单。
+- **什么时候要跑**：改了 `advisor/diagnostics.py` 的导出/清理/另带的那一帧/另一张悬浮窗的子文件夹（`lanes`）/错误记录和崩溃记录（`_copy_logs`）/自检的「占用采样」一项/「系统」一行/电脑配置；改了 `advisor/paths.py` 的脱敏（`scrub_paths`，错误记录、崩溃记录也用它，同时跑 `test_errors`、`test_startup_guard`）；改了 `advisor/fileio.py` 的 `staged_dir`；改了诊断包文件夹的命名或自动保存标记；改了必备数据文件清单。
 
-- **怎么单独跑**：`python -B tools/run_tests.py --only test_diagnostics_reports`（上次约 2.7 秒）。
+- **怎么单独跑**：`python -B tools/run_tests.py --only test_diagnostics_reports`（上次约 6 秒）。
 
 - **需要什么**：目录联接相关的几条、以及「开着的文件删不掉」那条，只在 Windows 上跑；「系统版本」那条也只在 Windows 上跑。临时文件在 `.tmp/tests-diagnostics-reports/` 下。
 
@@ -365,3 +397,4 @@
   - `SystemLineTest.test_same_wording_as_platform` 失败 → `system_text` 的版本名对照表改了，或又回去调 `platform.platform()`。
   - `test_export_does_not_wait_for_wmi` 失败 → 导出里又走到了会查 WMI 的那条路（会一直卡住）。
   - `MachineInfoExportTest` 失败 → 导出时取电脑配置的次数（应只一次）或读不到时的写法改了。
+  - `LaneReportTest` 失败 → `export` 的 `lanes` 子文件夹（`_lane_state` 的兜底、`frame_error` 的两种写法、端名的检查）改了；端名的检查松了会写到别的文件夹或盖掉顶层文件，查不过时必须一个诊断包都不建。

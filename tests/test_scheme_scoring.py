@@ -108,6 +108,12 @@ class Base(unittest.TestCase):
         cls.db = load_db()
         cls.cfg = cls.db.rules["scheme"]
 
+    def scaled(self, scale=0.5):
+        """official.scale 改回 scale 的资料库副本：查内置分参与总分、分项和理由时的行为（现在取 0，不列这几项）。"""
+        rules = {k: dict(v) if isinstance(v, dict) else v for k, v in self.db.rules.items()}
+        rules["official"]["scale"] = scale
+        return dataclasses.replace(self.db, rules=rules)
+
     def fenny(self, **kw) -> State:
         """芬妮、异变图书馆、噩梦；关键字参数覆盖。"""
         base = dict(hero="芬妮", star=1, round=4, map="异变图书馆", rerolls=3, difficulty_level=LEVEL_NIGHTMARE,
@@ -195,7 +201,8 @@ class WordingTest(Base):
 
 
 class TierPartsTest(Base):
-    """方案里标了档位的筹码：档位代替玩家思路和角色特性，游戏内置分、组合、队友、难度、收入折算照算；不加目标流派、锁定保护。"""
+    """方案里标了档位的筹码：档位代替玩家思路和角色特性，组合、队友、难度、收入折算照算（内置分现在不计入总分，有没有这几项
+    和默认推荐一样）；不加目标流派、锁定保护。"""
 
     def test_tiers_replace_player_and_traits(self):
         st = self.fenny(owned=("银行卡-余额少", "ATM机"), teammates=(Teammate("邦妮"), Teammate("凛")))
@@ -221,17 +228,24 @@ class TierPartsTest(Base):
                     if not cond:  # 默认推荐里带「已持有」条件的玩家思路规则不叠加组合；标了档位后组合照算
                         fixed = lambda ps: [(p.score, p.reason) for p in ps if p.label == "组合" and not guessed(p)]  # noqa: E731
                         self.assertEqual(fixed(parts), fixed(default))
-                    self.assertEqual("收入折算" in labels(parts), "收入折算" in labels(default))
+                    # 收入折算只在有收入份额、并且还有正分可折时才有：纯收入筹码的必选档不进折算基数，
+                    # 内置分不再计入后就没有可折的分了
+                    inc = self.db.rules["income"]
+                    has_share = chip in inc["starlight"] or chip in inc["coins"]
+                    has_base = any(p.score > 0 and p.label != "成长分" and p.origin != SCHEME_CORE_ORIGIN
+                                   for p in parts)
+                    self.assertEqual("收入折算" in labels(parts), has_share and has_base)
                     seen.update(set(labels(default)) & {"组合", "队友", "难度", "收入折算"})
         self.assertEqual(seen, {"组合", "队友", "难度", "收入折算"})  # 这几种分项都查到了
 
     def test_must_exempt_from_income(self):
         # 必选和默认推荐的必选同一口径：收入折算不扣必选那一项（只按其余的正分折算）
+        # 小猪存钱罐、银行卡这类纯收入筹码的正分只有内置分，现在没有可折的分；用同时有特性的缓冲盾牌查必选不计入折算基数
         st = self.fenny(star=3, round=10)
-        sc = Scorer(self.db, st, scheme=plan(("银行卡-余额多", "core")))
-        parts = sc.parts("银行卡-余额多", (), 10)
+        sc = Scorer(self.db, st, scheme=plan(("缓冲盾牌", "core")))
+        parts = sc.parts("缓冲盾牌", (), 10)
         income = next(p for p in parts if p.label == "收入折算")
-        chip = self.db.chips["银行卡-余额多"]
+        chip = self.db.chips["缓冲盾牌"]
         base = [p for p in parts if p.label != "收入折算"]
         self.assertAlmostEqual(income_part(sc, chip, base, 10).score, income.score)
         plain = [Part(p.label, p.score, p.reason, "x", p.short) if p.origin == SCHEME_CORE_ORIGIN else p for p in base]
@@ -508,27 +522,41 @@ class RerollRuleTest(Base):
 
     def test_3_unmarked_needs_worth(self):
         # 排在最前的是未标记时，刷出排在它前面的过半还不够，扣掉刷新代价以后的期望（按方案的分值）也要高于它的总分。
-        # 阿兰娜 0 星第 2 轮、只剩 1 次刷新（之后约 6.7 次三选一）、一张都没标的方案：刷出排在可口糖果前面的约 92%
+        # 阿兰娜 0 星第 2 轮、只剩 1 次刷新（之后约 6.7 次三选一）、一张都没标的方案：刷出排在安全气囊前面的约 71%
         # （刷新后最左格按职业权重出、池按职业标签建），但用掉这次刷新的代价很高，不首推刷新；刷新那一行的结论是
         # 「预计不如」，悬停写明是因为刷新次数紧
         st = State(hero="阿兰娜", star=0, round=2, map="魔法学院", rerolls=1)
-        offer = ["安全气囊", "可口糖果", "夹心饼干-一般"]
+        offer = ["安全气囊", "书签", "夹心饼干-一般"]
         empty = Plan(name="空方案", hero="阿兰娜", tiers=())
         adv = advise(self.db, st, offer, scheme=empty)
         v = self.view(adv)
         top = adv.evals[v.compare]
-        self.assertEqual((top.chip.name, v.basis, v.first, v.verdict), ("可口糖果", BASIS_UNMARKED, False, VERDICT_WORSE))
+        self.assertEqual((top.chip.name, v.basis, v.first, v.verdict), ("安全气囊", BASIS_UNMARKED, False, VERDICT_WORSE))
         self.assertGreater(v.p_before, 0.5)
         self.assertLess(adv.reroll.value, top.total)
-        self.assertEqual(adv.best, "可口糖果")
-        self.assertNotIn(REROLL_SLOT, adv.ranking.order[:3])  # 刷新不在三张未标记前面（都胜不过）
+        self.assertEqual(adv.best, "安全气囊")
+        # 刷新胜不过安全气囊、夹心饼干-一般，排在它们后面；书签的总分在 0 以下，刷出排在它前面的过半，刷新扣掉代价以后的
+        # 期望也高过它，排在它前面
+        self.assertEqual(adv.ranking.order[:2], [0, 2])
+        self.assertGreater(adv.reroll.value, adv.evals[1].total)
+        self.assertEqual(adv.ranking.order.index(REROLL_SLOT), 2)
         texts = self.reroll_texts(adv, st)
-        self.assertEqual(texts[:2], ["预计不如可口糖果", "92% 概率刷出排在可口糖果前面的筹码"])
+        self.assertEqual(texts[:2], ["预计不如安全气囊", "71% 概率刷出排在安全气囊前面的筹码"])
         from advisor.ui import text as ui_text
         tip = ui_text.scheme_reroll_pills(adv, st.rerolls)[0].tip
         self.assertIn("刷新次数紧", tip)
         self.assertIn("算上用掉一次刷新的代价", tip)
+        # 换一张更高的未标记（可口糖果）：刷出排在它前面的不到一半（约 39%），只写概率，不另加「预计不如」
+        adv = advise(self.db, st, ["安全气囊", "可口糖果", "夹心饼干-一般"], scheme=empty)
+        v = self.view(adv)
+        self.assertEqual((adv.evals[v.compare].chip.name, v.verdict, adv.best), ("可口糖果", VERDICT_WORSE, "可口糖果"))
+        self.assertLess(v.p_before, 0.5)
+        self.assertEqual(self.reroll_texts(adv, st)[:2], ["39% 概率刷出排在可口糖果前面的筹码", "消耗 1 次刷新"])
+        tip = ui_text.scheme_reroll_pills(adv, st.rerolls)[0].tip
+        self.assertIn("排在「可口糖果」前面的筹码", tip)
+        self.assertNotIn("刷新次数紧", tip)
         # 同一手牌刷新宽时（3 次，之后的三选一少）照旧：过半、扣掉代价也划算就首推刷新
+        offer = ["安全气囊", "可口糖果", "夹心饼干-一般"]
         late = State(hero="阿兰娜", star=3, round=12, map="魔法学院", rerolls=3)
         adv = advise(self.db, late, offer, scheme=empty)
         v = self.view(adv)
@@ -541,21 +569,32 @@ class RerollRuleTest(Base):
         # 不如直接选它。不首推刷新，「预计不如」的悬停写的是这个原因，不写「刷新次数紧」（代价那条是「多出 3 次不必留」）。
         # 茉莉 3 星第 11 轮、5 次刷新（之后不到 1 次三选一：留 1 次、再多留 1 次）、一张都没标的方案
         st = State(hero="茉莉", star=3, round=11, map="魔法学院", rerolls=5)
-        adv = advise(self.db, st, ["速度轮滑-中级", "小猪存钱罐", "银行卡-用不完"],
-                     scheme=Plan(name="空方案", hero="茉莉", tiers=()))
+        empty = Plan(name="空方案", hero="茉莉", tiers=())
+        adv = advise(self.db, st, ["速度轮滑-初级", "小猪存钱罐", "银行卡-用不完"], scheme=empty)
         v = self.view(adv)
         top = adv.evals[v.compare]
         self.assertEqual((top.chip.name, v.basis, v.verdict, adv.best),
-                         ("速度轮滑-中级", BASIS_UNMARKED, VERDICT_WORSE, "速度轮滑-中级"))
+                         ("速度轮滑-初级", BASIS_UNMARKED, VERDICT_WORSE, "速度轮滑-初级"))
         self.assertGreater(v.p_before, 0.5)
         self.assertEqual((adv.reroll.cost, adv.reroll.kept, adv.reroll.spare, adv.reroll.chain), (0.0, 2, 3, 3))
         self.assertLess(adv.reroll.value, top.total)
         from advisor.ui import text as ui_text
         pills = ui_text.scheme_reroll_pills(adv, st.rerolls)
         self.assertEqual([p.text for p in pills],
-                         ["预计不如速度轮滑-中级", "58% 概率刷出排在速度轮滑-中级前面的筹码", "留 2 次，多出 3 次不必留"])
+                         ["预计不如速度轮滑-初级", "72% 概率刷出排在速度轮滑-初级前面的筹码", "留 2 次，多出 3 次不必留"])
         self.assertIn("但刷新会放弃本次的三个候选筹码：综合最多连续刷新 3 次可能出现的筹码", pills[0].tip)
         self.assertIn("（之后的筹码三选一留 2 次刷新，含以防估少多留的 1 次；多出来的 3 次可以连续使用）", pills[0].tip)
+        self.assertNotIn("刷新次数紧", pills[0].tip)
+        # 换一张更高的未标记（速度轮滑-中级）：刷出排在它前面的不到一半（约 17%），只写概率，不另加「预计不如」
+        adv = advise(self.db, st, ["速度轮滑-中级", "小猪存钱罐", "银行卡-用不完"], scheme=empty)
+        v = self.view(adv)
+        self.assertEqual((adv.evals[v.compare].chip.name, v.verdict, adv.best),
+                         ("速度轮滑-中级", VERDICT_WORSE, "速度轮滑-中级"))
+        self.assertLess(v.p_before, 0.5)
+        pills = ui_text.scheme_reroll_pills(adv, st.rerolls)
+        self.assertEqual([p.text for p in pills],
+                         ["17% 概率刷出排在速度轮滑-中级前面的筹码", "留 2 次，多出 3 次不必留"])
+        self.assertIn("排在「速度轮滑-中级」前面的筹码", pills[0].tip)
         self.assertNotIn("刷新次数紧", pills[0].tip)
 
     def test_4_all_avoid(self):
@@ -719,22 +758,24 @@ class TeammateNeedTest(Base):
             return [(e.chip.name, p.short) for e in adv.evals for p in e.parts if p.origin == NEED_ORIGIN]
 
         # 列了治愈、标记（标记只标了可选，不是目标流派）：三张都没标，标靶排第三，按邦妮的刚需提到第二
-        adv = advise(self.db, st, offer, scheme=plan(("缓冲盾牌", "core"), ("普通瞄具", "second"), hero="阿兰娜"))
+        # 用内置分照旧计入的资料库副本：现在的资料上标靶本身的分（总分减去「队友」那一项，约 32）不到推荐线，不会提
+        db = self.scaled(0.5)
+        adv = advise(db, st, offer, scheme=plan(("缓冲盾牌", "core"), ("普通瞄具", "second"), hero="阿兰娜"))
         self.assertEqual(need(adv), [("标靶", "配合队友：邦妮刚需标记")])
         self.assertEqual([n for n in self.order_names(adv) if n != REROLL], ["拳击手套-高级", "标靶", "速度轮滑-高级"])
         # 排第一的是标了推荐的：不提
-        adv = advise(self.db, st, offer, scheme=plan(("缓冲盾牌", "core"), ("普通瞄具", "second"), ("拳击手套-高级", "first"),
-                                                     hero="阿兰娜"))
+        adv = advise(db, st, offer, scheme=plan(("缓冲盾牌", "core"), ("普通瞄具", "second"), ("拳击手套-高级", "first"),
+                                                hero="阿兰娜"))
         self.assertEqual(need(adv), [])
         self.assertEqual([n for n in self.order_names(adv) if n != REROLL], ["拳击手套-高级", "速度轮滑-高级", "标靶"])
         # 方案只列了治愈、还没进入流派：拿标靶以后还有空位、不耽误治愈，照样提到第二（不看空位的话方案外的流派
         # 一律算没用，不提）
-        adv = advise(self.db, st, offer, scheme=plan(("缓冲盾牌", "core"), hero="阿兰娜"))
+        adv = advise(db, st, offer, scheme=plan(("缓冲盾牌", "core"), hero="阿兰娜"))
         self.assertEqual(need(adv), [("标靶", "配合队友：邦妮刚需标记")])
         # 已进入方案外的星光：拿普通瞄具会占满流派名额，治愈本局再也进不去，排第三、本身够推荐线也不提
         strayed = dataclasses.replace(st, owned=("紫色飞星",))
         blocked = ["拳击手套-高级", "速度轮滑-高级", "普通瞄具"]
-        adv = advise(self.db, strayed, blocked, scheme=plan(("缓冲盾牌", "second"), hero="阿兰娜"))
+        adv = advise(db, strayed, blocked, scheme=plan(("缓冲盾牌", "second"), hero="阿兰娜"))
         self.assertEqual(need(adv), [])
         self.assertEqual([n for n in self.order_names(adv) if n != REROLL], blocked)
 
@@ -744,13 +785,14 @@ class TeammateNeedTest(Base):
         st = State(hero="娜蒂斯", star=3, round=12, map="魔法学院", owned=("大碗炖肉", "友情徽章", "标靶"), rerolls=2,
                    teammates=(Teammate("凛"), Teammate("阿尔")))
         offer = ["鹰眼瞄具", "普通瞄具", "忍术飞镖"]
-        adv = advise(self.db, st, offer, scheme=Plan(name="空方案", hero="娜蒂斯", tiers=()))
+        db = self.scaled(0.5)  # 刚需提升要有筹码被内置分抬到前面：用内置分照旧计入的副本
+        adv = advise(db, st, offer, scheme=Plan(name="空方案", hero="娜蒂斯", tiers=()))
         self.assertEqual(self.order_names(adv), ["鹰眼瞄具", REROLL, "普通瞄具", "忍术飞镖"])
         reasons = [p.reason for e in adv.evals for p in e.parts if p.origin == NEED_ORIGIN]
         self.assertEqual(len(reasons), 1)
         self.assertTrue(reasons[0].endswith("；该筹码可提供，排在第三位"), reasons[0])
         # 没有刷新次数时刷新那一行不在，提的那张在第二位：照旧写
-        adv = advise(self.db, dataclasses.replace(st, rerolls=0), offer, scheme=Plan(name="空方案", hero="娜蒂斯", tiers=()))
+        adv = advise(db, dataclasses.replace(st, rerolls=0), offer, scheme=Plan(name="空方案", hero="娜蒂斯", tiers=()))
         self.assertEqual(self.order_names(adv), ["鹰眼瞄具", "普通瞄具", "忍术飞镖"])
         reasons = [p.reason for e in adv.evals for p in e.parts if p.origin == NEED_ORIGIN]
         self.assertTrue(reasons[0].endswith("；该筹码可提供，排在第二位，第一位仍按自身收益"), reasons[0])
@@ -1165,8 +1207,9 @@ class TierAheadTest(Base):
         with mock.patch.object(engine.lookahead, "future_setup", setup), \
                 mock.patch.object(engine.lookahead, "_endless_adjusted", lambda *a: None):
             same = {n: twin.lookahead(n, ()) for n in offer}
+        la = self.db.rules["lookahead"]
         for n in offer:
-            self.assertAlmostEqual(tier[n], same[n], places=9)
+            self.assertAlmostEqual(tier[n], same[n] * la["tier_weight"] / la["weight"], places=9)
         # 前瞻照旧：两个缓存的键一样、值不一样，互不借用
         for key in sc.memo.tier_future:
             if key in sc.memo.future:
@@ -1222,15 +1265,18 @@ class TierAheadChanceTest(Base):
                 self.fenny(star=3, round=9, owned=("循环往复",), endless_pending=True)]
 
     def test_sources_covered(self):
-        # 三个局面分别用到：一种来源、最左格有分布；几张地图、两种来源（任务的最左格没有分布，筹码商店的有）；一种来源、
-        # 最左格没有分布
+        # 三个局面分别用到：一种来源、最左格有分布；几张地图、两种来源（任务按地图资料里任务自带的等级拆成几项，最左格都
+        # 没有分布；筹码商店的有）；一种来源、最左格没有分布
         shapes = []
         for st in self.states():
             sc = Scorer(self.db, st, offer=self.OFFER, scheme=plan(*self.WIDE))
             _, dists, _ = engine.lookahead.future_setup(sc, sc.known_owned, sc.maps[0])
             shapes.append((len(sc.maps) > 1, tuple(left is None for _, left, _ in dists)))
             self.assertGreater(sc.lookahead_times(), 0)
-        self.assertEqual(shapes, [(False, (False,)), (True, (True, False)), (False, (True,))])
+        first = self.fenny(star=3, round=9, map=None)
+        levels = self.db.map_info[Scorer(self.db, first).maps[0]].task_level_shares(first.difficulty_name)
+        self.assertGreater(len(levels), 1)
+        self.assertEqual(shapes, [(False, (False,)), (True, (True,) * len(levels) + (False,)), (False, (True,))])
 
     def test_single_chip_is_its_appear_prob(self):
         # 只说一张时，卡片上的数就是那一张的出现率（lookahead._avg_probs，pool.appear_prob_mix），逐位相同

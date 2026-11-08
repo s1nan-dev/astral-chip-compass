@@ -9,8 +9,13 @@ SHA-1/SHA-2。
                                       能用 with 的对象）；stream(req, sink, timeout, stop) 不把正文整个放进内存，收到一块就
                                       交给 sink(块)，返回一共多少字节（大文件边下边写、边算校验值，见 advisor/update.py）；
                                       stream 另可给 head(状态码, 回话头)（读正文之前核对回话）和 limit（正文最多收多少字节，
-                                      回话比它长时不往下读、抛 TooLong），按字节段取（HTTP Range）时用；
-                                      close() 关会话。一个下载线程一个，只在用它的线程里用（含 close）。
+                                      回话比它长时不往下读、抛 TooLong），按字节段取（HTTP Range）时用；给
+                                      redirects=False 时不跟重定向（3xx 按 HTTPError 报）；
+                                      post(url, data, headers, timeout, connect_timeout, stop) 发 POST，返回（状态码, 回话
+                                      正文最多 64 KiB），任何状态码都照样交回、不跟重定向（对局报告按状态码分怎么处理，
+                                      见 advisor/game_report.py）；send(method, url, data, headers, …) 同 post，方法任选、
+                                      另交出回话头（读 Retry-After 等，按编号取方案、登录作业站时用）；close() 关会话。一个下载线程一个，只在用它的线程里用
+                                      （含 close）。
 
 代理：会话建立时调一次 urllib.request.getproxies()，取「https」那一项：有就按它走命名代理（_proxy_server 化成「主机:端口」，
 见 _proxy_server），没有就直连（WINHTTP_ACCESS_TYPE_NO_PROXY）。getproxies 的口径同 urllib——环境变量里有任何 *_proxy
@@ -106,6 +111,8 @@ WINHTTP_QUERY_FLAG_NUMBER = 0x20000000
 WINHTTP_OPTION_REDIRECT_POLICY = 88
 WINHTTP_OPTION_MAX_HTTP_AUTOMATIC_REDIRECTS = 89
 WINHTTP_OPTION_REDIRECT_POLICY_DISALLOW_HTTPS_TO_HTTP = 1
+# 一项重定向都不跟：设成这个值时 WinHTTP 把 3xx 原样交回，不跟也不报错（同 tests/test_winhttp.py 的 RedirectTest）
+WINHTTP_OPTION_REDIRECT_POLICY_NEVER = 0
 WINHTTP_OPTION_URL = 34
 WINHTTP_OPTION_PROXY = 38
 WINHTTP_OPTION_DISABLE_FEATURE = 63
@@ -308,6 +315,30 @@ def _body_error(code: int, parts: list[bytes], length: int | None) -> urllib.err
     return urllib.error.URLError(_reason(code))
 
 
+def _read_capped(request, stop, cap: int) -> bytes:
+    """读回话正文，最多 cap 字节：多出来的不读，句柄随即关掉。给 post 看错误原因用，读不全不算错。"""
+    parts: list[bytes] = []
+    total = 0
+    while total < cap:
+        if _stopped(stop):
+            raise Stopped
+        available = wintypes.DWORD()
+        if not winhttp.WinHttpQueryDataAvailable(request, ctypes.byref(available)):
+            raise urllib.error.URLError(_reason(_last_error()))
+        if available.value == 0:
+            break
+        size = min(available.value, CHUNK, cap - total)
+        buf = ctypes.create_string_buffer(size)
+        got = wintypes.DWORD()
+        if not winhttp.WinHttpReadData(request, buf, len(buf), ctypes.byref(got)):
+            raise urllib.error.URLError(_reason(_last_error()))
+        if got.value == 0:
+            break
+        parts.append(buf.raw[: got.value])
+        total += got.value
+    return b"".join(parts)
+
+
 def _read_body(request, length: int | None, stop) -> bytes:
     """按块读完正文：每块之前看停止标志，置位抛 Stopped；连接在读完声明长度之前断掉时抛 IncompleteRead（见 _body_error）。"""
     parts: list[bytes] = []
@@ -444,11 +475,14 @@ class Session:
     def __call__(self, req, timeout: float = TIMEOUT, stop=None):
         return _Body(self._request(req, timeout, stop, None))
 
-    def stream(self, req, sink, timeout: float = TIMEOUT, stop=None, *, head=None, limit: int | None = None) -> int:
+    def stream(self, req, sink, timeout: float = TIMEOUT, stop=None, *, head=None, limit: int | None = None,
+               redirects: bool = True) -> int:
         """取回 req.full_url 的正文，不整个放进内存：收到一块（最多 CHUNK 字节）就交给 sink(块)，返回正文一共多少字节。
         请求、重定向、代理、重发、停止、出错的报法都同 __call__（回话不是 2xx 时 sink 一次都不会被调用）；正文没读够声明的
         长度时同样按 IncompleteRead 报，已经交出去的块不另留一份（见 _stream_error）。sink 抛的异常照原样往外抛，连接、请求的
         句柄照样关掉：调用方可以借它中途不要了（例如收到的比预期的多）。
+
+        redirects 为 False 时不跟重定向，3xx 原样按 HTTPError 报（同 post）：要确认回话来自哪个网站时用。
 
         按字节段取（请求头里带 Range）时另给这两个：
         - head(状态码, 回话头)：在读正文之前调用（只有 2xx 的回话走到这里；回话头是 email.message.Message，名字不分大小写，
@@ -456,11 +490,33 @@ class Session:
           206、Content-Range 对得上）。
         - limit：正文最多收多少字节，回话比它长时不往下读、抛 TooLong：声明的长度（Content-Length）超过它时一个字节都不读；
           没声明长度（分块传输）时收满 limit 字节以后还有，就不再收（已经交给 sink 的不收回）。"""
-        return self._request(req, timeout, stop, sink, head, limit)
+        return self._request(req, timeout, stop, sink, head, limit, redirects=redirects)
 
-    def _request(self, req, timeout: float, stop, sink, head=None, limit: int | None = None):
-        """__call__、stream 共用：发请求（回话之前连接断了的换连接重发一次，见 RESEND），sink 为 None 时返回读完的正文，
-        否则把正文交给 sink、返回字节数。head、limit 见 stream。"""
+    def send(self, method: str, url: str, data: bytes, headers: dict, *, timeout: float = TIMEOUT,
+             connect_timeout: float | None = None, stop=None) -> tuple[int, object, bytes]:
+        """发一个任意方法的请求（GET、POST、PUT、DELETE 等），返回（状态码, 回话头, 回话正文，最多 64 KiB）。
+
+        任何状态码都照样交回（4xx、5xx 不抛 HTTPError，按状态码分怎么处理），3xx 原样交回、不跟重定向（要核对回话
+        来自哪个网站时用）。回话头和 __call__ 出错时给的 HTTPError.headers 一样（email.message.Message，名字不分大小写，
+        读 Retry-After 这类头用）。连不上、超时、停止的报法同 __call__（URLError、Stopped）。连接用 connect_timeout
+        （没给时同 timeout），发送、接收用 timeout。"""
+        body = bytes(data)
+        request = urllib.request.Request(url, data=None, headers=dict(headers), method=method)
+        return self._request(request, timeout, stop, None, method=method, body=body, redirects=False,
+                             accept_all=True, connect_timeout=connect_timeout)
+
+    def post(self, url: str, data: bytes, headers: dict, *, timeout: float = TIMEOUT,
+             connect_timeout: float | None = None, stop=None) -> tuple[int, bytes]:
+        """发 POST，返回（状态码, 回话正文，最多 64 KiB）。其余同 send。"""
+        status, _response_headers, body = self.send("POST", url, data, headers, timeout=timeout,
+                                                    connect_timeout=connect_timeout, stop=stop)
+        return status, body
+
+    def _request(self, req, timeout: float, stop, sink, head=None, limit: int | None = None, *,
+                 method: str = "GET", body: bytes | None = None, redirects: bool = True, accept_all: bool = False,
+                 connect_timeout: float | None = None):
+        """__call__、stream、post 共用：发请求（回话之前连接断了的换连接重发一次，见 RESEND），sink 为 None 时返回读完的
+        正文，否则把正文交给 sink、返回字节数。head、limit 见 stream；method、body、redirects、accept_all 见 post。"""
         parts = urllib.parse.urlsplit(req.full_url)
         if parts.scheme not in ("http", "https") or not parts.hostname:
             raise urllib.error.URLError(_reason(12006))
@@ -468,7 +524,8 @@ class Session:
         port = parts.port or (HTTPS_PORT if secure else HTTP_PORT)
         path = (parts.path or "/") + (f"?{parts.query}" if parts.query else "")
         headers = "".join(f"{name}: {value}\r\n" for name, value in req.header_items())
-        args = (req.full_url, parts.hostname, req.host, port, path, secure, headers, timeout, stop, sink, head, limit)
+        args = (req.full_url, parts.hostname, req.host, port, path, secure, headers, timeout, stop, sink, head, limit,
+                method, body, redirects, accept_all, connect_timeout)
         if _stopped(stop):  # 连接之前
             raise Stopped
         try:
@@ -482,27 +539,38 @@ class Session:
                 raise urllib.error.URLError(_reason(e.code)) from None
 
     def _once(self, url: str, host: str, bypass_host: str, port: int, path: str, secure: bool, headers: str,
-              timeout: float, stop, sink=None, head=None, limit: int | None = None):
+              timeout: float, stop, sink=None, head=None, limit: int | None = None, method: str = "GET",
+              body: bytes | None = None, redirects: bool = True, accept_all: bool = False,
+              connect_timeout: float | None = None):
         """发一次请求、读完正文（sink 为 None 时返回正文，否则交给 sink、返回字节数；_Dropped 只在回话之前报，那时 sink
         还没收到过东西，重发不会交重）。连接和请求的句柄都在这里建、在这里关（成功、出错、停止都关）。head、limit 见
-        Session.stream。"""
+        Session.stream；method、body、redirects、accept_all 见 Session.post（GET 时都和以前一样）。"""
         connect = winhttp.WinHttpConnect(self._handle, host, port, 0)
         if not connect:
             raise urllib.error.URLError(_reason(_last_error()))
         try:
-            request = winhttp.WinHttpOpenRequest(connect, "GET", path, None, None, None,
+            request = winhttp.WinHttpOpenRequest(connect, method, path, None, None, None,
                                                  WINHTTP_FLAG_SECURE if secure else 0)
             if not request:
                 raise urllib.error.URLError(_reason(_last_error()))
+            # 正文经 lpOptional、dwOptionalLength、dwTotalLength 传；GET 时为 None、0、0，和以前一样
+            payload = ctypes.create_string_buffer(body, len(body)) if body else None
+            pointer = ctypes.cast(payload, ctypes.c_void_p) if payload is not None else None
+            size = len(body) if body else 0
             try:
                 ms = max(1, int(timeout * 1000))
-                winhttp.WinHttpSetTimeouts(request, ms, ms, ms, ms)
-                _set_option(request, WINHTTP_OPTION_REDIRECT_POLICY,
-                            WINHTTP_OPTION_REDIRECT_POLICY_DISALLOW_HTTPS_TO_HTTP)
-                _set_option(request, WINHTTP_OPTION_MAX_HTTP_AUTOMATIC_REDIRECTS, MAX_REDIRECTS)
+                connect_ms = max(1, int((timeout if connect_timeout is None else connect_timeout) * 1000))
+                winhttp.WinHttpSetTimeouts(request, ms, connect_ms, ms, ms)
+                if redirects:
+                    _set_option(request, WINHTTP_OPTION_REDIRECT_POLICY,
+                                WINHTTP_OPTION_REDIRECT_POLICY_DISALLOW_HTTPS_TO_HTTP)
+                    _set_option(request, WINHTTP_OPTION_MAX_HTTP_AUTOMATIC_REDIRECTS, MAX_REDIRECTS)
+                else:
+                    # 不跟重定向：3xx 原样交回（post 的调用方当作「留着下次再试」）
+                    _set_option(request, WINHTTP_OPTION_REDIRECT_POLICY, WINHTTP_OPTION_REDIRECT_POLICY_NEVER)
                 _set_option(request, WINHTTP_OPTION_DISABLE_FEATURE, WINHTTP_DISABLE_COOKIES)
                 proxied = self._configure_proxy(request, bypass_host)
-                if not winhttp.WinHttpSendRequest(request, headers or None, len(headers), None, 0, 0, 0):
+                if not winhttp.WinHttpSendRequest(request, headers or None, len(headers), pointer, size, size, 0):
                     raise _send_error(_last_error())
                 if _stopped(stop):  # 读回话之前（同步方式下 WinHttpSendRequest 等回话来了、连接断了或超时才返回）
                     raise Stopped
@@ -511,7 +579,7 @@ class Session:
                 status = _status_code(request)
                 # 走代理、有用户名密码时，跳转过去的那一跳不带认证、代理回 407：在同一个请求句柄上重设凭据、再发一次
                 # （每一跳最多一次；重发时不再传附加请求头，头已经在句柄上了，再传会重复）。重发的次数也不超过跟随
-                # 重定向的上限 + 1，不走死循环。
+                # 重定向的上限 + 1，不走死循环。不跟重定向的（post）跳不了地址，取到的还是原地址，这里随即 break。
                 resent: set[str] = set()
                 while status == 407 and proxied and len(resent) <= MAX_REDIRECTS:
                     now = _current_url(request)
@@ -521,13 +589,15 @@ class Session:
                     if _stopped(stop):  # 重发之前
                         raise Stopped
                     _set_proxy_credentials(request, self._credentials)
-                    if not winhttp.WinHttpSendRequest(request, None, 0, None, 0, 0, 0):
+                    if not winhttp.WinHttpSendRequest(request, None, 0, pointer, size, size, 0):
                         raise _send_error(_last_error())
                     if _stopped(stop):  # 再读回话之前
                         raise Stopped
                     if not winhttp.WinHttpReceiveResponse(request, None):
                         raise _send_error(_last_error())
                     status = _status_code(request)
+                if accept_all:  # send、post：什么状态码都交回
+                    return status, _headers(request), _read_capped(request, stop, 64 * 1024)
                 if status >= 300:  # 重定向没跟时的 3xx（https→http）也算出错，同 urllib 不处理的重定向
                     raise urllib.error.HTTPError(url, status, _query_text(request, WINHTTP_QUERY_STATUS_TEXT),
                                                  _headers(request), None)

@@ -5,10 +5,11 @@
 影响的那几次按次数分开算（context.split_picks，之后选到某筹码的三个概率 chances.take_chance 同一个口径）：剩下的升星一定
 会来，先算满，按下一星的升星（最左格出职业筹码池）；已拿循环往复、它给的额外那次还没给时，那一次也一定会来，接着算，
 按任务来源（三格全随机，context.endless_sources）；其余是任务和筹码商店的三选一，按两者在一局里的占比（rules.toml
-[picks]：本地图的筹码任务数 × task_rate 对 shop）混合，稀有度按当前星数：任务三格全随机、等级取当前星数（至少 1 级），
-筹码商店照升星的规则（最左格出职业筹码池）。所以 0～1 星全按升星，2 星影响 1.5 次时 1 次按升星、半次按混合（循环往复那
-一次还没给时按它），3 星以后全按混合（任务按 3 级、筹码商店按 3 星；循环往复那一次还没给时先按它）。一次三选一的三格
-出自同一种来源，期望最高分和各筹码的出现率都按占比加权（pool.expected_best_mix、appear_prob_mix）。说明里的「下次
+[picks]：本地图的筹码任务数 × task_rate 对 shop）混合，任务的稀有度按地图资料里任务自带的等级（data/maps.json 的
+task_levels，按整局各等级的比例），筹码商店按当前星数、照升星的规则（最左格出职业筹码池）。所以 0～1 星全按升星，2 星影响
+1.5 次时 1 次按升星、半次按混合（循环往复那一次还没给时按它），3 星以后全按混合（任务按地图资料的等级、筹码商店按 3 星；
+循环往复那一次还没给时先按它）。一次三选一的三格出自同一种来源，期望最高分和各筹码的出现率都按占比加权
+（pool.expected_best_mix、appear_prob_mix）。说明里的「下次
 出现率」按下一次三选一的主体写（context.next_sources：0～2 星是升星，3 星以后是循环往复那一次或任务和筹码商店）。
 口径：前瞻只衡量筹码池和出现概率的变化，这一张自己拿走以后不会再出现不算损失，它自己的分值不进前瞻。循环往复的分值里
 含它额外给的那次三选一，这一张也可能在那次出现，那一层同样按这个口径算（future）。
@@ -196,21 +197,21 @@ def lookahead_times(sc: Scorer) -> float:
     return max(0.0, min(la["picks"][max(0, min(3, sc.st.star))], picks.total))
 
 
-def _split_on(sc: Scorer, times: float, change) -> float:
+def _split_on(sc: Scorer, times: float, change, weight: float) -> float:
     """前瞻、档位前瞻按次数分开加起来：weight ×（各类的次数 × 那一类的变化）之和（context.split_picks：升星、循环往复那
     一次、混合，按这个先后）。change(mixed, endless) 是一类三选一里拿 / 不拿两边的差（future 或 tier_future 的参数）。
+    weight 由调用方给：前瞻用 [lookahead] weight，档位前瞻用 tier_weight。
     只有一类时就是 weight × 次数 × 那一类的变化，那一类一定是下一次三选一的主体（context.next_sources）：0～2 星的升星
     （被剩余轮次封顶、之后只剩循环往复那一次时是它），3 星以后循环往复那一次（还没给时）或混合。"""
-    la = sc.db.rules["lookahead"]
     ups, endless, rest = split_picks(sc, times)
     groups = [(n, mixed, flag) for n, mixed, flag in ((ups, False, False), (endless, False, True), (rest, True, False))
               if n > 0]
     if len(groups) <= 1:
-        return la["weight"] * times * change(False, False)
+        return weight * times * change(False, False)
     total = 0.0
     for n, mixed, flag in groups:
         total += n * change(mixed, flag)
-    return la["weight"] * total
+    return weight * total
 
 
 def lookahead_on(sc: Scorer, name: str, owned: tuple, map_name) -> float:
@@ -229,7 +230,7 @@ def lookahead_on(sc: Scorer, name: str, owned: tuple, map_name) -> float:
         return (future(sc, (*owned, name), map_name=map_name, mixed=mixed, endless=endless)
                 - future(sc, owned, zero=name, map_name=map_name, mixed=mixed, endless=endless))
 
-    return _split_on(sc, times, change)
+    return _split_on(sc, times, change, sc.db.rules["lookahead"]["weight"])
 
 
 def lookahead(sc: Scorer, name: str, owned: tuple) -> float:
@@ -296,7 +297,7 @@ def tier_future(sc: Scorer, owned: tuple, zero: str | None = None, map_name=SAME
 
 def _tier_on(sc: Scorer, name: str, owned: tuple, map_name) -> float:
     """一张候选地图上的档位前瞻：和 lookahead_on 同一个算法（影响的次数、按次数分开算，_split_on），只把 future 换成
-    tier_future。"""
+    tier_future，权重用 tier_weight（不跟着前瞻打折）。"""
     times = lookahead_times(sc)
     if times <= 0:
         return 0.0
@@ -305,7 +306,7 @@ def _tier_on(sc: Scorer, name: str, owned: tuple, map_name) -> float:
         return (tier_future(sc, (*owned, name), map_name=map_name, mixed=mixed, endless=endless)
                 - tier_future(sc, owned, zero=name, map_name=map_name, mixed=mixed, endless=endless))
 
-    return _split_on(sc, times, change)
+    return _split_on(sc, times, change, sc.db.rules["lookahead"]["tier_weight"])
 
 
 def tier_lookahead(sc: Scorer, name: str, owned: tuple) -> float:

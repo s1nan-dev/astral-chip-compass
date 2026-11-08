@@ -9,7 +9,7 @@ from PySide6.QtGui import QFont, QFontMetricsF, QPainter, QPen
 from PySide6.QtWidgets import QLabel, QPushButton, QSizePolicy, QVBoxLayout, QWidget
 
 from ... import paths as app_paths
-from .. import theme
+from .. import names, theme
 from ..glyphs import draw_glyph, glyph_font
 from ..theme import COMMON as C
 from ..theme import OVERLAY as O
@@ -98,7 +98,7 @@ class _ChipIcon(QWidget):
                 font.setBold(True)
                 p.setFont(font)
                 p.setPen(qcolor(W.ICON_FALLBACK_TEXT))
-                p.drawText(rect, Qt.AlignCenter, chip.name[:1])
+                p.drawText(rect, Qt.AlignCenter, names.chip_name(chip)[:1])
         if best_star:
             decor.star_sticker(p, QPointF(rect.right() - 3, rect.top() + 3), 10, look)
         p.end()

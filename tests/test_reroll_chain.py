@@ -351,13 +351,13 @@ class EndlessCycleRerollsTest(Base):
     def old_one(self, sc, q: int) -> float:
         """原来的模型给第 q 次刷新的值：gain × H(剩余三选一次数 ÷ q)（多出来的那几次以它封顶）。"""
         from advisor.engine.context import harmonic
-        return self.db.rules["reroll_cost"]["gain"] * harmonic(sc.picks.total / q)
+        return sc.db.rules["reroll_cost"]["gain"] * harmonic(sc.picks.total / q)
 
     AL = dict(hero="阿尔", map="魔法学院", owned=("缓冲盾牌",))
 
     def old_model(self, sc) -> float:
         from advisor.engine.context import harmonic
-        gain, extra = self.db.rules["reroll_cost"]["gain"], self.db.rules["reroll"]["endless_cycle"]
+        gain, extra = sc.db.rules["reroll_cost"]["gain"], sc.db.rules["reroll"]["endless_cycle"]
         total, r = sc.picks.total, sc.st.rerolls
         return sum(gain * harmonic(total / (r + j)) for j in range(1, extra + 1)) if total > 0 else 0.0
 
@@ -458,7 +458,11 @@ class EndlessCycleRerollsTest(Base):
         self.assertAlmostEqual(parts._endless_rerolls(sc, st.map), self.old_model(sc), places=9)
         # 本来就比原来的模型低的照旧：阿尔 3 星第 12 轮剩 2 次（之后约 0.4 次三选一），多出来的 3 次都不封顶
         st = State(**self.AL, star=3, round=12, rerolls=2)
-        sc = Scorer(self.db, st)
+        # 原来的模型按 gain 18 算（这一组查的正是「多出来的比原来的模型低」）：用 gain 18 的资料库副本
+        import dataclasses
+        rules = {k: dict(v) if isinstance(v, dict) else v for k, v in self.db.rules.items()}
+        rules["reroll_cost"]["gain"] = 18
+        sc = Scorer(dataclasses.replace(self.db, rules=rules), st)
         spare = [parts._endless_chain_gain(sc, q, st.map) for q in (3, 4, 5)]
         self.assertTrue(all(v < self.old_one(sc, q) for v, q in zip(spare, (3, 4, 5))))
         self.assertAlmostEqual(parts._endless_rerolls(sc, st.map), sum(spare), places=9)

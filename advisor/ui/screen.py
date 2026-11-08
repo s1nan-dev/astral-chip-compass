@@ -184,7 +184,8 @@ class FrameSource:
     support：window_capture.Support，不给时按本机的系统版本；backend：直接截取的会话类（window_capture.WindowCapture，
     测试换成假的）；finder：查游戏窗口的函数，返回 capture.GameWindow，找不到时抛 capture.WindowGone（不给时用
     capture.find_game）；screen：截取屏幕的函数（不给时用 grab_frame，贴补悬浮窗遮挡的区域）；clock：秒数时钟。
-    grab() 找不到游戏窗口、游戏窗口最小化时抛 capture.WindowGone（后台识别线程只把这一种的两句固定中文原样显示）。"""
+    grab() 找不到游戏窗口、游戏窗口最小化时抛 capture.WindowGone（后台识别线程只把这一种的几句固定中文原样显示：找不到
+    游戏窗口、最小化，以及设了游戏平台、开着的是另一个端时的那一句）。"""
 
     def __init__(self, support=None, backend=None, finder: Callable | None = None, screen: Callable | None = None,
                  clock: Callable[[], float] = time.monotonic):
@@ -749,7 +750,8 @@ def _log_unprotected(session) -> None:
 
 
 def _window_gone(minimized: bool = False):
-    """找不到游戏窗口、游戏窗口最小化时抛的异常（vision/capture.py 的 WindowGone：给玩家看的两句固定中文）。"""
+    """找不到游戏窗口、游戏窗口最小化时抛的异常（vision/capture.py 的 WindowGone：给玩家看的固定中文，找不到游戏窗口、
+    最小化，以及按游戏平台找时点明设置的那一句）。"""
     from ..vision import capture
 
     return capture.WindowGone(minimized=minimized)

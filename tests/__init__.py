@@ -28,5 +28,10 @@ if os.environ.get(_excluded_imports.ENV_VAR):
 if _sandbox.checks_user_files() and Path.cwd().resolve() != _sandbox.ROOT:
     os.chdir(_sandbox.ROOT)
 _sandbox.activate()
+# 导出诊断时现量占用的时长（advisor/usage.py 的 PROBE_S）：测试里不真等 3 秒，走真的 Services.load() 再导出的测试和原来
+# 一样快。各测试要量别的时长时自己给 seconds
+from advisor import usage as _usage  # noqa: E402
+
+_usage.PROBE_S = 0.2
 if not _qtenv.configured() and Path.cwd().resolve() == _sandbox.ROOT:
     _qtenv.configure(_sandbox.QT)

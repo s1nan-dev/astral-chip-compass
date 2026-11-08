@@ -26,7 +26,7 @@ import zipfile
 from pathlib import Path
 from unittest import mock
 
-from advisor import update, update_files, winhttp
+from advisor import paths, update, update_files, update_log, winhttp
 from tests.support import sandbox
 from tests.support.errors import capture_errors
 
@@ -570,6 +570,96 @@ class NoManifestTest(ObtainCase):
         with self.assertRaises(update.UpdateError):
             self.obtain(dataclasses.replace(self.release, version="../1.0.1"))
         self.assertEqual(self.server.seen, [])
+
+
+class LogTest(ObtainCase):
+    """obtain 往 update.log 记的几行：差分成功、差分退回整包、没有清单只下整包、镜像换 GitHub、核对失败、写记录失败；不留地址和
+    用户目录。"""
+
+    def setUp(self):
+        super().setUp()
+        self.log = paths.logs_dir() / update_log.KEPT_LOG
+        self.log.unlink(missing_ok=True)
+        self.addCleanup(self.log.unlink, missing_ok=True)
+
+    def text(self) -> str:
+        return self.log.read_text(encoding="utf-8")
+
+    def assert_no_addresses(self) -> None:
+        text = self.text()
+        self.assertNotIn("127.0.0.1", text)
+        self.assertNotRegex(text, r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b")
+
+    def test_delta(self):
+        self.obtain()
+        self.assert_ready()
+        text = self.text()
+        for part in ("1.0.1：有文件清单，先试只下变了的文件", "只下变了的文件，来源 其他地址", "清单", "要取", "实际取",
+                     "已备好（差分"):
+            self.assertIn(part, text)
+        self.assert_no_addresses()
+
+    def test_mirror_to_github(self):
+        # 第一个地址（像下载镜像）不支持按段取：记一笔换下一个地址，用第二个取完
+        self.server.modes[f"/m/{ZIP}"] = "full"
+        self.obtain()
+        self.assert_ready()
+        text = self.text()
+        self.assertIn("按段取没成", text)
+        self.assertIn("换下一个地址", text)
+        self.assertIn("来源 其他地址", text)
+        self.assertEqual([kind for kind, _ in self.phases], ["compare", "delta", "prepare"])
+        self.assert_no_addresses()
+
+    def test_fallback_full_and_new_source(self):
+        for side in ("/m", "/g"):
+            self.server.modes[f"{side}/{ZIP}"] = "full"
+        self.obtain()
+        self.assert_ready()
+        text = self.text()
+        for part in ("按段取没成", "不是 206", "只下变了的文件没成", f"改下整包（{len(self.blob)} 字节）", "整包下载好",
+                     "已备好（整包"):
+            self.assertIn(part, text)
+        self.assert_no_addresses()
+
+    def test_no_manifest(self):
+        # 没有清单：记下这次下整包、要下多少字节
+        release = dataclasses.replace(self.release, files_sha256=None, files_size=None, files_urls=())
+        self.obtain(release)
+        self.assert_ready()
+        text = self.text()
+        self.assertIn(f"1.0.1：没有文件清单，下整包（{len(self.blob)} 字节）", text)
+        self.assertIn("已备好（整包", text)
+        self.assert_no_addresses()
+
+    def test_prepare_failure(self):
+        # 程序文件的版本号是四段数字（写法和 IP 一样）：照写，看得出核对出来的是哪一版
+        self.version = (1, 0, 0, 0)
+        with self.assertRaises(update.UpdateError):
+            self.obtain()
+        text = self.text()
+        for part in ("只下变了的文件没成", "改下整包", "核对、解压失败", "版本号是 1.0.0.0，应为 1.0.1"):
+            self.assertIn(part, text)
+
+    def test_no_user_folder(self):
+        # 程序文件夹在用户目录里（例如解压在桌面上）：本机文件的路径写成相对程序目录的，不出现用户目录
+        local = self.root / "app" / "ACC.exe"
+        error = update_files.DeltaError(f"读不了本机的 app/ACC.exe：[Errno 13] Permission denied: '{local}'")
+        with mock.patch.dict(os.environ, {"USERPROFILE": str(self.work)}), \
+                mock.patch.object(update_log.paths, "program_folder", return_value=self.root), \
+                mock.patch.object(update.update_files, "assemble", side_effect=error):
+            self.obtain()
+        self.assert_ready()
+        text = self.text()
+        self.assertNotIn(str(self.work), text)
+        self.assertIn("Permission denied: '%程序目录%\\app\\ACC.exe'", text)
+
+    def test_write_failure_does_not_break_obtain(self):
+        blocker = sandbox.temp_dir(self, "update-obtain-blocked-") / "logs"
+        blocker.write_bytes(b"not a folder")
+        with mock.patch.object(update_log.paths, "logs_dir", return_value=blocker):
+            self.obtain()
+        self.assert_ready()
 
 
 class StopTest(ObtainCase):

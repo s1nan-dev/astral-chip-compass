@@ -209,10 +209,14 @@ def _players(players, names: dict) -> dict | None:
 
 
 def _screen(screen) -> dict | None:
-    """对局外画面的读数（screens.OutOfGame）→ 字典，和 labels.json 的 screen 字段同样写法。"""
+    """对局外画面的读数（screens.OutOfGame）→ 字典，和 labels.json 的 screen 字段同样写法。奖励页的星币（coins）读到了
+    才带上：标注里只有奖励页写了 coins，别的画面没有这一项。"""
     if screen is None:
         return None
-    return {"kind": screen.kind, "difficulty": screen.difficulty, "map": screen.map, "rounds": screen.rounds}
+    out = {"kind": screen.kind, "difficulty": screen.difficulty, "map": screen.map, "rounds": screen.rounds}
+    if getattr(screen, "coins", None) is not None:
+        out["coins"] = screen.coins
+    return out
 
 
 def _panel(reading) -> dict | None:
@@ -230,7 +234,7 @@ def read_sample(item: dict) -> dict:
     """在子进程里识别一张样本的原图和缩小版，只返回读数（普通的列表、字典）。某个模块抛异常时记下调用栈。"""
     from advisor.vision import reset_hints, stars
     from advisor.vision.chip_panel import read_chip_panel
-    from advisor.vision.chip_select import looks_like_overlay_screen, read_chip_select
+    from advisor.vision.chip_select import dark_band, looks_like_overlay_screen, read_chip_select
     from advisor.vision.hero import read_hero
     from advisor.vision.hud import is_select_screen, read_hud, read_pregame, read_progress, read_progress_cap
 
@@ -263,6 +267,11 @@ def read_sample(item: dict) -> dict:
         run("prefilter", lambda: bool(looks_like_overlay_screen(img)))
         if item["scene"] in SELECT_SCENES or got.get("prefilter"):
             run("select", lambda: _select(read_chip_select(img, db)))
+        elif dark_band(img):
+            # 预筛第一段（上半段有暗行）过了、第二段（标题带的位置和上下边）拦下的反例：战斗、玩家详情弹窗、卡牌商店上方也有
+            # 黑带。悬浮窗不在这些画面上做文字识别；这里照样认一次（不算进悬浮窗的流程，另记一项），核对万一预筛放过了，
+            # 标题匹配也能否定
+            run("select_dark", lambda: _select(read_chip_select(img, db)))
         if item["scene"] not in SELECT_SCENES:
             info: dict = {}
             run("pick", lambda: bool(is_select_screen(img, db, info)))
@@ -392,15 +401,18 @@ class VisionMatrixTest(unittest.TestCase):
 
     def test_other_screens_are_not_chip_select(self):
         """反例：大厅、选角、选皮肤、载入、结算、卡牌商店、玩家详情弹窗、转账、对局、战斗、面板、任务栏都不能读成三选一。
-        预筛就拦下的画面悬浮窗不做文字识别；过了预筛的（战斗、玩家详情弹窗、卡牌商店上方也有黑带）要由文字识别否定。"""
+        预筛就拦下的画面悬浮窗不做文字识别；过了预筛的要由文字识别否定。战斗、玩家详情弹窗、卡牌商店上方也有黑带，过得了
+        预筛第一段、在第二段（标题带的位置和上下边）被拦下：这些也照样认一次（select_dark），文字识别同样要否定，两道关都在。"""
         recognised = 0
         for item, variant, got in self.cases(lambda it: it["scene"] not in SELECT_SCENES):
             with self.subTest(file=item["file"], variant=variant, scene=item["scene"]):
-                if not self.value(item, variant, got, "prefilter"):
-                    continue
-                recognised += 1
-                self.assertIsNone(self.value(item, variant, got, "select"))
-        self.assertGreater(recognised, 0)  # 至少有过了预筛、真正做了文字识别的反例
+                if self.value(item, variant, got, "prefilter"):
+                    recognised += 1
+                    self.assertIsNone(self.value(item, variant, got, "select"))
+                elif "select_dark" in got or "select_dark" in got["errors"]:
+                    recognised += 1
+                    self.assertIsNone(self.value(item, variant, got, "select_dark"))
+        self.assertGreater(recognised, 0)  # 至少有过了预筛第一段、真正做了文字识别的反例
 
     # ------------------------------------------------------------ 左上角（hud）
 
@@ -489,7 +501,7 @@ class VisionMatrixTest(unittest.TestCase):
 
     def test_out_of_game_screens(self):
         """整幅识别：标了 screen 的样本读数和标注完全相同（变灰的组队房间难度可以读不出）；
-        没标 screen 的样本（对局里的各种画面、选角、载入等）一张也不能认成结算页、匹配成功页、房间或奖励页。"""
+        没标 screen 的样本（对局里的各种画面、选角、载入等）一张也不能认成结算页、匹配成功页、房间、奖励页或主菜单。"""
         for item, variant, got in self.cases():
             with self.subTest(file=item["file"], variant=variant, scene=item["scene"]):
                 seen = self.value(item, variant, got, "screen")
@@ -499,13 +511,13 @@ class VisionMatrixTest(unittest.TestCase):
                 self.assertEqual(seen, want)
 
     def test_out_of_game_screens_bottom(self):
-        """选角界面判断的那次识别（只看下方区域）顺带读到的画面：结算页读全；其余画面读不出可以，读到的项不能和标注不同；
-        没标 screen 的样本读不出。"""
+        """选角界面判断的那次识别（只看下方区域）顺带读到的画面：结算页、主菜单读全；其余画面读不出可以，读到的项不能和
+        标注不同；没标 screen 的样本读不出。"""
         for item, variant, got in self.cases(lambda it: it["scene"] not in SELECT_SCENES):
             with self.subTest(file=item["file"], variant=variant, scene=item["scene"]):
                 self.value(item, variant, got, "pick")
                 seen, want = got["pick_screen"], item.get("screen")
-                if want is not None and want["kind"] == "result":
+                if want is not None and want["kind"] in ("result", "main_menu"):
                     self.assertEqual(seen, want)
                 elif seen is not None:
                     self.assertIsNotNone(want, seen)

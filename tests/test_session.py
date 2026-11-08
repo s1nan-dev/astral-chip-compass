@@ -909,6 +909,103 @@ class StartupPanelTest(unittest.TestCase):
         self.assertEqual(s.settings.owned, ["友情徽章"])
 
 
+class LobbyStartupPanelTest(unittest.TestCase):
+    """刚打开时在大厅（还没有对局状态时读到过主菜单、房间、「匹配成功」画面、结算画面、奖励画面），之后才进的对局：进对局时还在
+    开局（第 1、2 轮，没先看到三选一）就算从开局看起，不请用户打开「查看筹码」面板。先读到星数这类不带轮次的读数时先不提示、
+    等读到轮次再定；等的时候先看到三选一就提示；一直读不到轮次，等满 PANEL_WAIT_S 秒照旧提示。没见过这些画面的照旧：第一次
+    对局内读数就提示。"""
+
+    def setUp(self):
+        self.db = load_db()
+        self.t = 1000.0
+        self.session = Session(self.db, Settings(hero="凛"))
+        self.session._clock = lambda: self.t
+
+    def lobby(self, kind="main_menu") -> Session:
+        s = self.session
+        self.assertIsNone(s.on_out_of_game(screen(kind)))
+        self.assertFalse(s.has_game_state)
+        return s
+
+    def prompts(self) -> int:
+        return len(kinds(self.session, "panel_prompt"))
+
+    def test_stars_then_round_one(self):
+        """见过主菜单，先读到 0 星：先不提示；接着读到第 1 轮：从开局看起，不提示，之后也不提示。"""
+        s = self.lobby()
+        s.on_stars(own(0))
+        self.assertEqual(self.prompts(), 0)
+        self.assertTrue(s.game.panel_needed)
+        self.t += 3
+        s.on_hud(hud(round=1))
+        self.assertEqual(self.prompts(), 0)
+        self.assertEqual((s.game.panel_needed, s.game.whole_game), (False, True))
+        self.t += 3
+        s.on_hud(hud(round=2))
+        s.on_frame(frame(OFFER_A))
+        self.assertEqual(self.prompts(), 0)
+
+    def test_other_lobby_screens(self):
+        """房间、「匹配成功」画面、结算画面、奖励画面也算：之后第一次读到第 2 轮时不提示。"""
+        for kind in ("team_room", "match_found", "result", "reward"):
+            with self.subTest(kind=kind):
+                self.setUp()
+                s = self.lobby(kind)
+                s.on_hud(hud(round=2))
+                self.assertEqual(self.prompts(), 0)
+                self.assertFalse(s.game.panel_needed)
+
+    def test_without_lobby_as_before(self):
+        """没见过对局外的画面（刚打开时就在对局里）：照旧第一次对局内读数（这里是星数）就提示。"""
+        s = self.session
+        s.on_stars(own(0))
+        self.assertEqual(self.prompts(), 1)
+        s.on_hud(hud(round=1))
+        self.assertEqual(self.prompts(), 0)
+        self.assertTrue(s.game.panel_needed)
+
+    def test_offer_first_prompts(self):
+        """见过主菜单，等轮次的时候先看到了三选一（开局后可能已经拿过筹码）：提示。"""
+        s = self.lobby()
+        s.on_stars(own(0))
+        self.assertEqual(self.prompts(), 0)
+        self.t += 1
+        s.on_frame(frame(OFFER_A))
+        self.assertEqual(self.prompts(), 1)
+        self.assertTrue(s.game.panel_needed)
+
+    def test_offer_frame_before_round(self):
+        """三选一那一帧（识别流程先调 begin_offer、再交这一帧的轮次）：轮次再小也提示。"""
+        s = self.lobby()
+        self.assertIsNone(s.begin_offer())
+        s.on_hud(hud(round=1))
+        self.assertEqual(self.prompts(), 1)
+
+    def test_later_round_prompts(self):
+        """见过主菜单，第一次读到的轮次是第 4 轮（开局后可能已经拿过筹码）：提示。"""
+        s = self.lobby()
+        s.on_hud(hud(round=4))
+        self.assertEqual(self.prompts(), 1)
+        self.assertTrue(s.game.panel_needed)
+
+    def test_no_round_for_long_prompts(self):
+        """见过主菜单，一直只读到星数、读不到轮次：等满 PANEL_WAIT_S 秒照旧提示；提示过以后读到小的轮次也不收回。"""
+        from advisor.session.core import PANEL_WAIT_S
+
+        s = self.lobby()
+        s.on_stars(own(1))
+        self.t += PANEL_WAIT_S - 1
+        s.on_stars(own(1))
+        self.assertEqual(self.prompts(), 0)
+        self.t += 1
+        s.on_stars(own(1))
+        self.assertEqual(self.prompts(), 1)
+        self.t += 3
+        s.on_hud(hud(round=1))
+        self.assertTrue(s.game.panel_needed)
+        self.assertEqual(self.prompts(), 0)
+
+
 class PanelFixesPickTest(unittest.TestCase):
     """思考时间用完时游戏自动拿最左边的筹码，绿框选中的不一定是实际拿到的。
     之后读到「查看筹码」面板、和记录对不上时以面板为准，并说明改正了哪一次的选择记录（悬浮窗据此改推荐日志）。"""
@@ -1648,8 +1745,8 @@ class UnsupportedTest(unittest.TestCase):
         self.assertIsNone(s.on_language(True))
         self.assertIsNone(s.on_language(None))  # 不确定的不算
         self.assertEqual(s.on_language(True).kind, "status")
-        self.assertIn("简体中文", s.unsupported[0])
-        self.assertEqual(s.on_language(False).kind, "status")  # 读到了简体中文标题
+        self.assertIn("简体中文或繁体中文", s.unsupported[0])
+        self.assertEqual(s.on_language(False).kind, "status")  # 读到了简体或繁体的标题
         self.assertEqual(s.unsupported, [])
 
     def test_normal_difficulty_is_not_unsupported(self):
@@ -2084,7 +2181,7 @@ class DifficultyInfoTest(unittest.TestCase):
 
     def test_labels(self):
         self.assertEqual(set(DIFFICULTY_SOURCE_LABEL), {"result", "match_found", *ROOM_KINDS, "cap", "rows"})
-        self.assertEqual(set(OUT_OF_GAME_LABEL), {"result", "match_found", *ROOM_KINDS, "reward"})
+        self.assertEqual(set(OUT_OF_GAME_LABEL), {"result", "match_found", *ROOM_KINDS, "reward", "main_menu"})
         self.assertEqual((MAP_SOURCE_LABEL["match"], MAP_SOURCE_LABEL["room"]), ("「匹配成功」画面", "房间设置"))
         self.assertEqual(DifficultyInfo(LEVEL_HARD_PLUS).label, "困难及以上")
         self.assertEqual(DifficultyInfo(LEVEL_NIGHTMARE, "噩梦").label, "噩梦")
@@ -2137,7 +2234,8 @@ class GameOverTest(unittest.TestCase):
         st = s.settings
         self.assertEqual((st.round, st.star, st.map, st.owned, s.game.progress), (12, 3, "异变图书馆", ["书签", "标靶"], 12))
         self.assertEqual(s.game_over_info, {"why": ev.why, "map": "异变图书馆", "difficulty": "噩梦",
-                                            "level": LEVEL_NIGHTMARE, "rounds": 12, "cap": 17})
+                                            "level": LEVEL_NIGHTMARE, "rounds": 12, "cap": 17,
+                                            "outcome": None, "how": None})  # 没看到通关画面、还没读到奖励画面
         self.assertEqual(s.difficulty_info.source, "result")
         self.assertIsNone(s.on_out_of_game(self.RESULT))  # 结算画面停留期间不再发
         records = s.recent_events(60)
@@ -2679,11 +2777,11 @@ class HudParseTest(unittest.TestCase):
         cls.tasks = {k: v["tasks"] for k, v in json.loads((PROJECT / "data" / "maps.json").read_text(encoding="utf-8")).items()}
 
     def panel(self, tasks):
-        """模拟点开的任务栏：每条任务一段文字，右边一段「0\\N」进度。"""
+        """模拟点开的任务栏：每条任务一段文字，右边一段「0\\N」进度（繁体任务的量词「隻」「個」等也去掉）。"""
         lines = []
         for i, task in enumerate(tasks):
             count = re.search(r"\d+", task)
-            text = re.sub(r"\d+\s*[只个艘次张条层名位颗]?\s*", "", task)
+            text = re.sub(r"\d+\s*[只个艘次张条层名位颗隻個張條層顆]?\s*", "", task)
             lines.append(ln(text, 1400, 140 + 200 * i, 300, 70))
             lines.append(ln(f"0\\{count.group() if count else 1}", 2000, 140 + 200 * i, 80, 65))
         return lines
@@ -2773,6 +2871,29 @@ class HudParseTest(unittest.TestCase):
         tasks = [t for t in self.tasks["海选赛运动场"] if "艾米" not in t]
         self.assertNotEqual(_guess_map(self.db, self.panel(tasks)).map_confidence, "high")
 
+    def test_hant_panel_scores_like_simplified(self):
+        """任务栏是繁体时：一条任务的简体、繁体写法算同一条，读全繁体任务栏时各地图的得分、结论、候选和读全简体任务栏
+        时相同；只读到其中几条（漏读最后一条、只读到第一条）时也和简体读到同样几条相同（读到几成按任务算，不按写法算，
+        魔法学院、海选赛运动场这种靠读到的比例分开的照样分得开）。"""
+        maps = json.loads((PROJECT / "data" / "maps.json").read_text(encoding="utf-8"))
+        for name, info in maps.items():
+            hant = [h if h is not None else s for s, h in zip(info["tasks"], info["hant_tasks"])]
+            for picked in (slice(None), slice(None, -1), slice(None, 1)):
+                with self.subTest(map=name, picked=picked):
+                    simp = _guess_map(self.db, self.panel(info["tasks"][picked]))
+                    trad = _guess_map(self.db, self.panel(hant[picked]))
+                    self.assertEqual((trad.map, trad.map_confidence, trad.map_scores, trad.map_candidates),
+                                     (simp.map, simp.map_confidence, simp.map_scores, simp.map_candidates))
+        trad = _guess_map(self.db, self.panel(maps["魔法学院"]["hant_tasks"]))
+        self.assertEqual((trad.map, trad.map_confidence), ("魔法学院", "medium"))
+
+    def test_task_spellings_count_once(self):
+        """同一条任务的简体、繁体写法都读到了（两行各对上一种写法）：这条任务只算对上一次。"""
+        info = json.loads((PROJECT / "data" / "maps.json").read_text(encoding="utf-8"))["异变图书馆"]
+        guess = _guess_map(self.db, self.panel([info["tasks"][0], info["hant_tasks"][0]]))
+        self.assertEqual(guess.map_scores["异变图书馆"], 1)
+        self.assertEqual(len(guess.tasks_seen), 2)
+
     def test_hud_without_task_panel(self):
         lines = [ln("魔法茶壶", 1160, 130, 120, 80), ln("线索：0/5", 3170, 97, 200, 68), ln("6/11", 1145, 230, 80, 98)]
         guess = _guess_map(self.db, lines)
@@ -2785,7 +2906,7 @@ class HudParseTest(unittest.TestCase):
         self.assertEqual(_parse_round(lines, 3840, 2054), 1)
 
     def test_round_out_of_range_is_rejected(self):
-        """「04」读成「00」：第 0 轮不存在，按读不出处理（read_round 随后放大重读）。"""
+        """「04」读成「00」：第 0 轮不存在，按读不出处理（read_round 随后在标记左边裁小块再认，没看见标记时放大重读）。"""
         from advisor.vision.hud import _round_like
         for text in ("00", "88"):
             with self.subTest(text=text):
@@ -2808,27 +2929,39 @@ class HudParseTest(unittest.TestCase):
         self.assertIsNone(_parse_round([ln("209", 94, 37, 130, 71), mark], w, h))
 
     def test_round_retried_when_digits_missed(self):
-        """读到了「轮」字却没检测到数字（4:3 窗口缩到 1600×1200 时「11」整段漏检）：放大、缩小各再读一次。"""
+        """读到了「轮」字却没检测到数字（4:3 窗口缩到 1600×1200 时「11」整段漏检）：先在「轮」字左边裁一小块只认字，
+        读到了就用；读不出按读不出处理，不换大小重读。没读到「轮」字、数字的位置上读成「t0」时，放大、缩小各再读一次。"""
         from unittest import mock
 
         import numpy as np
 
         from advisor.vision import hud, io
 
+        img = np.zeros((1200, 1600, 3), np.uint8)
         calls = []
 
         def fake_ocr(img, box, width=None):
             calls.append(width)
-            if len(calls) < 3:
-                return [ln("轮", 121, 36, 25, 25)]
+            if len(calls) < 2:
+                return [first]
             return [ln("11", 85, 30, 45, 55), ln("轮", 121, 36, 25, 25)]
 
-        with mock.patch.object(io, "ocr", side_effect=fake_ocr):
-            self.assertEqual(hud.read_round(np.zeros((1200, 1600, 3), np.uint8)), 11)
-        self.assertEqual(len(calls), 3)  # 原大小、放大 1.5 倍、缩小到 0.75 倍
+        first = ln("轮", 121, 36, 25, 25)
+        for reads, want in (([("11", 0.99)], 11), ([], None)):
+            calls.clear()
+            with self.subTest(reads=reads), mock.patch.object(io, "ocr", side_effect=fake_ocr), \
+                    mock.patch.object(hud, "recognize_only", return_value=reads):
+                self.assertEqual(hud.read_round(img), want)
+                self.assertEqual(len(calls), 1)  # 只读了原大小那一遍
+        first = ln("t0", 85, 30, 45, 55)
+        calls.clear()
+        with mock.patch.object(io, "ocr", side_effect=fake_ocr), mock.patch.object(hud, "recognize_only") as rec:
+            self.assertEqual(hud.read_round(img), 11)
+            rec.assert_not_called()
+        self.assertEqual(len(calls), 2)  # 原大小、放大 1.5 倍（读到了就不再缩小重读）
         calls.clear()
         with mock.patch.object(io, "ocr", side_effect=lambda img, box, width=None: calls.append(width) or []):
-            self.assertIsNone(hud.read_round(np.zeros((1200, 1600, 3), np.uint8)))
+            self.assertIsNone(hud.read_round(img))
         self.assertEqual(len(calls), 1)  # 什么都没读到（不在对局画面）：不重读
 
     def test_round_when_mark_is_garbled(self):
@@ -2891,7 +3024,7 @@ class LoadingCheckTest(unittest.TestCase):
         self.answer = None
         patches = [
             mock.patch.object(pipeline, "looks_like_overlay_screen", return_value=False),
-            mock.patch.object(pipeline, "read_hud", side_effect=lambda img, db, full: Hud(round=self.round)),
+            mock.patch.object(pipeline, "read_hud", side_effect=lambda img, db, full, **kw: Hud(round=self.round)),
             mock.patch.object(pipeline, "is_select_screen", return_value=False),
             mock.patch.object(pipeline, "read_hero", return_value=None),
             mock.patch.object(pipeline, "read_pregame", side_effect=fake_pregame),
@@ -2948,11 +3081,11 @@ class SelectFrameTest(unittest.TestCase):
         self.star_calls = []  # 每次读星数时传进去的 hero_key
         self.hud_calls = []  # 每次读轮次时的 full 参数
 
-        def fake_hud(img, db, full):
+        def fake_hud(img, db, full, **kw):
             self.hud_calls.append(full)
             return Hud(round=self.round)
 
-        def fake_stars(img, hero, row=None):
+        def fake_stars(img, hero, row=None, **kw):
             self.star_calls.append(hero)
             return self.stars
 
@@ -2995,20 +3128,24 @@ class SelectFrameTest(unittest.TestCase):
     def test_round_jump_in_chip_select_is_rechecked_next_frame(self):
         """三选一上读到往前大幅跳变的轮次：下一帧马上再读一次（不等 hud_ms），两次一致就采用、推荐随即重算。
         三选一出现时上次读到轮次已经过了 after_game_ms（第 4 秒读到，第 40 秒出现），先读完再给推荐（先给推荐、下一帧核对时
-        读到跳变的见 test_pipeline 的 FastAdviceTest）。对局画面的两个时刻到期的读数都做完（settle）。"""
+        读到跳变的见 test_pipeline 的 FastAdviceTest）。对局画面的两个时刻到期的读数都做完（settle）。同一个三选一界面上
+        之后只查绿框（快速复查换成假的、照旧对得上；对不上、每一帧都要完整识别时读左上角挪一帧，见 test_pipeline 的
+        SelectTopTest）。"""
         self.round, self.hero = 3, "凛"
         self.proc.settle(self.img, 0.0)
         self.proc.settle(self.img, 4.0)  # 第 3 轮读到两次
         self.seen = frame(["小猪存钱罐", "友情徽章", "医疗箱-紧急治疗"])
         self.round = 6
-        events = self.proc.process(self.img, 40.0)
-        self.assertEqual([ev.state.round for ev in events if ev.kind == "advice"], [3])  # 只读到一次：先按旧的算
-        calls = len(self.hud_calls)
-        events = self.proc.process(self.img, 40.2)
-        self.assertEqual(len(self.hud_calls), calls + 1)  # 没等 hud_ms 就又读了一次
-        self.assertEqual([ev.state.round for ev in events if ev.kind == "advice"], [6])
-        self.proc.process(self.img, 40.4)
-        self.assertEqual(len(self.hud_calls), calls + 1)  # 只补读一次，之后这一次三选一里不再读
+        with mock.patch.object(pipeline, "name_strip", side_effect=lambda img, seen: tuple(seen.names)), \
+                mock.patch.object(pipeline, "reread_selected", side_effect=lambda img, seen, strip: seen):
+            events = self.proc.process(self.img, 40.0)
+            self.assertEqual([ev.state.round for ev in events if ev.kind == "advice"], [3])  # 只读到一次：先按旧的算
+            calls = len(self.hud_calls)
+            events = self.proc.process(self.img, 40.2)
+            self.assertEqual(len(self.hud_calls), calls + 1)  # 没等 hud_ms 就又读了一次
+            self.assertEqual([ev.state.round for ev in events if ev.kind == "advice"], [6])
+            self.proc.process(self.img, 40.4)
+            self.assertEqual(len(self.hud_calls), calls + 1)  # 只补读一次，之后这一次三选一里不再读
 
     def test_stars_tried_a_few_times_per_chip_select(self):
         """自己那一行被标题带挡住时读不到，每次三选一最多试几帧；读到了就不再读。"""

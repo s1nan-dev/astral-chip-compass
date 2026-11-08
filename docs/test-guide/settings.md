@@ -14,9 +14,14 @@
   - `ForceSaveTest`：`force=True` 跳过退避等待、读不了的文件强制也不写；`Session.save` 透传 `force`
   - `ExitSaveTest`：`main()` 退出时强制再存一次；后台识别一直占锁时跳过并记错误记录
   - `HotkeyNumberTest`：热键写成数字时读时按默认、设置窗口照常打开，万一数字到了窗口按未设置显示
+  - `PlatformFieldTest`：游戏平台两项（`platform`、`platform_seen`）的默认、读写、旧文件缺这两项、读到类型不对或别的值的处理；设置文件认的端名（`app.py` 的 `PLATFORMS`）和 `capture.PLATFORM_TITLES` 的相同，`PLATFORMS` 里也有 `BOTH`；设置文件的 `lanes`（第二张悬浮窗的四项）认得的两端、四项照原样，端不认得、键不认得、某一项类型不对时丢掉那一项、不报错
+  - `LanesFieldTest`：`UiSettings.lanes` 的读写——认得的端和 `LANE_KEYS` 的四项（角色、窗口位置、相对位置、收起的卡片）照原样存和读；整个不是字典、端不认得、端里不是字典、键不认得、某一项类型不对时丢掉那一项、不记警告；两个端同时存着都保留
+  - `PlatformOverlayTest`：建悬浮窗时按设置交给 `capture`，`set_platform` 存盘、交给 `capture`、同一个值不重写，别的值按自动识别，`BOTH` 照存；自动识别的端变了时 `platform_seen` 更新、只存一次，认出 `None` 或选了一个端时不记；每个用例结束把 `capture` 的平台设回自动识别
   - `UnlockRecordTest`：设置文件里加密存的那一项（`aux`）解不开、这次又读不到机器标识时不盖掉它，皮肤一项也照原样写回；读得到机器标识还解不开的照旧整串换掉
-- **检证对象**：`advisor/prefs.py` 的 `Settings.read`／`Settings.save`／`_write_settings`；`advisor/ui/overlay_parts/app.py` 的 `UiSettings`、`load_settings`、`main`、`_save_on_exit`；`advisor/session/` 的 `Session.save`、`GAME_FIELDS`；`advisor/ui/settings/dialog.py` 的键帽；`advisor/unlock.py` 的 `load`／`seal`／`unseal`／`machine_id`；`advisor/ui/theme/` 的皮肤
-- **什么时候要跑**：改了 `advisor/prefs.py` 的读、写、备份、坏文件处理与另存，`advisor/fileio.py` 的写盘，`advisor/ui/overlay_parts/app.py` 的 `load_settings`／`UiSettings`／退出保存，设置窗口热键键帽，`advisor/unlock.py` 的存取（`seal`／`unseal`／`load`），都要跑
+  - `UiLangFieldTest`：界面语言一项（`ui_lang`）的默认、读写、旧文件缺这一项、读到不认识的值按没选过，`load_settings` 按这次启动的语言填上、不当场写文件（这几条把繁体界面的总开关 `lang.HANT_ENABLED` 打开了测）；开关关着时没选过的不填、保存时不写，已经存着的值照写回去
+  - `UiLangOverlayTest`：悬浮窗的 `set_ui_lang` 存盘、记识别记录、设置窗口照新值显示；和当前相同、不认识的值不重写设置文件；`restart_app` 起得来就退出，起不来不退出、提示一次并记识别记录
+- **检证对象**：`advisor/prefs.py` 的 `Settings.read`／`Settings.save`／`_write_settings`；`advisor/ui/overlay_parts/app.py` 的 `UiSettings`、`load_settings`、`main`、`_save_on_exit`、`PLATFORMS`、`LANE_KEYS`、`LANE_PLATFORMS`、`_clean_lanes`；`advisor/session/` 的 `Session.save`、`GAME_FIELDS`；`advisor/ui/settings/dialog.py` 的键帽；`advisor/unlock.py` 的 `load`／`seal`／`unseal`／`machine_id`；`advisor/ui/theme/` 的皮肤；`advisor/vision/capture.py` 的 `set_platform`／`platform`／`found_platform`；`advisor/ui/overlay.py` 的 `set_platform`／`_notice_platform_seen`／`set_ui_lang`／`restart_app`
+- **什么时候要跑**：改了 `advisor/prefs.py` 的读、写、备份、坏文件处理与另存，`advisor/fileio.py` 的写盘，`advisor/ui/overlay_parts/app.py` 的 `load_settings`／`UiSettings`／`lanes`／退出保存，设置窗口热键键帽，`advisor/unlock.py` 的存取（`seal`／`unseal`／`load`），或游戏平台两项和 `capture` 的接线，都要跑
 - **怎么单独跑**：`python -B tools/run_tests.py --only test_settings_file`（上次约 1.7 秒）
 - **需要什么**：界面那几条要离屏平台，不弹窗；设置文件写在测试沙箱里；读不了、另存不成、恢复不成用替身造，不真的占用文件
 - **输出怎么看**：记警告的用例用 `assertLogs` 收；没有别的特有输出，同总则
@@ -31,6 +36,9 @@
   - `ForceSaveTest` 失败 → `force` 没跳过退避等待，或对读不了的文件也照写（`advisor/prefs.py`、`advisor/session/`）
   - `ExitSaveTest` 失败 → 退出时没强制再存，或占锁时没跳过并记错误（`advisor/ui/overlay_parts/app.py` 的 `main`）
   - `UnlockRecordTest` 失败 → 该保住 `aux` 那一项与皮肤一项时盖掉了，或该换掉时没换（`advisor/unlock.py`）；皮肤只按「可不可用」判断
+  - `PlatformFieldTest` 失败 → 游戏平台的默认值、读写或坏值处理改坏（`advisor/ui/overlay_parts/app.py` 的 `UiSettings`）
+  - `LanesFieldTest` 失败 → `lanes` 的端名、键名或类型筛选改坏，认不得的没丢掉、或者该留的丢了（`advisor/ui/overlay_parts/app.py` 的 `_clean_lanes`、`LANE_KEYS`、`LANE_PLATFORMS`）；有意改了 `LANE_KEYS` 时要一起改断言
+  - `PlatformOverlayTest` 失败 → 悬浮窗没把平台交给 `capture`、没存盘、同一个值也重写，或自动识别的端变了没记／记了两次（`advisor/ui/overlay.py`、`advisor/ui/overlay_parts/follow.py`）
   - 有意改了设置文件的格式、默认值或备份命名时，这里的预期要跟着改
 
 ## test_settings_background.py：设置文件写不进时交给后台写、退出时补写的测试
@@ -67,12 +75,15 @@
   - `LayoutTest`：有哪些项（`ITEMS`）和怎么排；默认皮肤下的分组卡片、行图标、各段文字不被截掉、窗口高度等于内容高度；系统没有图标字体时只写字；屏幕矮时窗口内滚动；可点的都是手形光标
   - `ModeTest`：识别模式两块方块（点选切换、存盘、提示一次、按当前热键写说明、点已选中的那块不做事）
   - `HotkeyRowTest`：识别热键那一行的键帽和说明（平时、等待按键、按了不能用的键、被占用、写法无效、未设置），以及没有悬浮窗时显示默认值
+  - `PlatformTest`：「游戏平台」的文字和下拉框四项（第一项的字照 `platform_seen` 变，最后一项是「Steam端+TapTap端」）；七套皮肤里都在「识别」一组最上面，最长的一项整项写得下、不压箭头；选每一项调用 `set_platform` 的值对（自动识别是 `None`）；滚轮停在下拉框上不切换选项；`set_values` 刷新不触发回调；选「Steam端+TapTap端」时先打开性能测试对话框、测试通过才把 `capture.BOTH` 交给悬浮窗并停在这一项，取消时回到原来的一项，已经开着时再选一次不弹
   - `OpaqueTest`：「悬浮窗背景不透明」开关即时改底色、存盘、重启后照旧、读到非布尔值按关
+  - `UiLangTest`（把繁体界面的总开关 `lang.HANT_ENABLED` 打开了测；关着时窗口里没有这一项、也没有重开那一行，`LayoutTest` 查）：「界面语言」下拉框两项各用自己的字写；选了调用悬浮窗的 `set_ui_lang`；选的值和这次启动的语言不同时这一项下面出现「重新打开拾星助手后生效」和「现在重开」，〔现在重开〕调用 `restart_app`，选回相同的收起；七套皮肤里都显示得出来、在「皮肤」下面，下拉框和「游戏平台」同一种画法，重开那一行不被截掉
   - `NewUserTest`：新用户「已有筹码」卡片默认收起，已有设置文件的照文件的；「全部展开」不改卡片自己的折叠状态
   - `TitleAndToolbarTest`：标题栏只剩标题、「全部折叠」、×，底栏只剩「设置」；「关于拾星助手」整行可点；「导出诊断」调用悬浮窗的方法
-  - `SchemeButtonsTest`：「筹码方案」卡片的「编辑方案」「导入/导出」两个图标按钮的样子、打开的窗口、两个下拉框变窄后最长的角色名仍完整显示
-- **检证对象**：`advisor/ui/settings/dialog.py`（`SettingsDialog`、`ITEMS`、`SettingsValues`、`hotkey_texts`、`manual_desc`、`shown_items`、`set_values`、`fit_size`）、`advisor/ui/settings/layouts.py`、`advisor/ui/settings/widgets.py`、`advisor/ui/glyphs.py`；`advisor/ui/overlay_parts/wording.py` 的界面文字常量；`advisor/ui/overlay.py` 的 `set_manual`／`set_lowend`／`show_about`／`export_diagnostics`、卡片折叠；`advisor/ui/overlay_parts/factory.py` 的 `IconTextButton`；`advisor/ui/theme/`
-- **什么时候要跑**：改了 `advisor/ui/settings/` 下的项表、排法、文字、控件，改了 `advisor/ui/overlay_parts/wording.py` 里这些界面文字，改了悬浮窗的标题栏／底栏／卡片按钮，或改了角色下拉框宽度，都要跑
+  - `SchemeButtonsTest`（`setUp` 里把 `hub.ENABLED` 打开）：「筹码方案」卡片的「编辑方案」「导入/导出」「作业站」三个图标按钮的样子、打开的窗口；七套皮肤、各自的程序字体下，三个按钮一样宽（都取最宽的一个），最长的角色名（选中时）、最长的方案名（`NAME_MAX` 个字）在两个下拉框里写得下、不压皮肤自己画的箭头，按钮都在卡片里（`test_longest_hero_name`，新建的悬浮窗和跟着换皮肤的悬浮窗都看）
+  - `PrivacyTest`：「隐私与数据」一组只有「帮助拾星助手改善推荐准确度」一行开关，开关说明下面是能点的「我的统计」几个字（没有单独一行、也没有按钮）；七套皮肤里这几个字都看得见、不被截掉，在说明下面、和说明左边对齐，字号粗细同说明、带下划线、画的是皮肤的链接颜色（`Common.LINK_COLOR`），鼠标是手形（`test_all_skins`）；开关调用悬浮窗的 `set_report_enabled`，开关关着时用鼠标点这几个字也调用 `show_stats`，Tab 键从开关走到它、按空格同样调用，焦点框只在用键盘走到时画（`test_switch_and_stats_go_to_host`）；繁体界面的写法（`test_hant_wording`）
+- **检证对象**：`advisor/ui/settings/dialog.py`（`SettingsDialog`、`ITEMS`、`SettingsValues`、`hotkey_texts`、`manual_desc`、`shown_items`、`set_values`、`fit_size`、`platform_choices`、`fit_platform_combo`、`_set_platform`、`ask_dual`、`_platform_changed`）、`advisor/ui/settings/dual_prompt.py`（`DualPromptDialog`）、`advisor/ui/settings/layouts.py`、`advisor/ui/settings/widgets.py`、`advisor/ui/glyphs.py`；`advisor/ui/overlay_parts/wording.py` 的界面文字常量；`advisor/ui/overlay.py` 的 `set_manual`／`set_lowend`／`set_platform`／`show_about`／`export_diagnostics`、卡片折叠；`advisor/ui/overlay_parts/factory.py` 的 `IconTextButton`；`advisor/ui/theme/`；`advisor/vision/capture.py` 的 `PLATFORM_NAMES`、`BOTH`、`BOTH_NAME`
+- **什么时候要跑**：改了 `advisor/ui/settings/` 下的项表、排法、文字、控件，改了 `advisor/ui/overlay_parts/wording.py` 里这些界面文字，改了悬浮窗的标题栏／底栏／卡片按钮，改了角色下拉框、游戏平台下拉框的宽度、皮肤的悬浮窗宽度（`WIDTH`）或下拉框、按钮的内边距，或资料里加了角色，都要跑
 - **怎么单独跑**：`python -B tools/run_tests.py --only test_settings_window`（上次约 2.4 秒）
 - **需要什么**：离屏平台，不弹窗；设置文件、方案文件写在测试沙箱里；`test_icons` 与涉及系统图标字体的断言在系统没有图标字体时跳过
 - **输出怎么看**：窗口和方案文件的临时文件夹在测试沙箱里；出错（错误记录）会被 `capture_errors` 接住并在结束时核对为空；其余同总则
@@ -83,9 +94,12 @@
   - `LayoutTest.test_icons`／`test_without_icon_font` 失败 → 行图标或「没有图标字体时只写字」改坏（`advisor/ui/glyphs.py`、`advisor/ui/settings/`）
   - `ModeTest` 失败 → 识别模式切换、存盘、提示文字、或手动模式说明按热键写改坏（`advisor/ui/overlay.py` 的 `set_manual`、`advisor/ui/settings/dialog.py` 的 `manual_desc`）
   - `HotkeyRowTest` 失败 → 键帽／说明的各种状态改坏（`advisor/ui/settings/dialog.py` 的 `hotkey_texts`）
+  - `PlatformTest` 失败 → 下拉框的四项、第一项的字、宽度，或「选了」的回调改坏（`advisor/ui/settings/dialog.py` 的 `platform_choices`／`_set_platform`／`ask_dual`、`advisor/ui/settings/dual_prompt.py`、`layouts.py`、`advisor/ui/skins/` 的 `QComboBox` 样式）
   - `OpaqueTest` 失败 → 开关的即时改底色、存盘或取值判断改坏（`advisor/ui/overlay.py`、`advisor/ui/settings/dialog.py`）
   - `NewUserTest` 失败 → 新用户卡片折叠或「全部展开」的行为改坏（`advisor/ui/overlay_parts/wording.py` 的 `NEW_USER_COLLAPSED`、`advisor/ui/overlay.py`）
-  - `SchemeButtonsTest` 失败 → 两个图标按钮或角色下拉框宽度改坏（`advisor/ui/overlay_parts/factory.py`、`advisor/ui/overlay.py`）
+  - `SchemeButtonsTest` 失败 → 三个图标按钮或角色下拉框宽度改坏（`advisor/ui/overlay_parts/factory.py` 的 `IconTextButton.same_width`、`advisor/ui/overlay.py`）
+  - `SchemeButtonsTest.test_longest_hero_name` 只在某套皮肤下失败 → 那套皮肤的悬浮窗宽度、下拉框或按钮的内边距、字号改了，或资料里来了更长的角色名：加宽那套皮肤的 `WIDTH`（`advisor/ui/skins/`；默认皮肤在 `advisor/ui/theme/looks.py`）
+  - `PrivacyTest` 失败 → 「我的统计」几个字的画法、位置或接线改坏（`advisor/ui/settings/widgets.py` 的 `TextLink`、`layouts.py` 各排法里的 `_link`／`_add_desc`、`dialog.py` 里 `SettingItem` 的 `link`／`link_action` 和 `_build_page` 里接到悬浮窗的一段），或某套皮肤的链接颜色、说明的字体改了
   - 有意改了这些界面文字时，`WordingTest` 的逐字预期要跟着改
 
 ## test_settings_package.py：设置窗口包的导入面
@@ -112,7 +126,7 @@
 
 - **测试观点**
   - `RulesTest`：`rules.toml` 写明的倍数和代码里的默认值一致
-  - `PaceTest`：识别流程的节奏按构造时的原值乘、不累乘，已记下的时刻和沿用的结论不动，改回 1 倍时逐位是原值；三选一补认、再读左上角之前等多久（`[watch]` 的 `select_reread_ms`、`hud_retry_ms`）也跟着乘倍数
+  - `PaceTest`：识别流程的节奏按构造时的原值乘、不累乘，已记下的时刻和沿用的结论不动，改回 1 倍时逐位是原值；三选一补认、再读左上角之前等多久（`[watch]` 的 `select_reread_ms`、`hud_retry_ms`），轮次被挡住时多久看一眼、多久完整读一次（`occluded_recheck_ms`、`occluded_full_ms`），连标记都没看见时多久完整读一次（`blank_full_ms`），任务栏没开时多久连带读一次整块（`map_block_ms`），不在对局里时多久看一眼下方区域（`select_ms`），对局中刚看见过轮次标记多久以内先不判选角界面（`pick_grace_ms`）也跟着乘倍数；`round_retry_gap_ms` 不乘（它是「多久算最近」，不是读的间隔）
   - `WatcherPaceTest`：识别线程在两帧之间换节奏和文字识别线程数，开关变了才换，下载完图片重建识别流程时照开关重新套上；三选一显示着时和出错后的等待不变
   - `OcrThreadsFunctionTest`／`OcrThreadsTest`：文字识别按低配的线程数建、缓存的引擎线程数不同时丢掉重建、正在识别的那一帧照旧、核心少算下来一样时不重建、开关没开过时不碰
   - `SettingsTest`：`UiSettings.lowend` 默认关、旧文件缺这项按关、读到非布尔值按关
@@ -120,7 +134,7 @@
   - `MainTest`：`main()` 在识别线程开始前按设置套上、接好信号，启动时先声明高性能再建界面；`build()` 不声明
   - `OpenExternalTest`：`winapi.open_folder` 按普通优先级另起资源管理器、只认已有文件夹、起不了时退回并只记一次错误
   - `ListenerStartTest`：等「显示」请求的线程在开始等之前调一次 `on_start`，出错只记错误照样等
-- **检证对象**：`advisor/vision/pipeline.py` 的 `FrameProcessor.set_pace`（含三选一补认与再读的等待 `reread_s`、`retry_s`）；`advisor/ui/overlay_parts/watcher.py` 的 `Watcher.set_lowend`、`LOWEND_FACTOR`、`NO_FRAME_WAIT_MS`、`NO_FRAME_RETRIES`；`advisor/vision/chip_select.py` 的 `ocr_threads`、`use_lowend_threads`、`LOWEND_OCR_THREADS`、`_engine`；`data/` 里 `rules.toml` 的 `[watch]`（含 `select_reread_ms`、`hud_retry_ms`）；`advisor/ui/overlay_parts/app.py` 的 `UiSettings.lowend`、`build`、`main`、`declare_high_performance`；`advisor/ui/overlay.py` 的 `set_lowend`；`advisor/ui/winapi.py` 的 `open_folder`；`advisor/ui/single_instance.py` 的 `listen`
+- **检证对象**：`advisor/vision/pipeline.py` 的 `FrameProcessor.set_pace`（含三选一补认与再读的等待 `reread_s`、`retry_s`，轮次被挡住时的 `occluded_s`、`occluded_full_s`，连标记都没看见时的 `blank_full_s`，少读整块的 `block_s`）；`advisor/ui/overlay_parts/watcher.py` 的 `Watcher.set_lowend`、`LOWEND_FACTOR`、`NO_FRAME_WAIT_MS`、`NO_FRAME_RETRIES`；`advisor/vision/chip_select.py` 的 `ocr_threads`、`use_lowend_threads`、`LOWEND_OCR_THREADS`、`_engine`；`data/` 里 `rules.toml` 的 `[watch]`（含 `select_reread_ms`、`hud_retry_ms`、`occluded_recheck_ms`、`occluded_full_ms`、`blank_full_ms`、`round_retry_gap_ms`、`map_block_ms`）；`advisor/ui/overlay_parts/app.py` 的 `UiSettings.lowend`、`build`、`main`、`declare_high_performance`；`advisor/ui/overlay.py` 的 `set_lowend`；`advisor/ui/winapi.py` 的 `open_folder`；`advisor/ui/single_instance.py` 的 `listen`
 - **什么时候要跑**：改了低配模式的节奏倍数、文字识别线程数、识别线程的换挡逻辑、`main()` 的启动顺序与高性能声明、`open_folder`、或等「显示」请求线程的启动回调，都要跑
 - **怎么单独跑**：`python -B tools/run_tests.py --only test_lowend`（上次约 2.6 秒）
 - **需要什么**：离屏平台、不开窗口；识别线程真的起一个，但取帧对象和识别流程都是假的、不截屏；文字识别引擎换成假的；起进程的调用换成假的
@@ -136,17 +150,20 @@
   - `OpenExternalTest` 失败 → `open_folder` 的优先级、命令行、只认文件夹或退回处理改坏（`advisor/ui/winapi.py`）
   - `ListenerStartTest` 失败 → 等「显示」请求线程没在开始等之前调 `on_start`（`advisor/ui/single_instance.py`）
 
-## test_lowend_settings.py：设置窗口里的「低配模式」开关
+## test_lowend_settings.py：设置窗口里的「低配模式」开关和它下面的「只用大核」开关
 
 - **测试观点**
-  - `ItemTest`：低配模式紧接「识别画面」后面、是「识别」一组的最后一项，是开关、改了调用悬浮窗的 `set_lowend`、默认关；行图标是叶子、两种图标字体里都有这个字、和别的行图标不重；各排法表里都有这一项
+  - `ItemTest`：低配模式紧接「识别画面」后面，是开关、改了调用悬浮窗的 `set_lowend`、默认关；行图标（叶子、速度表）两种图标字体里都有、和别的行图标不重；各排法表里都有这一项，「只用大核」在它下面
+  - `BigCoresItemTest`：「只用大核」的位置、类型、动作、默认关、没比过，标题、说明两行和悬停说明的字样；说明的三种写法（`big_cores_desc`：关着、在小核上；关着、没比过或不到分界；开着一律写只在大核上；处理器名称读得到、读不到）；出不出现（`big_cores_shown`：开着一律有，关着时比出来不到分界没有，正好到分界算在小核上）；只有大小核的电脑才显示（`sysinfo.has_big_cores`，测试沙箱默认按没有算，处理器名称默认按读不到算，窗口的内容不因跑测试的电脑不同）
+  - `BigCoresLayoutTest`：按有大小核的电脑建窗口：七套皮肤都有这一行，那行长标签不截掉，在低配模式下面；说明写处理器名称、第二行跟着 `set_values` 换（只换字不重建），没有这一行时不读处理器名称；比出来已经在大核上时七套都没有这一行、分页的三套不加高，开着时照旧有；该不该有变了时窗口关着就重排、留在原来那一页，开着时不重排；按项名配色的三套配了颜色；换皮肤后开关状态照旧；分页的三套窗口加高 `BIG_CORES_EXTRA`，处理器名称很长、第二行写在小核上时「识别」页在各种截取状态下都放得下，屏幕矮时滚得到；没有大小核时没有这一行
+  - `BigCoresSwitchTest`：真走 `Overlay.set_big_cores`（只换掉 `sysinfo.use_big_cores`）：开、关、存盘；设不上时不存开着、开关回到关；关的时候放不开也存关；重启后显示开着、诊断包里写着；第二张转给第一张；设置窗口拿到的收益照这台电脑的自检记录（换了电脑、没比过时没有，第二张照第一张的）；点开关以后说明第二行马上换；比出来已经在大核上时打开就没有这一项，开着时有、在窗口里关掉以后这一项留着，关了窗口再打开才没有
   - `SkinLayoutTest`：七套皮肤的设置窗口里都有这一行，截取屏幕时位置在「识别画面」下面；按项名配色的皮肤给它配了颜色，不和挨着的项撞色；换皮肤重建窗口后开关状态照旧
   - `SwitchTest`：点开关调用悬浮窗的 `set_lowend`、存盘、告诉识别线程、显示一致；悬浮窗那边改了窗口即时更新；`set_values` 改开关状态，和不透明开关互不相干
   - `TipTest`：开关的悬停说明分条、分行，写的秒数照 `rules.toml [watch]`、核心数照文字识别的线程数
-  - `PagedFitTest`：分页的三套窗口高度写死，「识别」页在各种截取状态下都放得下，屏幕矮时在窗口内滚动
-  - `ManualImageTest`：使用说明的截图给每一行标了编号，`docs/使用说明.md` 的图注照同样的先后
-- **检证对象**：`advisor/ui/settings/dialog.py` 的 `ITEMS`、`SettingsDialog`、`LOWEND_TITLE`／`LOWEND_DESC`／`LOWEND_TIP`、`SettingsValues`；`advisor/ui/settings/layouts.py` 的各排法表；`advisor/ui/theme/` 的皮肤配色；`advisor/ui/glyphs.py` 的 `ICON_LOWEND`；`advisor/ui/overlay.py` 的 `set_lowend`；`tools/make_manual_images.py` 与 `docs/使用说明.md`
-- **什么时候要跑**：改了设置窗口的项表、各皮肤排法或配色、低配模式那一行的文字与说明、设置窗口的高度与滚动，或改了使用说明的截图脚本／图注，都要跑
+  - `PagedFitTest`：分页的三套窗口高度写死，「识别」页在各种截取状态下都放得下，「外观」「关于」两页也不出滚动条，屏幕矮时在窗口内滚动
+  - `ManualImageTest`：使用说明的截图给每一行标了编号（开关说明下面带能点的字的，那几个字另标一个，例如「隐私与数据」一组的「我的统计」），`docs/使用说明.md` 的图注照同样的先后
+- **检证对象**：`advisor/ui/settings/dialog.py` 的 `ITEMS`、`shown_items`、`SettingsDialog`、`LOWEND_TITLE`／`LOWEND_DESC`／`LOWEND_TIP`、`BIG_CORES_TITLE`／`BIG_CORES_CPU`／`BIG_CORES_CPU_UNKNOWN`／`BIG_CORES_ON`／`BIG_CORES_SMALL`／`BIG_CORES_EFFECT`／`BIG_CORES_TIP`、`big_cores_desc`、`big_cores_shown`、`SettingsValues`；`advisor/ui/settings/layouts.py` 的各排法表；`advisor/ui/theme/` 的皮肤配色和 `SettingsLook.BIG_CORES_EXTRA`；`advisor/ui/glyphs.py` 的 `ICON_LOWEND`、`ICON_BIG_CORES`；`advisor/ui/overlay.py` 的 `set_lowend`、`set_big_cores`、`settings_values`；`advisor/ui/overlay_parts/ocr_check.py` 的 `recorded_gain`；`advisor/sysinfo.py` 的 `has_big_cores`、`cpu_label`、`on_small_cores`；`tools/make_manual_images.py` 与 `docs/使用说明.md`
+- **什么时候要跑**：改了设置窗口的项表、各皮肤排法或配色、低配模式和只用大核那两行的文字与说明、设置窗口的高度与滚动，或改了使用说明的截图脚本／图注，都要跑
 - **怎么单独跑**：`python -B tools/run_tests.py --only test_lowend_settings`（上次约 5.0 秒）
 - **需要什么**：离屏平台，不弹窗；设置文件写在测试沙箱里；系统没有图标字体时 `ItemTest.test_icon` 跳过
 - **输出怎么看**：运行期间换一张空的换皮肤通知名单（别的测试模块建的窗口不陪着重画），跑完换回默认皮肤；其余同总则
@@ -156,7 +173,7 @@
   - `SkinLayoutTest` 失败 → 某套皮肤没有这一行，或按项名的配色和邻居撞色（`advisor/ui/theme/`、`advisor/ui/settings/`）
   - `SwitchTest` 失败 → 开关没调对 `set_lowend`、或和不透明开关互相影响（`advisor/ui/settings/dialog.py`、`advisor/ui/overlay.py`）
   - `TipTest.test_tip_numbers` 失败 → 说明里写的秒数／核心数和设置不一致（`advisor/ui/settings/dialog.py` 的 `LOWEND_TIP`、`advisor/vision/chip_select.py`）
-  - `PagedFitTest` 失败 → 分页皮肤的「识别」页放不下，或屏幕矮时不滚动（`advisor/ui/settings/dialog.py`、`layouts.py`）
+  - `PagedFitTest` 失败 → 分页皮肤的某一页放不下（多半是加了一行、窗口高度没跟着加：皮肤的 `settings` 里的 `HEIGHT`），或屏幕矮时不滚动（`advisor/ui/settings/dialog.py`、`layouts.py`）
   - `ManualImageTest` 失败 → 使用说明的截图编号或图注没跟着项表改（`tools/make_manual_images.py`、`docs/使用说明.md`）
 
 ## test_storage.py：测设置和筹码方案、下载的识别图片存在哪里——开发版在程序目录、发行版在个人目录，写不进时退回程序目录，以及诊断包里的「设置目录」和识别图片的位置
@@ -257,21 +274,22 @@
 ## test_exit_flow.py：悬浮窗退出时把这些东西停干净
 
 - **测试观点**
-  - `MainShutdownTest.test_main_calls_shutdown_and_closes_recorder`：`main()` 退出时先调悬浮窗的 `shutdown()`（停识别线程、下载），再关识别记录
+  - `MainShutdownTest.test_main_calls_shutdown_and_closes_recorder`：`main()` 退出时先调两张一起的收尾（`Lanes.shutdown`：停识别线程、下载、两张共用期限），再存第二张的设置、再存第一张，最后关两份识别记录
   - `MainShutdownTest.test_stuck_watcher_ends_process_after_recorder_closed`：识别线程没停下时，关好识别记录以后直接结束进程（退出码照旧）
   - `MainShutdownTest.test_nonzero_code_is_not_startup_failure`／`test_startup_exit_code_still_reported`：事件循环带着非 0 退出码结束时不按启动失败弹窗，启动时就退出的照旧弹窗
   - `MainShutdownTest.test_exit_step_error_logged`：收尾的某一步出错时记进错误记录，后面几步照做、照常退出
+  - `MainShutdownTest.test_usage_timer`：`main()` 先记一次占用的基准，再在第一张悬浮窗上起每分钟一次的粗定时器；到点时记下识别活动、手动模式、暂停状态，取不到时占用照记
   - `ExitSubprocessTest.test_main_exits_cleanly_in_subprocess`：子进程里真的走一遍 `main()`，显示后马上退出，退出码 0、没出错、三样收尾都做了
   - `ExitSubprocessTest.test_stuck_watcher_exits_normally`：识别线程卡在很慢的调用里时，等满上限照常结束，错误记录写明没停下、当时停在哪里
   - `ExitSubprocessTest.test_terminate_process_passes_code`：`terminate_process` 的退出码照传，不跑收尾，调用之后的代码不再执行
-- **检证对象**：`advisor/ui/overlay_parts/app.py` 的 `main`、`_save_on_exit`、`terminate_process`；`advisor/ui/overlay.py` 的 `Overlay.shutdown`；`advisor/ui/single_instance.py` 的 `listen`／`Listener.stop`；`advisor/gamelog.py` 的 `GameRecorder.close`
+- **检证对象**：`advisor/ui/overlay_parts/app.py` 的 `main`、`_save_on_exit`、`terminate_process`；`advisor/ui/overlay_parts/lanes.py` 的 `Lanes.shutdown`、`save_secondary`、`close_recorders`；`advisor/ui/overlay.py` 的 `Overlay.shutdown`；`advisor/ui/single_instance.py` 的 `listen`／`Listener.stop`；`advisor/gamelog.py` 的 `GameRecorder.close`
 - **什么时候要跑**：改了悬浮窗退出的顺序、识别线程／下载／识别记录的收尾、退出码的处理，或 `terminate_process`，都要跑
 - **怎么单独跑**：`python -B tools/run_tests.py --only test_exit_flow`（上次约 6.4 秒）
 - **需要什么**：进程内的几条把界面、识别、热键、等待线程全换成假的；子进程的几条要能起 Python 子进程，离屏真的建出悬浮窗，把截屏、找窗口、改窗口层次、全局热键、托盘、下载、试写程序文件夹、设置和识别记录的文件都换成假的或指到临时文件夹
 - **输出怎么看**：子进程断言失败时会把它的标准输出／标准错误原样打出来；子进程每做一样收尾就写一行到临时文件夹的 `calls.txt`，找不到这个文件说明收尾没做到；其余同总则
 - **出错时一般是哪里不对**
-  - `test_main_calls_shutdown_and_closes_recorder` 失败 → 退出顺序改了，或少了 `shutdown()`／关识别记录（`advisor/ui/overlay_parts/app.py` 的 `main`、`advisor/ui/overlay.py` 的 `shutdown`）
-  - `test_stuck_watcher_ends_process_after_recorder_closed` 失败 → 识别线程没停下时没先关识别记录就结束进程（同上）
+  - `test_main_calls_shutdown_and_closes_recorder` 失败 → 退出顺序改了，或少了 `Lanes.shutdown()`／存第二张／关识别记录（`advisor/ui/overlay_parts/app.py` 的 `main`、`advisor/ui/overlay_parts/lanes.py` 的 `shutdown`、`save_secondary`、`close_recorders`）
+  - `test_stuck_watcher_ends_process_after_recorder_closed` 失败 → 识别线程没停下时没先关识别记录就结束进程，或两张共用的期限、第二张先收改坏（`app.py` 的 `main`、`lanes.py` 的 `shutdown`）
   - `test_nonzero_code_is_not_startup_failure`／`test_startup_exit_code_still_reported` 失败 → 把普通退出当成了启动失败、或反过来（`advisor/ui/__init__.py` 的 `run`、`app.py` 的 `main`）
   - `test_exit_step_error_logged` 失败 → 收尾某一步出错时没记错误记录、或后续步骤没做（`app.py` 的 `main`）
   - `test_main_exits_cleanly_in_subprocess` 失败 → 子进程里退出码不是 0、有没接住的错误、或三样收尾没做全（`app.py` 的 `main`、`overlay.py` 的 `shutdown`）
@@ -379,4 +397,64 @@
   - `CountTest` 失败 → `count` 的兜底逻辑改了；接口层（下载结果等）换了返回类型时，改的是 `count`。
   - `SectionsTest.test_real_about_sections_unchanged` 失败 → `version.about_sections` 返回了不是 `(标题, 正文)` 的东西。
   - `test_accepted_shapes`、`test_odd_shapes` 失败 → `sections` 对缺字段、类型不对的处理改了。
-  - 注意：`str.title` 是方法而不是标题，`sections` 判断「一项是不是带标题的对象」时用的是「`title` 不是可调用的」，改这里别把「一整段文字」误当成带标题的对象。
+
+## test_dual_check.py：两个客户端同时识别前的性能测试（分档、缺窗口、测的过程、低配）
+
+- **测试观点**
+  - `LevelTest`：五档的每条边界——两样数（`SLOW_LINE_S` 与 `BUSY_SHARE_LINE`，`BUSY_LINE` 定整机怎样算被压满）各试正好在线上、刚过线，两样里取大的那个，一次都没量到时只看处理器；`CheckResult.level` 按最慢的一次和整机忙的时间算。
+  - `MissingTest`：`missing()` 按端查游戏窗口，两个都开着为空，缺一个、缺两个、最小化时各返回哪些端。
+  - `RunTest`：正常测完的秒数、进度回调、三选一延迟样本、整机被压满的比例和本进程占用的算法；整机占用正好等于 `BUSY_LINE` 不算被压满；取消、窗口中途关了（`GONE_REASON`）、出例外（按没测完返回、记 `ERROR_TITLE`）都按停下返回；两路错开各量各的、取帧对象都关；每路在自己的线程里做直接截取的线程收尾；识别流程停在主菜单也照常认字（`FrameProcessor.menu_idle` 关掉，量的是不空转时的负担）。
+  - `LowendTest`：低配时取帧节奏乘 `lowend_factor`、文字识别按低配线程数测、测完换回测之前的样子（不一律换成关）、不是低配时不碰线程数、延迟样本的间隔也乘倍数。
+  - `LatencyTest`：一次延迟量的是从开始读字到算完推荐。
+- **检证对象**：`advisor/ui/dual_check.py` 的 `DualCheck`（`missing`、`run`、`_run`、`_worker`、`_pace`、`_latency`）、`level_of`、`CheckResult`、`SLOW_LINE_S`、`BUSY_LINE`、`BUSY_SHARE_LINE`、`LEVEL_LINES`、`GONE_REASON`、`ERROR_REASON`、`ERROR_TITLE`、`_Shared`、`_Cpu`、`_ticks_of`；`advisor/vision/chip_select.py` 的 `use_lowend_threads`、`_ocr_lines`；`advisor/vision/capture.py` 的 `WindowGone`、`PLATFORM_NAMES`。
+- **什么时候要跑**：改了性能测试的基准值或分档的倍数、取帧节奏、量延迟的方式、缺窗口的判断、低配时的线程数处理，或设置窗口里启动测试的接口，都要跑。
+- **怎么单独跑**：`python -B tools/run_tests.py --only test_dual_check`（上次没有记录）。
+- **需要什么**：时钟、等的函数、找窗口、取帧、识别流程、读字和算推荐都换成假的，不真截图、不真识别；几秒内跑完。
+- **输出怎么看**：同总则（没有特别的跳过原因或临时文件）。
+- **出错时一般是哪里不对**
+  - `LevelTest` 失败 → 基准值或 `LEVEL_LINES` 的倍数改坏（`dual_check.py` 的 `level_of` 和几个常量）；有意改线时同步改断言。
+  - `MissingTest` 失败 → 缺窗口的判断改坏（`DualCheck.missing`），或最小化的窗口没算缺。
+  - `RunTest` 失败 → 进度、秒数、处理器占用的算法、取消/窗口关了/出错的返回改坏（`DualCheck._run`、`_Cpu`）；`test_capture_thread_cleanup` 失败 → 每路没关取帧对象或没配对 `window_capture.uninit_thread`。
+  - `LowendTest` 失败 → 取帧节奏、`set_pace`、换回线程数的时机改坏（`DualCheck._pace`、`_worker`）；`test_threads_restored_to_before` 失败 → 测完一律换成关，没换回测之前的样子。
+  - `LatencyTest` 失败 → 量延迟时漏了读字或算推荐的一步（`DualCheck._latency`）。
+
+## test_dual_prompt.py：「Steam端+TapTap端」的性能测试对话框
+
+- **测试观点**
+  - `FlowTest`：警告那一步的标题、文字、按钮先后和默认按钮；缺一个、缺两个端时的两句（缺一个时点名是哪个端）、不开始测；打开游戏后再点「开始性能测试」重新问一次；测试中只剩「取消」、还剩几秒（向上取整、带浮点误差时不多一秒）、进度条；取消后不再更新；中途停下写出原因、可以重测；五档的取值和 `dual_check` 的相同。
+  - `ResultTest`：五档的标题和说明；余裕、正常时直接开启（`set_platform(capture.BOTH)`）、只有「好」；危险默认「无视风险，继续开启」，临界、过载默认「打开低配模式再测」；已经开着低配时按钮换成「再测一次」；一次都没量到时写「没有量到」；「无视风险，继续开启」才开启；低配重测、取消时把这次打开的低配模式关回去、原来就开着的不动、直接开启后关窗口不关回去。
+  - `NarrowLayoutTest`：七套皮肤 × 每一步（警告；缺两个端、缺一个端；测试中；已停止；结果五档，危险、临界、过载另在已经开着低配模式时各走一遍，按钮字是「再测一次」），对话框先显示出来再一步步点进去。核对宽度不小于 `MIN_WIDTH`（标题页签和左上角「返回」并排的皮肤另有下限，见 `_min_width`）；按钮一行排得下时宽度正好是最窄宽度，排不下时只多到刚好排得下（差不超过 2 像素）；任何一步都比原来的 600 窄。每个按钮的宽、高不小于 `sizeHint()`，整个在对话框里面；看得见的标签高不小于这个宽度下需要的高度（换行的按 `heightForWidth`）。警告、缺游戏窗口、测试中三步不显示卡片里的标题，结果、已停止两步显示着、字对。默认皮肤里按钮一行排得下的几步宽度就是 `MIN_WIDTH`。按钮行上沿和它上面最后一个看得见的部件之间不超过卡片的行距加 4 像素（`MAX_BUTTON_GAP`），高度按这个宽度下实际要的算，不被换行标签的 `sizeHint()` 撑高。从宽的一步（三个按钮）点「打开低配模式再测」回到测试中时宽度缩回来；换皮肤后按新皮肤重算；经典主题-白的「返回」和标题页签不互相压住。
+  - `SkinTest`：七套皮肤里都建得起来、按钮放得下、文字不被截掉，默认按钮的字看得见，进度条走过和没走到的看得出分别；五档的档名都有颜色、互相分得清、在对话框的底色上看得清，标题里只有档名那一段带颜色、说明那一行不变色；换皮肤时停在原来那一步。
+  - `ShownLayoutTest`：对话框先显示出来、再由用户点着换步（真实的先后），换步以后不手动调 `fit_size`：测试中、缺游戏窗口、已停止、结果（余裕、危险）每一步的按钮高不小于 `sizeHint().height()`，标题、「还剩几秒」、说明这些看得见的标签高不小于 `sizeHint().height()`（换行的按 `heightForWidth`）；七套皮肤都核。`_add_button` 里加完按钮不先 `show()` 时这一组会失败（量高度那一刻布局还没把按钮那一行算进去）。
+- **检证对象**：`advisor/ui/settings/dual_prompt.py` 的 `DualPromptDialog`、`PROMPT_TITLE`、`WARNING`、`START`、`CANCEL`、`OK`、`IGNORE`、`LOWEND_RETEST`、`RETEST`、`MISSING_ALL`、`MISSING_ONE`、`TESTING`、`REMAIN`、`RESULT_TITLE`、`LEVEL_MEANING`、`SLOWEST`、`NO_SLOWEST`、`BUSY`、`OWN`、`APPLIED`、`STOPPED_TITLE`、`STOPPED_FALLBACK`、`missing_text`、`remain_seconds`、`result_texts`、`DIRECT_OPEN`、`IGNORE_DEFAULT`、`RETEST_DEFAULT`、`level_color`、`_TitleLabel`、`MIN_WIDTH`、`HEADER_GAP`、`_min_width`、`fit_size`；`advisor/ui/dual_check.py` 的 `CheckResult`、`EASY`、`NORMAL`、`DANGER`、`CRITICAL`、`OVERLOAD`；`advisor/ui/settings/dialog.py` 的 `ask_dual`。
+- **什么时候要跑**：改了对话框的流程、文字、按钮和默认按钮、缺窗口的判断、结果的五档写法、低配重测的回滚、窗口宽度和外框边距的算法、皮肤的排法，或 `dual_check` 的分档取值，都要跑。
+- **怎么单独跑**：`python -B tools/run_tests.py --only test_dual_prompt`（上次没有记录）。
+- **需要什么**：Qt 离屏平台，不弹窗；悬浮窗用假的（记下调用），测试过程由测试直接调用 `progress`、`done` 回调；换皮肤的通知名单在结束时换回。
+- **输出怎么看**：同总则（没有特别的跳过原因或临时文件）。
+- **出错时一般是哪里不对**
+  - `FlowTest` 失败 → 警告、缺窗口、测试中、停下那几步的文字或按钮先后改坏（`dual_prompt.py` 的 `_render`、`_start`、`missing_text`、`remain_seconds`）；`test_level_values_match_check` 失败 → 五档的取值和 `dual_check` 对不上。
+  - `ResultTest` 失败 → 五档的意思、数字、按钮和默认按钮，或开启/重测/取消时的低配回滚改坏（`_render`、`_done`、`_retest`、`_ignore`、`reject`）。
+  - `ShownLayoutTest` 失败 → 换步时新加的按钮没有在量高度之前显示出来，布局没把它算进这一列，窗口定死的高度不够（`_add_button` 的 `button.show()`）；或者 `fit_size` 量高度的步骤改坏了。
+  - `NarrowLayoutTest` 失败 → 宽度的算法改坏（`fit_size`、`_min_width`）：按钮一行排不下时没加宽、加宽过头、换步或换皮肤后没重算；或者 `_render` 里警告、缺游戏窗口、测试中三步的 `title_label` 没藏起来，结果、已停止两步没显示；按钮上面空出一大块 → 高度取回了换行标签的 `sizeHint()`（`check_gap`）。
+  - `SkinTest` 失败 → 某套皮肤里按钮放不下、字和底色分不清、进度条看不出分别，或换皮肤时没停在原来那一步（`_build_page`、`apply_skin`、`PRIMARY_NAME`、`DEFAULT_BUTTON_SHEET`）。
+  - 有意改了这些文字时，本文件顶部的常量和断言要一起改。
+
+## test_lane_settings.py：第二张悬浮窗的设置和设置文件的 `lanes`
+
+- **测试观点**
+  - `LanesFieldTest`：`UiSettings.lanes` 认得的端和四项照原样存读；整个不是字典、端不认得、端里不是字典、键不认得、某一项类型不对时丢掉那一项、不记警告；两个端同时存着都保留。
+  - `BuildTest`：`lane_settings` 建出来的第二份——界面偏好同共用那份；四项取 `lanes[端]`，相对位置（`window_rel`）只认自己的、没有时为 None（`lanes[端]` 里存着 null 时也一样、不记警告），其余三项没有的取顶层；本局状态从默认值开始；两个设置对象的四项、本局状态互不相干。
+  - `SaveTest`：`LaneSettings.save` 只把四项写进共用那份的 `lanes[端]`，文件顶层的四项还是第一张的，界面偏好没被改，本局状态不写；另一个端的那一份保留。
+  - `SyncTest`：`sync_from_shared` 抄共用那份的界面偏好，不动自己的四项和本局状态。
+  - `SessionTest`：用 `Session(db, lane, path)` 改角色、存盘，写进 `lanes[端]`；本局状态不写进文件。
+- **检证对象**：`advisor/ui/overlay_parts/lane_settings.py` 的 `LaneSettings`、`lane_settings`、`LANE_FIELDS`；`advisor/ui/overlay_parts/app.py` 的 `UiSettings.lanes`、`LANE_KEYS`、`LANE_PLATFORMS`、`_clean_lanes`；`advisor/session/` 的 `Session`、`GAME_FIELDS`；`advisor/prefs.py` 的 `Settings.save`。
+- **什么时候要跑**：改了第二张悬浮窗的设置、`lanes` 的读写或清理、`LANE_KEYS`、`LANE_PLATFORMS`，或设置文件的结构，都要跑。
+- **怎么单独跑**：`python -B tools/run_tests.py --only test_lane_settings`（上次没有记录）。
+- **需要什么**：设置文件写在测试沙箱的临时文件夹里；不建悬浮窗。
+- **输出怎么看**：同总则（没有特别的跳过原因或临时文件）。
+- **出错时一般是哪里不对**
+  - `LanesFieldTest` 失败 → `_clean_lanes` 的端名、键名或类型筛选改坏（`app.py` 的 `LANE_KEYS`、`LANE_PLATFORMS`）。
+  - `BuildTest` 失败 → 四项没从 `lanes[端]` 取、没有时没取顶层（相对位置例外：只认自己的，没有时是 None），或本局状态没从默认值开始（`lane_settings.py` 的 `LaneSettings.__init__`）。
+  - `SaveTest` 失败 → 存盘时写了本局状态或界面偏好，或覆盖了另一个端的那一份（`LaneSettings.save`）。
+  - `SyncTest` 失败 → 抄的时候动了四项或本局状态（`sync_from_shared`）。
+  - `SessionTest` 失败 → 接线没把 `lanes[端]` 当第二张的存盘位置，或本局状态被写进文件。

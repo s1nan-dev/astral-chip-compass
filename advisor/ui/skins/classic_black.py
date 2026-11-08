@@ -58,8 +58,12 @@ def _classic_black() -> Skin:
         f"QPushButton#iconText {{ border-radius: 12px; border-bottom: 4px solid {p['blue_dark']}; }}\n"
         f"QPushButton#iconText[tool=\"share\"] {{ background: {p['pink']}; border-bottom-color: {p['pink_dark']}; }}\n"
         f"QPushButton#iconText[tool=\"share\"]:hover {{ background: #ff5fad; }}\n"
+        f"QPushButton#iconText[tool=\"hub\"] {{ background: {p['indigo1']}; border-bottom-color: {p['indigo2']}; }}\n"
+        f"QPushButton#iconText[tool=\"hub\"]:hover {{ background: #4536b8; }}\n"
         f"QPushButton#remove {{ border-bottom-width: 2px; border-radius: 7px; }}\n"
         f"QLabel#title {{ padding: 12px 26px 16px 26px; font-size: 13pt; $TITLE_FONT }}\n"
+        f"QLabel#laneTag {{ background: {p['pink']}; color: {p['white']}; border: 1px solid {p['ink']}; "
+        f"border-radius: 6px; padding: 0px 8px; font-weight: bold; }}\n"
         f"QLabel#cardTitle {{ padding: 1px 4px 2px 30px; font-size: 11pt; $TITLE_FONT }}\n"
         f"QWidget#globalArea {{ background: rgba(11,11,14,200); border: 1px solid rgba(255,255,255,40); "
         f"border-radius: 12px; }}\n"
@@ -77,7 +81,7 @@ def _classic_black() -> Skin:
         "plus": (p["ink"], p["lime"], p["ink"]), "minus": (p["ink"], p["yellow"], p["ink"]),
     }
     badge = ("!", p["ink"], p["yellow"])
-    settings_extra = blue_button + _scrollbar("#2a2a31", p["yellow"]) + (
+    settings_extra = blue_button + combo + _scrollbar("#2a2a31", p["yellow"]) + (
         f"QPushButton {{ border-bottom-width: 4px; border-radius: 10px; padding: 4px 16px; min-height: 26px; "
         f"font-size: 11pt; }}\n"
         f"QPushButton#exportButton {{ {yellow} border-width: 3px; border-bottom-width: 5px; border-radius: 12px; "
@@ -121,6 +125,10 @@ def _classic_black() -> Skin:
         f"QPlainTextEdit {{ background: {p['ink']}; color: {p['white']}; border: 1px solid rgba(255,255,255,50); "
         f"border-radius: 10px; padding: 6px 10px; font-weight: bold; }}\n"
         f"QPlainTextEdit#preview {{ color: {p['yellow']}; font-size: 12pt; $NUMBER_FONT }}\n"
+        # 按编号导入的输入框：和粘贴框同一种（高度跟着右边按钮的圆角块）
+        f"QLineEdit {{ background: {p['ink']}; color: {p['white']}; border: 1px solid rgba(255,255,255,50); "
+        f"border-radius: 10px; padding: 0px 10px; font-weight: bold; }}\n"
+        f"QLineEdit:disabled {{ color: {p['dim']}; background: #1c1c22; }}\n"
     )
     editor_extra = blue_button + combo + _scrollbar("#2a2a31", p["yellow"]) + (
         f"QPushButton#small {{ padding: 2px 10px; font-size: 9pt; border-radius: 8px; }}\n"
@@ -167,6 +175,7 @@ def _classic_black() -> Skin:
     return make_skin(
         CLASSIC_BLACK_KEY, CLASSIC_BLACK_LABEL, common=common, fonts=fonts, layouts=layouts,
         overlay=dict(
+            WIDTH=508,  # 比默认的 459 宽：最长的角色名、最长的方案名在「筹码方案」卡片的下拉框里要写得下
             PANEL_MARGINS=(14, 4, 14, 14), PANEL_SPACING=10, HEAD_SPACING=6,
             PANEL_BG="transparent", PANEL_BORDER="transparent", PANEL_RADIUS=20, PANEL_PAUSED_BG="transparent",
             PANEL_PAUSED_BORDER="transparent", PANEL_ATTENTION_BORDER=p["yellow"], PANEL_OPAQUE_BG="transparent",
@@ -191,8 +200,8 @@ def _classic_black() -> Skin:
             TOGGLE_PRESSED_BG="#2a2a31",
             REMOVE_PADDING="0px 6px", REMOVE_RADIUS=7, SCROLL_WIDTH=8, SCROLL_HANDLE=p["yellow"], SCROLL_RADIUS=4,
             SCROLL_HANDLE_MIN=24, CLOSE_PADDING="0px 7px 2px 7px",
-            SCHEME_TOOL_ICON_PX=19, SCHEME_TOOL_COLOR=p["white"], SCHEME_TOOL_DISABLED="#9aa6d6", SCHEME_TOOL_GAP=3,
-            SCHEME_TOOL_PADDING=(10, 6),
+            SCHEME_TOOL_ICON_PX=14, SCHEME_TOOL_COLOR=p["white"], SCHEME_TOOL_DISABLED="#9aa6d6", SCHEME_TOOL_GAP=2,
+            SCHEME_TOOL_PADDING=(10, 4),
             MARK_BEST_COLOR=p["white"], MARK_COLOR=p["white"],
             NAME_BORDER_ALPHA=255, UNREADABLE_BORDER_ALPHA=255, NAME_PADDING="1px 10px", NAME_WEIGHT_BEST=900,
             NAME_WEIGHT=700, PICKED_WEIGHT=700, GRID_DIAMETER=26,
@@ -283,13 +292,16 @@ def _classic_black() -> Skin:
             TONE_BOX={"ok": (p["lime"], p["ink"]), "warn": (p["yellow"], p["ink"])},
         ),
         settings=dict(
-            # 高度：「识别」页含低配模式一行（连同分隔线约 81 像素），说明最长的「Windows 未允许」改为截取屏幕时
-            # 底下还留十几像素，不贴着页底
-            WIDTH=760, HEIGHT=556, SCREEN_MARGIN=0, SHEET_EXTRA=settings_extra,
+            # 高度：「识别」页含游戏平台、低配模式两行（连同分隔线各约 81 像素），说明最长的「Windows 未允许」改为
+            # 截取屏幕时底下还留十几像素，不贴着页底；「只用大核」一行的说明有两行（处理器名称、打开以后的效果），连同
+            # 分隔线约 97 像素
+            WIDTH=760, HEIGHT=637, BIG_CORES_EXTRA=97, SCREEN_MARGIN=0, SHEET_EXTRA=settings_extra,
             TILE_BG=p["tile"], TILE_BORDER="rgba(255,255,255,50)", TILE_HOVER_BORDER="rgba(255,255,255,140)",
             TILE_ON_BG=p["tile_on"], TILE_PEN=1.4, TILE_ON_PEN=3, TILE_RADIUS=14, TILE_MARGINS=(18, 10, 18, 12),
             TILE_SPACING=16, RADIO_SIZE=0, RADIO_GAP=0, TILE_BADGE=(p["yellow"], p["ink"], p["ink"]),
             SELECTED_COLOR=p["white"], SWITCH_ON_FILL=p["lime"],
+            LEVEL_COLOR={"easy": p["lime"], "normal": p["cyan"], "danger": p["yellow"],
+                         "critical": "#ff8c1a", "overload": "#ff4d5e"},
             ICON_BG=p["tile"], ICON_COLOR=p["white"], ICON_BOX=38, ICON_PX=18, ICON_RADIUS=10,
             KEYCAP_BG=p["white"], KEYCAP_BORDER=p["ink"], KEYCAP_EDGE=p["ink"], KEYCAP_RADIUS=8, KEYCAP_EDGE_WIDTH=5,
             CHIP_OK=(p["ink"], p["cyan"], p["ink"]), CHIP_WARN=(p["ink"], p["yellow"], p["ink"]), CHIP_RADIUS=15,

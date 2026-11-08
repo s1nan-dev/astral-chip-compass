@@ -476,7 +476,7 @@ class WindowsTest(Case):
     def test_settings_pages_and_notes(self):
         """设置窗口分「识别」「外观」「关于」三页，点页签切过去，每一项在它那一页上；「关于」页的「说明」里四个按钮，点了打开
         「关于」窗口、停在对应的那一节。"""
-        pages = {st.TAB_RECOG: ("mode", "hotkey", "capture", "lowend"), st.TAB_LOOK: ("skin", "opaque"),
+        pages = {st.TAB_RECOG: ("platform", "mode", "hotkey", "capture", "lowend"), st.TAB_LOOK: ("skin", "opaque"),
                  st.TAB_ABOUT: ("export", "update")}
         for key in SKINS:
             with self.subTest(skin=key):
@@ -486,7 +486,7 @@ class WindowsTest(Case):
                 d = w.dialogs.settings
                 settle()
                 self.assertEqual(d.layout_name(), LAYOUT[key]["SETTINGS"])
-                self.assertEqual(list(d.tabs), [st.TAB_RECOG, st.TAB_LOOK, st.TAB_ABOUT])
+                self.assertEqual(list(d.tabs), [st.TAB_RECOG, st.TAB_LOOK, st.TAB_ABOUT, st.TAB_PRIVACY])
                 stack = d.page.findChild(st.QStackedWidget, "sidePages")
                 for i, (tab, keys) in enumerate(pages.items()):
                     d.tabs[tab].click()
@@ -740,10 +740,10 @@ class HeightTest(Case):
                     self.assertLessEqual(box.height(), 480)
 
     def test_normal_screen_size(self):
-        """正常大小的屏幕：照效果图的大小打开（设置、导入/导出、关于、编辑方案）；两套的设置窗口为「识别」页的低配模式
-        一行加高。"""
-        sizes = {BLACK: dict(settings=(760, 556), share=(920, 600), about=(620, 560), editor=(900, 800)),
-                 INVERSE: dict(settings=(860, 663), share=(620, 804), about=(640, 560), editor=(860, 820))}
+        """正常大小的屏幕：照效果图的大小打开（设置、导入/导出、关于、编辑方案）；两套的设置窗口为「识别」页的游戏平台、
+        低配模式两行加高。"""
+        sizes = {BLACK: dict(settings=(760, 637), share=(920, 600), about=(620, 560), editor=(900, 800)),
+                 INVERSE: dict(settings=(860, 772), share=(620, 840), about=(640, 560), editor=(860, 820))}
         for key in SKINS:
             with self.subTest(skin=key):
                 theme.set_skin(key)

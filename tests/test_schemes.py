@@ -1,4 +1,4 @@
-"""筹码方案的数据结构（四档和顺位、改顺位的操作）、列进方案 / 被锁成不选 / 目标流派三样推导、方案文件的存取、
+"""筹码方案的数据结构（四档和顺位、改顺位的操作、适用地图）、列进方案 / 被锁成不选 / 目标流派三样推导、方案文件的存取、
 两种分享格式（advisor/schemes.py），以及筹码编号表（data/chip_codes.json 和 tools/check_data.py 的编号检查）。
 
 测试用的方案文件都放在程序目录的 .tmp 下的临时文件夹里，不碰程序目录下真实的 schemes.json。
@@ -31,8 +31,8 @@ NOW = datetime(2026, 10, 5, 12, 0, 0)
 
 
 def content(s: S.Scheme, text: bool = True) -> tuple:
-    """分享格式带得过去的内容（四档连同顺位，Tiers 的相等要求每一档的先后也相同）：短字符串不含说明和作者。"""
-    base = (s.hero, s.name, s.tiers)
+    """分享格式带得过去的内容（四档连同顺位，Tiers 的相等要求每一档的先后也相同；地图）：短字符串不含说明和作者。"""
+    base = (s.hero, s.name, s.tiers, s.maps)
     return base + (s.note, s.author) if text else base
 
 
@@ -96,6 +96,19 @@ SHORT_V2 = [
 SHORT_HEAL = SHORT_V2[6][0]  # 治愈坦克（芬妮）
 SHORT_MARK = SHORT_V2[7][0]  # 标记充能（凛）
 
+# 第 3 版的固定样本（带适用地图，以后任何版本都要解出同样的内容）：（短字符串，角色编号，（编号, 档位）按方案的先后，
+# 地图编号）。一张地图、几张地图、编号 9；「九号地图」是「逐个」写法，其余是「列表」写法。
+SHORT_V3 = [
+    ("【一张地图】CA3-y3miY9V4K", 102, ((34, "core"),), (1,)),
+    ("【几张地图】CA3-38C8xznxo6ubbhqpqG", 102,
+     ((40, "core"), (34, "core"), (12, "core"), (38, "first"), (25, "avoid")), (1, 5)),
+    ("【九号地图】CA3-cTFhnioPFSUeArDAV4D1XYv2Dc6i3jyR8L5F3rft3P5bSsE3rZnxkZ9JxiNzGEwcbA5LbDqxT98RXLgUqTo6nKwM"
+     "xGArRM41dvnDrGMXtRPx8gGcsP2Td", 102, ALL_CORE, (9,)),
+    ("【地图多】CA3-2FmuAvak5G4pijvsq6jXe5bS1", 121,
+     ((45, "core"), (44, "core"), (52, "first"), (43, "first"), (47, "second"), (15, "second"), (27, "avoid"),
+      (25, "avoid"), (26, "avoid")), (1, 3, 9)),
+]
+
 # （可读文字，角色，说明，作者，{档位: 按顺位的编号}）
 TEXT_V2 = [
     ("【默认推荐（副本）】筹码方案 v2｜凛｜必选：大背包、魔法箭袋、忍术飞镖｜推荐：标记喷罐｜可选：手持风扇-小、手持风扇-大｜"
@@ -112,6 +125,18 @@ TEXT_V2 = [
     ("【空方案】筹码方案 v2｜照", "照", "", "", {}),
 ]
 TEXT_HEAL = TEXT_V2[2][0]
+
+# 第 3 版可读文字：（文字，角色，地图（按编号排），{档位: 按顺位的编号}）
+TEXT_V3 = [
+    ("【地图甲】筹码方案 v3｜芬妮｜必选：缓冲盾牌｜地图：龙宫游乐园", "芬妮", ("龙宫游乐园",), {"core": (34,)}),
+    ("【地图乙】筹码方案 v3｜芬妮｜必选：缓冲盾牌｜地图：龙宫游乐园、魔法学院", "芬妮",
+     ("龙宫游乐园", "魔法学院"), {"core": (34,)}),
+    ("【地图丙】筹码方案 v3｜芬妮｜必选：缓冲盾牌｜地图：龍宮遊樂園，魔法學院", "芬妮",
+     ("龙宫游乐园", "魔法学院"), {"core": (34,)}),
+    ("【地图丁】筹码方案 v3｜芬妮｜必选：缓冲盾牌｜地图： 龙宫游乐园 , 魔法学院 ｜地图：异变图书馆", "芬妮",
+     ("龙宫游乐园", "魔法学院", "异变图书馆"), {"core": (34,)}),
+    ("【地图戊】筹码方案 v3｜芬妮｜地图：魔法学院", "芬妮", ("魔法学院",), {}),
+]
 
 # 第 1 版的写法（带目标流派、仅限目标流派，不带顺位）：不再认，导入时报无法导入、不抛异常
 OLD_V1 = [
@@ -208,6 +233,44 @@ class CodeTableTest(unittest.TestCase):
                 S.read_codes(path)
         with self.assertLogs("advisor.schemes", level="WARNING"):
             self.assertEqual(S.load_codes(str(tmp / "missing.json")).entries, ())
+
+
+class MapCodeTest(unittest.TestCase):
+    """地图编号（data/maps.json 的 code）：分享方案的短字符串和方案文件靠它代表方案标的地图。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.db = load_db()
+
+    def test_codes_never_change(self):
+        # 编号只增不改：改了的话，以前分享出去的方案会标到别的地图上。运动场没有编号
+        self.assertEqual(S.map_codes(self.db), {
+            "龙宫游乐园": 1, "星趴·梦想号": 2, "园林中庭": 3, "幽魂暗巷": 4, "魔法学院": 5,
+            "御魂庆典": 6, "水乡古镇": 7, "森秋幻境": 8, "异变图书馆": 9})
+
+    def test_taggable_and_normalize(self):
+        # 能标的地图按编号排。标上的地图去重、去掉不认识的和没有编号的，按编号排好：同样几张地图存出来总是同一个写法
+        self.assertEqual(S.taggable_maps(self.db), tuple(S.map_codes(self.db)))
+        self.assertNotIn("海选赛运动场", S.taggable_maps(self.db))
+        self.assertEqual(S.normalize_maps(self.db, ["魔法学院", "龙宫游乐园", "龙宫游乐园", "海选赛运动场", "不存在", None]),
+                         ("龙宫游乐园", "魔法学院"))
+        self.assertEqual(S.normalize_maps(self.db, []), ())
+
+    def test_ended_map_keeps_code(self):
+        # 结束了的地图留着编号（标过它的方案、旧的分享码照样认得出），只是不再列进能标的地图
+        info = dataclasses.replace(self.db.map_info["魔法学院"], ended=True)
+        db = dataclasses.replace(self.db, map_info={**self.db.map_info, "魔法学院": info})
+        self.assertEqual(S.map_codes(db)["魔法学院"], 5)
+        self.assertNotIn("魔法学院", S.taggable_maps(db))
+        self.assertEqual(S.normalize_maps(db, ["魔法学院"]), ("魔法学院",))
+
+    def test_duplicate_code_one_map(self):
+        # 资料里两张地图写了同一个编号（tools/check_data.py 会报）：一个编号仍然只对应一张地图，解码不会有两种结果
+        info = dataclasses.replace(self.db.map_info["园林中庭"], code=5)
+        db = dataclasses.replace(self.db, map_info={**self.db.map_info, "园林中庭": info})
+        codes = S.map_codes(db)
+        self.assertEqual(list(codes.values()).count(5), 1)
+        self.assertEqual(len(codes), 8)
 
 
 # ------------------------------------------------------------ 四档和顺位
@@ -342,10 +405,20 @@ class SchemeTest(unittest.TestCase):
         self.assertTrue(s.note.startswith("第一行 第二行 说"))
         self.assertEqual(len(s.author), S.AUTHOR_MAX)
         self.assertEqual(S.Scheme(hero="芬妮", name=" \n ").name, S.UNNAMED)
+        # 标的地图存成元组：方案不可变，传进来的列表在外面改了，存着的方案不跟着变
+        maps = ["魔法学院"]
+        s = S.Scheme(hero="芬妮", maps=maps)
+        maps.append("园林中庭")
+        self.assertEqual((s.maps, S.Scheme(hero="芬妮").maps), (("魔法学院",), ()))
         self.assertEqual(S.clean_text("<b>粗体</b>&amp;", 20), ("<b>粗体</b>&amp;", False))  # 网页标记原样保留，显示时由界面转义
-        for bad in ({"tiers": {"缓冲盾牌": "必选"}}, {"tiers": {"缓冲盾牌": None}}):
+        # 档位写错、适用地图传成一个字符串（会拆成一个个字）或编号：都报 ValueError，replace 时也一样
+        bads = ({"tiers": {"缓冲盾牌": "必选"}}, {"tiers": {"缓冲盾牌": None}}, {"maps": "魔法学院"}, {"maps": (5,)},
+                {"maps": ("魔法学院", None)})
+        for bad in bads:
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 S.Scheme(hero="芬妮", **bad)
+            with self.subTest(bad=bad, via="replace"), self.assertRaises(ValueError):
+                replace(s, **bad)
 
     def test_equality_and_hash(self):
         a = S.Scheme(hero="芬妮", name="甲", tiers={"缓冲盾牌": "core", "大碗炖肉": "first"})
@@ -368,7 +441,7 @@ class SchemeTest(unittest.TestCase):
                 S.Scheme(hero="芬妮", **old)
         s = S.Scheme(hero="芬妮", name="甲", tiers={"缓冲盾牌": "core", "电流剑": "first", "标靶": "second"})
         self.assertEqual({f.name for f in dataclasses.fields(S.Scheme)},
-                         {"hero", "name", "tiers", "author", "note", "id", "stale", "copied_from_default"})
+                         {"hero", "name", "tiers", "author", "note", "id", "stale", "copied_from_default", "maps"})
         self.assertFalse(hasattr(s, "schools"))
         self.assertFalse(hasattr(s, "only_schools"))
         self.assertEqual(S.target_schools(self.db, s), ("治愈", "充能"))
@@ -530,13 +603,13 @@ class CodecTest(unittest.TestCase):
         cls.cat = S.get_catalog()
 
     @staticmethod
-    def code_of(*fields) -> str:
-        """按位拼出编码部分（校验照规矩算），用来造不按规矩写的内容。"""
+    def code_of(*fields, version: int = S.SHARE_VERSION) -> str:
+        """按位拼出编码部分（校验照规矩算），用来造不按规矩写的内容。version 为分享格式的版本（校验里带上它）。"""
         bits = S._Bits()
         for value, width in fields:
             bits.put(value, width)
         raw = bits.to_bytes()
-        return S._b58encode(raw + S._check(raw))
+        return S._b58encode(raw + S._check(raw, version))
 
     def test_fixed_samples_decode(self):
         """第 2 版的固定样本：以后任何版本都解出同样的内容（含顺位），再编码也得到同样的字符串。"""
@@ -552,6 +625,88 @@ class CodecTest(unittest.TestCase):
                 # 这两套固定样本的短字符串里仍带着它们（样本是那以前生成的），parse_share 会把这两张丢掉
                 self.assertEqual([(self.cat.code_of[n], t) for n, t in item.scheme.tiers.items()],
                                  [m for m in marks if self.cat.name_of.get(m[0]) in self.cat.markable])
+
+    def test_fixed_v3_samples_decode(self):
+        """第 3 版的固定样本（带地图）：解出同样的内容，再编码也得到同样的字符串；解析出的方案带着地图名。样本是「CA3-」开头
+        （分享方案的网站早先给出的就是这种），换成导出时写的「ACC3-」开头解出来一样。"""
+        for text, hero_id, marks, maps in SHORT_V3:
+            with self.subTest(text=text[:12]):
+                code = text.split("CA3-", 1)[1]
+                payload = S.decode_payload(code, S.SHARE_VERSION_MAPS)
+                self.assertEqual(payload, S.ShortPayload(hero_id, marks, maps))
+                self.assertEqual(S.encode_payload(payload), code)
+                item = S.parse_share(text, self.cat).items[0]
+                self.assertEqual(item.problems, ())
+                self.assertEqual([self.cat.map_code_of[n] for n in item.scheme.maps], list(maps))
+                self.assertEqual([(self.cat.code_of[n], t) for n, t in item.scheme.tiers.items()],
+                                 [m for m in marks if self.cat.name_of.get(m[0]) in self.cat.markable])
+                acc = S.parse_share(text.replace("CA3-", "ACC3-"), self.cat).items[0]
+                self.assertEqual((acc.scheme, acc.problems), (item.scheme, ()))
+
+    def test_short_prefixes(self):
+        """短字符串的开头：导出时第 3 版写「ACC3-」、第 2 版照写「CA2-」（只认 CA 的老版本也能导入没标地图的方案）；
+        导入时 ACC、CA 两种开头哪个版本都认，不分大小写、全角半角，中间可以有空格；开头不算进校验。别的字母开头不认。"""
+        s = S.Scheme(hero="芬妮", name="甲", tiers=[("缓冲盾牌", "core")], maps=("魔法学院",))
+        short = S.to_short(s, self.cat)
+        self.assertTrue(short.startswith("【甲】ACC3-"), short)
+        plain = S.to_short(S.Scheme(hero="芬妮", name="乙", tiers=[("缓冲盾牌", "core")]), self.cat)
+        self.assertTrue(plain.startswith("【乙】CA2-"), plain)
+        v3, v2 = short.split("ACC3-", 1)[1], plain.split("CA2-", 1)[1]
+        for head in ("ACC3-", "acc3-", "Acc 3 -", "ＡＣＣ３－", "CA3-", "ca3－"):
+            with self.subTest(head=head):
+                item = S.parse_share("【甲】" + head + v3, self.cat).items[0]
+                self.assertEqual(item.problems, ())
+                self.assertEqual((item.scheme.hero, item.scheme.maps), ("芬妮", ("魔法学院",)))
+        for head in ("ACC2-", "ａｃｃ２-", "CA2-"):
+            with self.subTest(head=head):
+                item = S.parse_share("【乙】" + head + v2, self.cat).items[0]
+                self.assertEqual((item.problems, item.scheme.maps), ((), ()))
+        # 比现在新的版本，两种开头都报来自更新版本
+        for head in ("ACC4-", "CA4-"):
+            with self.subTest(head=head):
+                item = S.parse_share("【新】" + head + v3, self.cat).items[0]
+                self.assertEqual([p.kind for p in item.problems], [S.PROBLEM_NEWER])
+        # 别的字母开头不是分享码
+        for head in ("AC3-", "CC3-", "AAC3-"):
+            with self.subTest(head=head):
+                self.assertEqual(S.parse_share("【甲】" + head + v3, self.cat).items, ())
+
+    def test_v3_rejections(self):
+        """第 3 版：一张地图都没标、最大编号那一位是 0（包括写了最大编号、每一位却都是 0）、补齐的位不是 0 都报编码不对，
+        粘贴时这一套报编码不对、不抛出别的异常；第 2 版的编码改成 CA3-（反过来也一样）校验不符。"""
+        good = self.code_of((102, 10), (0, 4), (1, 7), (34, 8), (0, 2), (1, 6), (1, 1), version=S.SHARE_VERSION_MAPS)
+        self.assertEqual(S.decode_payload(good, S.SHARE_VERSION_MAPS), S.ShortPayload(102, ((34, "core"),), (1,)))
+        bad = [
+            self.code_of((102, 10), (0, 4), (1, 7), (34, 8), (0, 2), (0, 6), version=S.SHARE_VERSION_MAPS),  # 没标地图
+            self.code_of((102, 10), (0, 4), (1, 7), (34, 8), (0, 2), (3, 6), (1, 1), (0, 1), (0, 1),
+                         version=S.SHARE_VERSION_MAPS),  # 最大编号那一位是 0
+            self.code_of((102, 10), (0, 4), (1, 7), (34, 8), (0, 2), (3, 6), (0, 1), (0, 1), (0, 1),
+                         version=S.SHARE_VERSION_MAPS),  # 写了最大编号，每一位却都是 0
+            self.code_of((102, 10), (0, 4), (1, 7), (34, 8), (0, 2), (1, 6), (0, 1),
+                         version=S.SHARE_VERSION_MAPS),  # 同上，最大编号为 1
+            self.code_of((102, 10), (0, 4), (1, 7), (34, 8), (0, 2), (1, 6), (1, 1), (1, 1),
+                         version=S.SHARE_VERSION_MAPS),  # 补齐的位不是 0
+        ]
+        for code in bad:
+            with self.subTest(code=code), self.assertRaises(S.ShareError) as e:
+                S.decode_payload(code, S.SHARE_VERSION_MAPS)
+            self.assertEqual(e.exception.kind, S.PROBLEM_BAD_CODE)
+            item = S.parse_share("【坏】CA3-" + code, self.cat).items[0]
+            self.assertEqual((item.scheme, [p.kind for p in item.problems]), (None, [S.PROBLEM_BAD_CODE]))
+        v2 = S.encode_payload(S.ShortPayload(102, ((34, "core"),)))
+        v3 = S.encode_payload(S.ShortPayload(102, ((34, "core"),), (1,)))
+        for text in ("【改版本】CA3-" + v2, "【改版本】CA2-" + v3):
+            item = S.parse_share(text, self.cat).items[0]
+            self.assertIsNone(item.scheme)
+            self.assertEqual([p.kind for p in item.problems], [S.PROBLEM_BAD_CODE])
+
+    def test_v3_unknown_map_codes_ignored(self):
+        """编码里地图编号本版本资料库没有（可能来自更新版本）：忽略这一张，记一条问题，方案照常导入。"""
+        code = S.encode_payload(S.ShortPayload(102, ((34, "core"),), (1, 40)))
+        item = S.parse_share("【未知地图】CA3-" + code, self.cat).items[0]
+        self.assertEqual(item.scheme.maps, ("龙宫游乐园",))
+        self.assertEqual([p.kind for p in item.problems], [S.PROBLEM_UNKNOWN_MAP_CODES])
+        self.assertEqual(item.problems[0].count, 1)
 
     def test_payload_order_is_rank(self):
         """marks 的先后就是顺位：只按档位排（稳定排序），同一档保持传入的先后；两种写法都带顺位。"""
@@ -626,9 +781,10 @@ class CodecTest(unittest.TestCase):
 
     def test_every_corruption_rejected(self):
         """短字符串的编码部分每个位置换一个字符、删一个字符、加一个字符：全部报校验不符、不导入、不崩溃。"""
-        for text in (SHORT_V2[0][0], SHORT_HEAL, SHORT_V2[10][0]):
-            head, code = text.split("CA2-", 1)
-            head += "CA2-"
+        for text in (SHORT_V2[0][0], SHORT_HEAL, SHORT_V2[10][0], SHORT_V3[0][0], SHORT_V3[1][0]):
+            marker = "CA3-" if "CA3-" in text else "CA2-"
+            head, code = text.split(marker, 1)
+            head += marker
             variants = []
             for i in range(len(code)):
                 variants += [head + code[:i] + c + code[i + 1:] for c in S.B58 if c != code[i]]
@@ -647,9 +803,9 @@ class CodecTest(unittest.TestCase):
                 self.assertEqual(accepted, [])
 
     def test_every_prefix_rejected(self):
-        """短字符串的每个前缀：都不导入、不崩溃；带上了「CA2-」的报校验不符。"""
-        for text in (SHORT_V2[3][0], SHORT_V2[10][0]):
-            marker = text.index("CA2-") + 4
+        """短字符串的每个前缀：都不导入、不崩溃；带上了「CA2-」「CA3-」的报校验不符。"""
+        for text in (SHORT_V2[3][0], SHORT_V2[10][0], SHORT_V3[0][0], SHORT_V3[1][0]):
+            marker = (text.index("CA3-") if "CA3-" in text else text.index("CA2-")) + 4
             for n in range(len(text)):
                 with self.subTest(text=text, n=n):
                     result = S.parse_share(text[:n], self.cat)
@@ -692,8 +848,8 @@ def random_scheme(rng: random.Random, db, cat, n_marks: int | None = None) -> S.
 
 
 class RoundTripTest(_Chips, unittest.TestCase):
-    def assert_round_trip(self, s: S.Scheme):
-        text, short = S.to_text(s), S.to_short(s, self.cat)
+    def assert_round_trip(self, s: S.Scheme, maps=None):
+        text, short = S.to_text(s, maps=maps), S.to_short(s, self.cat, maps=maps)
         for out, full in ((text, True), (short, False)):
             result = S.parse_share(out, self.cat)
             self.assertEqual(len(result.items), 1, out)
@@ -701,8 +857,9 @@ class RoundTripTest(_Chips, unittest.TestCase):
             self.assertEqual(item.problems, (), out)
             self.assertEqual(content(item.scheme, full), content(s, full), out)
             self.assertEqual(item.name, s.name)
-        code = short.split("CA2-", 1)[1]
-        self.assertLessEqual(len(code), 113, short)  # 能标的筹码全部必选时最长（顺位的排列最多）
+        marker = "ACC3-" if "ACC3-" in short else "CA2-"
+        code = short.split(marker, 1)[1]
+        self.assertLessEqual(len(code), 113, short)  # 能标的筹码全部必选时最长（顺位的排列最多；带地图的另算）
         return text, short
 
     def test_copies_of_default(self):
@@ -768,6 +925,39 @@ class RoundTripTest(_Chips, unittest.TestCase):
                 lengths[label] = len(short.split("CA2-", 1)[1])
         self.assertEqual((lengths["全部必选"], lengths["全标"]), (113, 86))
 
+    def test_maps_round_trip(self):
+        """打开写的开关时，带地图的方案两种格式往返内容完全相同（含地图）；没标地图的照写第 2 版。"""
+        for maps in ((), ("龙宫游乐园",), ("龙宫游乐园", "魔法学院"), ("异变图书馆",)):
+            with self.subTest(maps=maps):
+                s = S.Scheme(hero="芬妮", name="甲", tiers=[("缓冲盾牌", "core")], maps=maps)
+                text, short = self.assert_round_trip(s, maps=True)
+                self.assertEqual("v3" in text, bool(maps))
+                self.assertEqual("ACC3-" in short, bool(maps))
+                self.assertEqual("CA2-" in short, not maps)
+
+    def test_write_maps_switch(self):
+        """WRITE_MAPS 开着：标了地图的方案导出写第 3 版，没标的照写第 2 版。参数关掉时（maps=False，或开关关着）一律写
+        第 2 版、不带地图。"""
+        s = S.Scheme(hero="芬妮", name="甲", tiers=[("缓冲盾牌", "core")], maps=("魔法学院",))
+        self.assertTrue(S.WRITE_MAPS)
+        for kw in ({}, {"maps": True}):
+            self.assertIn("【甲】ACC3-", S.to_short(s, self.cat, **kw))
+            self.assertEqual(S.to_text(S.Scheme(hero="芬妮", name="甲", maps=("魔法学院",)), **kw),
+                             "【甲】筹码方案 v3｜芬妮｜地图：魔法学院")
+        with mock.patch.object(S, "WRITE_MAPS", False):
+            plain = ((S.to_text(s), S.to_short(s, self.cat)),)
+        for text, short in (*plain, (S.to_text(s, maps=False), S.to_short(s, self.cat, maps=False))):
+            self.assertIn("筹码方案 v2", text)
+            self.assertNotIn("地图", text)
+            self.assertIn("CA2-", short)
+        empty = S.Scheme(hero="芬妮", name="空")
+        for kw in ({}, {"maps": True}):
+            self.assertIn("筹码方案 v2", S.to_text(empty, **kw))
+            self.assertIn("CA2-", S.to_short(empty, self.cat, **kw))
+        # 没有编号的地图（已经结束的运动场）不能写进方案
+        with self.assertRaises(ValueError):
+            S.to_short(S.Scheme(hero="芬妮", name="甲", maps=("海选赛运动场",)), self.cat, maps=True)
+
     def test_text_format(self):
         """可读文字的写法：每一档按顺位列出，没有的项不写；不写目标流派、仅限目标流派；短字符串只有数字和字母、不含说明和作者。"""
         s = S.Scheme(hero="芬妮", name="治愈坦克", note="说明文字", author="某某",
@@ -813,6 +1003,41 @@ class ParseTest(unittest.TestCase):
                 self.assertEqual({t: v for t, v in got.items() if v}, ranked)
                 self.assertEqual(s.tiers, by_codes(self.cat, ranked))
                 self.assertEqual(S.to_text(s), text)  # 再生成也是同样的文字
+
+    def test_fixed_v3_text_samples(self):
+        """第 3 版可读文字：认「地图」一段（简体、繁体、几种分隔符、写了两段都认，地图按编号排）；没写「地图」算通用。
+        按简体名、常规写法写出的样本，再生成也是同样的文字。"""
+        for text, hero, maps, ranked in TEXT_V3:
+            with self.subTest(text=text[:16]):
+                item = S.parse_share(text, self.cat).items[0]
+                self.assertEqual(item.problems, ())
+                s = item.scheme
+                self.assertEqual((s.hero, s.maps), (hero, maps))
+                self.assertEqual(s.tiers, by_codes(self.cat, ranked))
+        for i in (0, 1, 4):
+            text = TEXT_V3[i][0]
+            item = S.parse_share(text, self.cat).items[0]
+            self.assertEqual(S.to_text(item.scheme, maps=True), text)
+
+    def test_text_v3_unknown_maps(self):
+        """只认有编号的地图、名称要精确相同：「图书馆」这样的半截不算（不按包含匹配认成异变图书馆）；运动场的名字、
+        写错的名字都忽略、记一条问题，方案照常导入。"""
+        text = ("【地图错】筹码方案 v3｜芬妮｜必选：缓冲盾牌｜地图：海选赛运动场、不存在的地图、图书馆")
+        item = S.parse_share(text, self.cat).items[0]
+        self.assertEqual(item.scheme.maps, ())
+        self.assertEqual([p.kind for p in item.problems], [S.PROBLEM_UNKNOWN_MAP_NAMES])
+        self.assertEqual(item.problems[0].names, ("海选赛运动场", "不存在的地图", "图书馆"))
+
+    def test_text_v3_names_cap(self):
+        """一套里最多认 200 个名称，地图名和筹码名合起来算：正好 200 个照常导入（同一张地图写了几遍只标一次），多一个按
+        格式不正确；全是认不出的地图名时也一样，问题里不会列出成百上千个名字。"""
+        head = "【多图】筹码方案 v3｜芬妮｜必选：缓冲盾牌｜地图："
+        fits = S.parse_share(head + "、".join(["龙宫游乐园"] * 199), self.cat).items[0]
+        self.assertEqual((fits.scheme.maps, self.kinds(fits)), (("龙宫游乐园",), []))
+        over = S.parse_share(head + "、".join(["龙宫游乐园"] * 200), self.cat).items[0]
+        self.assertEqual((over.scheme, self.kinds(over)), (None, [S.PROBLEM_BAD_TEXT]))
+        unknown = "【乱图】筹码方案 v3｜芬妮｜地图：" + "、".join(f"地图{i}" for i in range(201))
+        self.assertEqual(self.kinds(S.parse_share(unknown, self.cat).items[0]), [S.PROBLEM_BAD_TEXT])
 
     def test_text_and_short_agree(self):
         """同一套方案的两种固定样本内容相同。"""
@@ -866,11 +1091,11 @@ class ParseTest(unittest.TestCase):
             ("【目标流派】筹码方案 v2｜芬妮｜目标流派：治愈｜必选：缓冲盾牌", S.PROBLEM_BAD_TEXT),  # 第 1 版才有的段
             ("【仅限】筹码方案 v2｜芬妮｜必选：缓冲盾牌｜仅限目标流派", S.PROBLEM_BAD_TEXT),
             ("【没有冒号】筹码方案 v2｜芬妮｜必选缓冲盾牌", S.PROBLEM_BAD_TEXT),
-            ("【新版本】筹码方案 v3｜芬妮｜必选：缓冲盾牌", S.PROBLEM_NEWER),
+            ("【新版本】筹码方案 v4｜芬妮｜必选：缓冲盾牌", S.PROBLEM_NEWER),
             ("【旧版本】筹码方案 v1｜芬妮｜必选：缓冲盾牌", S.PROBLEM_BAD_TEXT),
             ("【零版本】筹码方案 v0｜芬妮｜必选：缓冲盾牌", S.PROBLEM_BAD_TEXT),
             ("【新角色】筹码方案 v2｜不存在的角色｜必选：缓冲盾牌", S.PROBLEM_HERO_NAME),
-            ("【新版本】CA3-" + SHORT_HEAL.split("CA2-")[1], S.PROBLEM_NEWER),
+            ("【新版本】CA4-" + SHORT_HEAL.split("CA2-")[1], S.PROBLEM_NEWER),
             ("【旧版本】CA1-" + SHORT_HEAL.split("CA2-")[1], S.PROBLEM_BAD_CODE),
             ("【空】CA2-", S.PROBLEM_BAD_CODE),
             ("【有零】CA2-ANkTfrzSwGvz2vHedw0", S.PROBLEM_BAD_CODE),
@@ -1153,8 +1378,8 @@ class StoreTest(_TmpDir):
             reopened.add(S.Scheme(hero="不存在的角色"))
 
     def test_file_format(self):
-        """格式版本 2；每个筹码同时记编号和名称，按方案的先后写（先按档位，同一档按顺位）；没有目标流派、仅限目标流派；
-        文件是带缩进的 JSON。"""
+        """格式版本 2；每个筹码同时记编号和名称，按方案的先后写（先按档位，同一档按顺位）；地图写成空列表；
+        没有目标流派、仅限目标流派；文件是带缩进的 JSON。"""
         store = self.open()
         a = store.add(replace(S.Scheme(hero="芬妮", name="治愈坦克", note="说明", author="某某",
                                        tiers=[("大碗炖肉", "first"), ("医疗箱-完备治疗", "core"), ("可口糖果", "first"),
@@ -1169,7 +1394,7 @@ class StoreTest(_TmpDir):
                                    {"code": 34, "name": "缓冲盾牌", "tier": "core"},
                                    {"code": 38, "name": "大碗炖肉", "tier": "first"},
                                    {"code": 35, "name": "可口糖果", "tier": "first"}],
-                         "copied_from_default": "2026-10-05"}],
+                         "maps": [], "copied_from_default": "2026-10-05"}],
             "last_used": {"102": a.id},
         })
         self.assertEqual(S.FILE_VERSION, 2)

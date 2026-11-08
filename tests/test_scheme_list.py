@@ -1647,5 +1647,26 @@ class EditorKeyboardTest(_ListCase):
         self.assertEqual(btn.size(), size)
 
 
+class ShownTextWidthTest(_ListCase):
+    """档位按钮、流派一栏、筹码名一栏的宽按画出来的字量：繁体界面画的是转过的档名、流派名和游戏里的繁体名，不是简体原文。
+    用一个把字加长的转换代替繁体转换，量出来的宽要放得下加长以后的字。"""
+
+    def test_widths_follow_shown_text(self):
+        from advisor.ui import lang, names
+
+        def longer(text):
+            return text + "长长长" if isinstance(text, str) else text
+
+        name = "银行卡-余额少"
+        with mock.patch.object(lang, "CURRENT", lang.HANT), mock.patch.object(lang, "to_hant", side_effect=longer), \
+                mock.patch.object(names, "chip_name", side_effect=lambda chip: longer(chip.name)):
+            lst = self.make(self.content({name: "core"}, only=[name]))
+            m = lst._m()
+            tiers = max(m.fm_small.horizontalAdvance(longer(label)) for label in TIER_LABEL.values())
+            self.assertGreaterEqual(m.button_w, tiers + 2 * L.BUTTON_PAD_X)
+            self.assertGreaterEqual(m.school_w, m.fm_small.horizontalAdvance(longer(self.group_of(name))))
+            self.assertGreaterEqual(m.name_w, m.fm_row.horizontalAdvance(longer(name)))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -82,7 +82,8 @@ class CheckDataTest(unittest.TestCase):
     def test_check_table_has_each_check(self):
         # 一项检查一个函数、放在一张表里，以后加一项只要加一个函数
         for check in (check_data.check_chips, check_data.check_granted, check_data.check_chip_aliases,
-                      check_data.check_heroes, check_data.check_series, check_data.check_codes, check_data.check_maps,
+                      check_data.check_heroes, check_data.check_hant, check_data.check_series, check_data.check_codes,
+                      check_data.check_maps,
                       check_data.check_map_files, check_data.check_map_tasks, check_data.check_mutators,
                       check_data.check_photo_tilt, check_data.check_card_crops, check_data.check_sfw_skip,
                       check_data.check_meta, check_data.check_layout, check_data.check_review):
@@ -189,6 +190,33 @@ class CheckDataTest(unittest.TestCase):
         found = self.problems(self.copy_data({"chips.json": self.edit_json(change)}))
         self.assertTrue(any("地图「不存在的地图」不在 maps.json 里" in p for p in found), found)
 
+    def test_map_code_duplicate(self):
+        def change(data):
+            data["水乡古镇"]["code"] = 5
+        found = self.problems(self.copy_data({"maps.json": self.edit_json(change)}))
+        self.assertTrue(any("地图「水乡古镇」：code 和地图「魔法学院」重复（都是 5）" in p for p in found), found)
+
+    def test_map_code_out_of_range(self):
+        for code in (0, 64, "5", 1.5):
+            def change(data, code=code):
+                data["龙宫游乐园"]["code"] = code
+            with self.subTest(code=code):
+                found = self.problems(self.copy_data({"maps.json": self.edit_json(change)}))
+                self.assertTrue(any("地图「龙宫游乐园」：code（地图编号）应为 1～63 的整数" in p for p in found), found)
+
+    def test_map_with_slug_without_code(self):
+        def change(data):
+            data["龙宫游乐园"].pop("code")
+        found = self.problems(self.copy_data({"maps.json": self.edit_json(change)}))
+        self.assertTrue(any("地图「龙宫游乐园」：缺少地图编号（code）" in p for p in found), found)
+
+    def test_arena_with_code(self):
+        def change(data):
+            data["海选赛运动场"]["code"] = 10
+        found = self.problems(self.copy_data({"maps.json": self.edit_json(change)}))
+        self.assertTrue(any("地图「海选赛运动场」：这张地图没有作业站短名" in p and "不该有地图编号" in p
+                            for p in found), found)
+
     def test_granted_chip_without_map(self):
         def change(data):
             self.chip(data, "交错双鲤")["maps"] = []
@@ -241,6 +269,7 @@ class CheckDataTest(unittest.TestCase):
         # 机制文档里每张地图的「任务」表和 maps.json 的 tasks 任务名重复、容易只改一处
         def added(data):
             data["幽魂暗巷"]["tasks"].append("击倒 99 只测试怪")
+            data["幽魂暗巷"]["hant_tasks"].append("擊敗99隻測試怪")
         found = self.problems(self.copy_data({"maps.json": self.edit_json(added)}))
         self.assertEqual(len(found), 1, found)
         self.assertIn("「任务」表和 maps.json 的 tasks 对不上", found[0])
@@ -248,6 +277,7 @@ class CheckDataTest(unittest.TestCase):
 
         def dropped(data):
             data["幽魂暗巷"]["tasks"] = data["幽魂暗巷"]["tasks"][:-1]
+            data["幽魂暗巷"]["hant_tasks"] = data["幽魂暗巷"]["hant_tasks"][:-1]
         found = self.problems(self.copy_data({"maps.json": self.edit_json(dropped)}))
         self.assertEqual(len(found), 1, found)
         self.assertIn("文档里多了「击倒 3 只科学怪猿」", found[0])
@@ -407,6 +437,27 @@ class CheckDataTest(unittest.TestCase):
             "（现为 \"2026/10/14\"）。",
             "maps.json 地图「异变图书馆」：ended（是不是已经结束）应写 true 或 false（现为 \"false\"）。",
         ])
+
+    def test_map_task_levels(self):
+        # 任务等级（task_levels）每条路线的个数要和一局的筹码任务数对得上（极限对 extreme.chip_tasks），几条路线时逐条核对
+        def change(data):
+            data["森秋幻境"]["task_levels"]["困难"] = [1, 2, 3]
+            data["魔法学院"]["task_levels"]["噩梦"] = [[1, 2, 2], [2, 3]]
+            data["水乡古镇"]["task_levels"]["极限"] = [1, 2, 2, 3]
+        found = self.problems(self.copy_data({"maps.json": self.edit_json(change)}))
+        self.assertEqual(sorted(found), sorted([
+            "maps.json 地图「森秋幻境」：task_levels 的困难写了 3 个任务等级，一局的筹码任务是 4 个，"
+            "请照机制文档的「任务」表补齐。",
+            "maps.json 地图「魔法学院」：task_levels 的噩梦第 2 条路线写了 2 个任务等级，一局的筹码任务是 3 个，"
+            "请照机制文档的「任务」表补齐。",
+            "maps.json 地图「水乡古镇」：task_levels 的极限写了 4 个任务等级，一局的筹码任务是 5 个，"
+            "请照机制文档的「任务」表补齐。",
+        ]))
+        # 等级不在 1～3：载入时按没有资料处理（记警告），这里另写明是哪个数不对
+        def out_of_range(data):
+            data["龙宫游乐园"]["task_levels"]["困难"] = [2, 2, 2, 4]
+        found = self.problems(self.copy_data({"maps.json": self.edit_json(out_of_range)}))
+        self.assertIn("maps.json 地图「龙宫游乐园」：task_levels 的困难里 [4] 不是 1～3 级的整数，请照机制文档改好。", found)
 
     def test_code_table_rows(self):
         # 改名、移除、移除后又回来：程序只认「name 是现役筹码、没标 removed」的行，别的写法分享码里认不出这个筹码
@@ -810,6 +861,99 @@ class CheckDataTest(unittest.TestCase):
         self.assertEqual(check_data.SFW_SKIP, check_sfw_cover.SFW_SKIP)
         self.assertIn(check_data.SFW_SKIP, build_release.DEV_ONLY_DATA)
         self.assertNotIn(check_data.SFW_SKIP, build_release.DATA_FILES)
+
+    def test_hant_missing(self):
+        # 新筹码、新角色、新地图、新组件都要有游戏繁体中文界面里的名字，缺了（没写、写 null、空着）报出来，只报这一条：
+        # 载入时照常载入（不跳过这一项，别处引用它不跟着报「不存在」）
+        cases = (
+            ("chips.json", lambda data: self.chip(data, "拳击手套-初级").pop("hant"),
+             "chips.json：筹码「拳击手套-初级」缺少繁体名（hant）：请补上游戏繁体中文界面里的名字（照游戏原文，不自己转换）。"),
+            ("chips.json", lambda data: self.chip(data, "书签").update(hant=None),
+             "chips.json：筹码「书签」缺少繁体名（hant）：请补上游戏繁体中文界面里的名字（照游戏原文，不自己转换）。"),
+            ("heroes.json", lambda data: self.hero(data, "帕露南").update(hant=""),
+             "heroes.json：角色「帕露南」缺少繁体名（hant）：请补上游戏繁体中文界面里的名字（照游戏原文，不自己转换）。"),
+            ("heroes.json", lambda data: self.hero(data, "帕露南").pop("hant_title"),
+             "heroes.json：角色「帕露南」缺少繁体称号（hant_title）：请补上游戏繁体中文界面里的称号"
+             "（照游戏原文，不自己转换）。"),
+            ("heroes.json", lambda data: self.hero(data, "超天酱").pop("hant_full_name"),
+             "heroes.json：角色「超天酱」的全名（full_name）和名字不同，缺少繁体全名（hant_full_name）："
+             "请补上游戏繁体中文界面里的全名（照游戏原文，不自己转换）。"),
+            ("maps.json", lambda data: data["异变图书馆"].pop("hant"),
+             "maps.json 地图「异变图书馆」：缺少繁体名（hant）：请补上游戏繁体中文界面里的地图名（照游戏原文，不自己转换）。"),
+            ("maps.json", lambda data: data["异变图书馆"].pop("hant_tasks"),
+             "maps.json 地图「异变图书馆」：缺少繁体任务（hant_tasks）：请按 tasks 的顺序写游戏任务栏里的繁体任务文字"
+             "（拼不出来的写 null）。"),
+            ("mutators.json", lambda data: data["狂风"].pop("hant"),
+             "mutators.json：组件「狂风」缺少繁体名（hant）：请补上游戏繁体中文界面里的名字（照游戏原文，不自己转换）。"),
+        )
+        for file, change, problem in cases:
+            with self.subTest(problem):
+                self.assertEqual(self.problems(self.copy_data({file: self.edit_json(change)})), [problem])
+        # full_name 和 name 相同的角色不用写繁体全名
+        self.assertEqual(self.problems(self.copy_data({"heroes.json": self.edit_json(
+            lambda data: self.hero(data, "帕露南").pop("hant_full_name", None))})), [])
+
+    def test_hant_wrong_type_reported_once(self):
+        # 繁体名写成别的类型：载入时记警告（照常载入这一项），这里不再按「缺少」报一遍
+        cases = (
+            ("chips.json", lambda data: self.chip(data, "书签").update(hant=["書籤"]),
+             "chips.json 筹码「书签」：hant 的类型不对，已忽略"),
+            ("heroes.json", lambda data: self.hero(data, "帕露南").update(hant_title=1),
+             "heroes.json 角色「帕露南」：hant_title 的类型不对，已忽略"),
+            ("maps.json", lambda data: data["异变图书馆"].update(hant=1),
+             "maps.json 地图「异变图书馆」：hant 的类型不对，按没有资料处理"),
+            ("maps.json", lambda data: data["异变图书馆"].update(hant_tasks="擊敗3隻魔法茶壺"),
+             "maps.json 地图「异变图书馆」：hant_tasks 应为任务文字的列表（拼不出来的写 null），按没有资料处理"),
+            ("mutators.json", lambda data: data["狂风"].update(hant=1),
+             "mutators.json 组件「狂风」：hant 的类型不对，已忽略"),
+        )
+        for file, change, problem in cases:
+            with self.subTest(problem):
+                self.assertEqual(self.problems(self.copy_data({file: self.edit_json(change)})), [problem])
+
+    def test_hant_tasks_count(self):
+        # 繁体任务要和简体任务一一对应、顺序相同，条数不同时报出来
+        found = self.problems(self.copy_data({"maps.json": self.edit_json(
+            lambda data: data["异变图书馆"]["hant_tasks"].append("擊敗額外的怪物"))}))
+        self.assertIn("maps.json 地图「异变图书馆」：hant_tasks 和 tasks 条数不同（hant_tasks 5 条、tasks 4 条），"
+                      "请一一对应、顺序相同。", found)
+        # 条数相同时不报（现在的数据这一条由 test_current_data_is_clean 覆盖）；拼不出来写 null 的也算一条
+        found = self.problems(self.copy_data({"maps.json": self.edit_json(
+            lambda data: data["异变图书馆"]["hant_tasks"].__setitem__(1, None))}))
+        self.assertEqual(found, [])
+
+    def test_hant_collision(self):
+        # 归一化以后和别的项目的名字、旧名、繁体名撞车时，认名字只会认成一个，报出来
+        found = self.problems(self.copy_data({"chips.json": self.edit_json(
+            lambda data: self.chip(data, "拳击手套-初级").update(hant="飞羽手环"))}))
+        self.assertIn("chips.json：筹码「拳击手套-初级」的繁体名「飞羽手环」和筹码「飞羽手环」的名字「飞羽手环」"
+                      "重复（归一化后相同）：认名字时只会认成一个，请改掉其中一个。", found)
+        found = self.problems(self.copy_data({"heroes.json": self.edit_json(
+            lambda data: self.hero(data, "阿兰娜").update(hant="帕露南"))}))
+        self.assertIn("heroes.json：角色「阿兰娜」的繁体名「帕露南」和角色「帕露南」的名字「帕露南」重复"
+                      "（归一化后相同）：认名字时只会认成一个，请改掉其中一个。", found)
+        found = self.problems(self.copy_data({"maps.json": self.edit_json(
+            lambda data: data["异变图书馆"].update(hant="幽魂暗巷"))}))
+        self.assertIn("maps.json：地图「异变图书馆」的繁体名「幽魂暗巷」和地图「幽魂暗巷」的名字「幽魂暗巷」重复"
+                      "（归一化后相同）：认名字时只会认成一个，请改掉其中一个。", found)
+        # 被撞的一方还没写繁体名时照样报：认名字时它的简体名会被认成另一个筹码（角色）
+        def chips(data):
+            self.chip(data, "飞羽手环").pop("hant")
+            self.chip(data, "拳击手套-初级").update(hant="彩羽手环")
+        found = self.problems(self.copy_data({"chips.json": self.edit_json(chips)}))
+        self.assertIn("chips.json：筹码「拳击手套-初级」的繁体名「彩羽手环」和筹码「飞羽手环」的别名「彩羽手环」"
+                      "重复（归一化后相同）：认名字时只会认成一个，请改掉其中一个。", found)
+
+        def heroes(data):
+            self.hero(data, "帕露南").pop("hant")
+            self.hero(data, "阿兰娜").update(hant_title="商业之主")
+        found = self.problems(self.copy_data({"heroes.json": self.edit_json(heroes)}))
+        self.assertIn("heroes.json：角色「阿兰娜」的繁体称号「商业之主」和角色「帕露南」的别名「商业之主」重复"
+                      "（归一化后相同）：认名字时只会认成一个，请改掉其中一个。", found)
+        # 不撞车的繁体名不报
+        found = self.problems(self.copy_data({"chips.json": self.edit_json(
+            lambda data: self.chip(data, "拳击手套-初级").update(hant="全新的繁体名"))}))
+        self.assertEqual(found, [])
 
     # ------------------------------------------------------------ 写错类型时不抛异常，一处错不报出一串
 

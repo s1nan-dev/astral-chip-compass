@@ -100,6 +100,7 @@ LIVE = frozenset({"test_window_capture_live", "test_window_layer_live"})
 # 识别引擎见 advisor/vision/chip_select.py 的 _engine()：每进程 4 个识别线程，同时跑太多会抢 CPU。
 OCR = frozenset({
     "test_chip_panel",
+    "test_chip_select_fast",
     "test_coins",
     "test_cv_threads",
     "test_ocr_lite_switch",

@@ -68,7 +68,7 @@ DOWNLOADS_ENV = "ACC_DOWNLOAD_DIR"
 # 开发时改用装好的原版 rapidocr 包里的 models（见 ocr_models_dir）
 MODELS_SUBDIR = "models"
 # 发行版根目录（program_folder）里的使用说明：打包时由 docs/使用说明.md 生成（tools/build_release.py 的 MANUAL_NAME 就是它）。
-# 开发版里没有生成好的这一份，托盘菜单的「使用说明」改开项目 docs 下的原稿（manual_path）
+# 开发版里没有生成好的这一份，悬浮窗打开使用说明（Overlay.open_manual）时改开项目 docs 下的原稿（manual_path）
 MANUAL_NAME = "使用说明.html"
 MANUAL_SOURCE = "docs/使用说明.md"
 STATE_NAME = "state.json"  # 设置文件
@@ -147,8 +147,9 @@ def program_folder() -> Path:
 
 
 def manual_path() -> Path:
-    """托盘菜单「使用说明」打开的文件：发行版是程序文件夹（program_folder）里的「使用说明.html」（MANUAL_NAME，打包时生成）；
-    开发版没有生成好的这一份，是项目里的原稿 docs/使用说明.md（MANUAL_SOURCE）。只给位置，在不在由调用方看。"""
+    """悬浮窗打开使用说明（Overlay.open_manual）时打开的文件：发行版是程序文件夹（program_folder）里的「使用说明.html」
+    （MANUAL_NAME，打包时生成）；开发版没有生成好的这一份，是项目里的原稿 docs/使用说明.md（MANUAL_SOURCE）。只给位置，
+    在不在由调用方看。"""
     if is_frozen():
         return program_folder() / MANUAL_NAME
     return app_dir() / MANUAL_SOURCE

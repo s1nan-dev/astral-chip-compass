@@ -63,7 +63,7 @@
   - 装饰（`DecorUnderTextTest`）：灯带、灯线、标题后面的线不压在字下面。
   - 记住所选（`RememberTest`、`ListenerTest`）：皮肤存进设置文件、换皮肤的通知名单不随开关窗口增长。
 - **检证对象**：`advisor/ui/skins/carbon_flow.py`（碳纤流光的参数）；`advisor/ui/theme/`（登记、外观参数、字体开关、取值）；`fonts/ACCTitle-Bold.otf` 和 `tools/make_font_subset.py`（收字规则）；`advisor/ui/chrome.py`（`CloseButton`、`EdgeResize`、`WindowHead`、`Panel`、`edge_at`、`round_corners`）；`advisor/ui/decor.py`（画法）；`advisor/ui/overlay.py` 的 `set_skin` 和 `advisor/ui/overlay_parts/option_widgets.py` 的 `_ScorePlate`、`_ScoreRow`、`_ScoreName`；`advisor/ui/scheme_editor/`、`scheme_share.py`、`settings/`、`about.py`、`skin_window.py`。
-- **什么时候要跑**：改 `advisor/ui/skins/carbon_flow.py`；改 `advisor/ui/theme/` 的公共部分、`chrome.py`、`decor.py`、`widgets.py` 的画法；改悬浮窗、编辑方案、导入/导出、设置、关于、皮肤窗口的布局或文字；改 `tools/make_font_subset.py` 的收字规则或换字体子集文件；改了界面文字（子集覆盖检查会报）。
+- **什么时候要跑**：改 `advisor/ui/skins/carbon_flow.py`；改 `advisor/ui/theme/` 的公共部分、`chrome.py`、`decor.py`、`widgets.py` 的画法；改悬浮窗、编辑方案、导入/导出、设置、关于、皮肤窗口的布局或文字；改 `tools/make_font_subset.py` 的收字规则或换字体子集文件；改了界面文字、简繁转换的规则或补充词组（子集覆盖检查会报）。
 - **怎么单独跑**：`python -B tools/run_tests.py --only test_skin_carbon`（上次约 15 秒）。
 - **需要什么**：没有特别要求；离屏 Qt，不弹窗口。要这台电脑装了微软雅黑（离屏环境会装上），否则排版会变。
 - **输出怎么看**：同总则；设置文件、方案文件写在项目 `.tmp` 下的临时文件夹里。`test_search_icon_cyan` 在系统里没有图标字体时会跳过（写「系统里没有图标字体」）。
@@ -91,8 +91,8 @@
   - 边缘和圆角（`EdgeAtTest`、`ResizeTest`、`CornerTest`）：边缘命中、编辑方案和导入导出拖边缘改大小、设置和关于固定大小、系统圆角失败时安静。
   - 窗口高度（`HeightTest`）：矮屏幕不压扁输入框、目标流派多时窗口不变宽、其它窗口适配、默认皮肤尺寸不变。
   - 记住所选（`RememberTest`、`ListenerTest`）。
-- **检证对象**：`advisor/ui/skins/classic_white.py`；`advisor/ui/theme/`；`fonts/ACCHeading-Heavy.otf` 和 `tools/make_font_subset.py`；`advisor/ui/chrome.py`（`BackButton`、`EdgeResize`、`edge_at`、`round_corners`、`_native_windows`）；`advisor/ui/decor.py`（`panel_stripes` 等）；`advisor/ui/scheme_editor/`、`scheme_share.py`、`settings/`、`about.py`、`overlay.py`。
-- **什么时候要跑**：改 `advisor/ui/skins/classic_white.py`；改 `theme`、`chrome.py`、`decor.py`、`widgets.py` 的公共画法；改编辑方案/导入导出/设置/关于窗口的布局或文字；改字体子集或收字规则；改了界面文字。
+- **检证对象**：`advisor/ui/skins/classic_white.py`；`advisor/ui/theme/`；`fonts/` 里的四个标题字体子集（简体、繁体各两个字重）和 `tools/make_font_subset.py`；`advisor/ui/chrome.py`（`BackButton`、`EdgeResize`、`edge_at`、`round_corners`、`_native_windows`）；`advisor/ui/decor.py`（`panel_stripes` 等）；`advisor/ui/scheme_editor/`、`scheme_share.py`、`settings/`、`about.py`、`overlay.py`。
+- **什么时候要跑**：改 `advisor/ui/skins/classic_white.py`；改 `theme`、`chrome.py`、`decor.py`、`widgets.py` 的公共画法；改编辑方案/导入导出/设置/关于窗口的布局或文字；改字体子集或收字规则（`collect_text`、`collect_text_hant`，繁体的收字范围是 `tools/hant_table.py` 的 `all_texts`）；改了界面文字、简繁转换的规则或补充词组（`advisor/ui/lang.py`、`data/zh_hant_extra.toml`：转出来的繁体字要在繁体子集里）。
 - **怎么单独跑**：`python -B tools/run_tests.py --only test_skin_classic`（上次约 14 秒）。
 - **需要什么**：没有特别要求；离屏 Qt。`FontTest.test_fallback_prefers_body_font` 在没有可用的中文字体时会跳过。
 - **输出怎么看**：同总则；设置、方案文件写在 `.tmp` 下。若干用例先把随软件带的字体装上、跑完撤掉（换皮肤前后字体库一样）。

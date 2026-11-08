@@ -11,35 +11,58 @@ Session 记下的每一条（格式与 Session.recent_events 相同：time 精�
 记录的种类（kind）：
 - 事件（advice、picked、unreadable、refreshing、status 等，见 session.Event）。status 的 changed 写明和上一条相比变了
   哪几项（{项: [原来, 现在]}，含星币数 coins）；按筹码方案推荐时 advice 另有各候选的位次 places。
-- 识别读数（read:xxx，见 Session.trace 和 vision.pipeline.FrameProcessor._trace）：read:select 三选一、read:selected
-  选中的候选变了、read:select_rejudged 同一组候选第一次读错、后来读对以后记账重新判（rerolls 刷新次数、in_table 概率行
-  在不在概率表里、source 来源，各自 [第一次, 读对的]，见 Session._open_judged）、read:hud 轮次和任务栏、
-  read:progress 进度条、read:hero 角色、read:stars 星数（how 为「头像」「全员相同」
+- 识别读数（read:xxx，见 Session.trace 和 vision.pipeline.FrameProcessor._trace）：read:select 三选一（按记下的位置只认字
+  读成的另有 how 为 fast；那样读没读成、改用完整读的另有 fast_miss，是没读成的原因，见 FrameProcessor._select_read）、
+  read:selected 选中的候选变了、read:select_rejudged 同一组候选第一次读错、后来读对以后记账重新判（rerolls 刷新次数、
+  in_table 概率行在不在概率表里、source 来源，各自 [第一次, 读对的]，见 Session._open_judged）、read:hud 轮次和任务栏
+  （数字被挡住、只看见轮次标记时另有 mark 为 true；先在标记左边那一小块只认字就读到了的另有 how 为 crop，见
+  FrameProcessor._round_quick）、read:round_crop 轮次被挡住时在标记左边那一小块认出的数（round，是手上的轮次或
+  往前一轮时交给记账；别的数不交、另有 held 为 true，等完整读确认）、read:progress 进度条（那一块和上次认字时一样、
+  不认字沿用上次读数的另有 reused 为 true，见 FrameProcessor._read_progress）、read:hero 角色、read:stars 星数（how 为「头像」「全员相同」
   「名字」）、read:coins 星币数（coins、reason 读不出的原因、text、score）、read:own_by_name 头像认不出时按本局记住的名字
   找自己那一行（row 为找到的行或 null，reason 为找不到或不读的原因；不写名字）、read:players 玩家列表和队友、
   read:template 保存角色模板、read:panel「查看筹码」面板（page 第几页、arrows 两端翻页箭头）、read:select_hidden
   三选一被玩家隐藏（开始隐藏时一条，offer 是当时的候选）、read:screen 对局外的画面、read:mutators 畸变组件、
-  read:hero_select 认出选角界面、read:difficulty 和 read:difficulty_cap 难度、read:game_over 对局结束、read:resumed
+  read:hero_select 认出选角界面、read:difficulty 和 read:difficulty_cap 难度、read:victory 通关画面、read:game_over_banner
+  打输时棋盘上的 GAME OVER 横幅、read:finish_look 看见像通关画面的珊瑚红底、打完时棋盘上那条蓝色斜带（打赢、打输都有）的颜色（还没认字；look 为
+  coral 或 banner，coral、white 为占比；离上次看见隔了 [watch] pick_grace_ms 以上才记、为 0 时不记，见
+  vision.pipeline.FrameProcessor._check_victory）、read:game_over 对局结束、read:game_result 读到奖励画面以后的胜负（outcome、how、coins）、
+  read:rejoined 主菜单结束的那一局又连回来、撤回了那次结束接着记（left 离开时第几轮、round 这次第几轮、seconds 离开了几秒）、
+  read:menu_idle 停在主菜单时开始不做文字识别（on 为 true）和不再这样（on 为 false，另有 why：changed 底栏或开始按钮那一块
+  变了（另有 part：bar 底栏、start 开始按钮、both 两块都变了）、resized 窗口大小变了、hotkey 按热键、in_game 不在对局外了、
+  recheck 满一分钟照常认一次、select 三选一显示着、resumed 从暂停恢复，见 vision.pipeline.FrameProcessor._menu_idle）；
+  不再空转、又紧接着认回主菜单重新空转（来回）满了次数时各记一条：on 为 true、why 为 bar_only（开始按钮那一块在来回，
+  这次停在主菜单期间只看底栏），on 为 false、why 为 flapping（底栏也在来回，一分钟内不空转）；判过以后这次停在主菜单期间
+  来回的那几次不再记（见 vision.pipeline.FrameProcessor._menu_trip）、read:resumed
   恢复识别、read:newgame_corroborated / read:newgame_vetoed / read:round_implausible 新一局判定的印证和否决、
   read:match_cancelled / read:result_without_game / read:result_map_mismatch 对局外画面的特殊情形、read:user 用户在
   悬浮窗上的操作（见 ui.overlay.Overlay._trace_user）。
 - 识别本身的状态（Session.log_state）：pause / resume 识别暂停和恢复，带原因、细节和时长，见 overlay_parts/watcher.py 的 Watcher.set_paused；
   capture 识别画面的截取方式变了，带方式、原因、错误代码和步骤、系统版本号、游戏窗口的类名；layer 悬浮窗的窗口层次变了，
   带前台状态、层次、盖住悬浮窗的窗口的类名；grab_stats 每分钟一条取帧统计，recog_stats 同样每分钟一条、紧挨着它记，
-  记这一段各步的耗时（每帧识别、每次文字识别、各项读数、算推荐、界面线程的定时器晚到多少）和处理器占用，以及优先级、
+  记这一段各步的耗时（每帧识别、每次文字识别、各项读数、算推荐、界面线程的定时器晚到多少）、只数次数的几样（counts）
+  和处理器占用，以及优先级、
   高性能声明、低配模式和文字识别线程数（见 ui.overlay.Overlay._log_capture、overlay_parts/follow.py 的
   WindowFollower.log_layer 和 Watcher._log_stats、advisor/perfstats.py）；download_stats 每下完一轮识别图片记一条
   （第一次运行的下载、点「重试」、被拦以后到点接着下），记这一轮的总用时、要下的张数、成功和失败的张数、有没有被站点防护
   拦下或提前停下、连接数和是不是慢速、最慢的 5 张（dir/file、秒数、字节数），另带下载期间识别怎样（few / paused / slow）
   和是不是点「重试」开始的（见 advisor/assets.py 的 download 的 stats、ui/overlay_parts/background.py 的
-  _log_download_stats）；scheme 推荐用的筹码方案变了（方案的内容，见 engine.Plan.record）。
-下面这些种类和字段（status 的 changed、read:select 的 rarity 和 partial、advice 的 raw 和 places、read:coins、
-read:own_by_name、read:stars 的 how 为「名字」、read:select_rejudged、read:panel 的 page 和 arrows、read:select_hidden、
-capture、layer、grab_stats、recog_stats、download_stats、scheme 等）
+  _log_download_stats）；scheme 推荐用的筹码方案变了（方案的内容，见 engine.Plan.record）；ocr_check 文字识别线程数的
+  性能自检量完一次，带量出来的线程数（threads，没量出来时 null）、各线程数的中位毫秒（ms）、量了几整轮（rounds）和没量
+  出来的原因（why：stopped / noisy / slow / error，量出来时为空串，见 ui/overlay_parts/ocr_check.py 的 OcrCheck）。
+下面这些种类和字段（status 的 changed、read:select 的 rarity、partial、how 和 fast_miss、advice 的 raw 和 places、read:coins、
+read:own_by_name、read:stars 的 how 为「名字」、read:hud 的 mark 和 how、read:progress 的 reused、read:round_crop、
+read:select_rejudged、
+read:panel 的 page 和 arrows、read:select_hidden、read:rejoined、read:menu_idle、read:finish_look、capture、layer、grab_stats、
+recog_stats、
+download_stats、
+scheme 等）
 都是可选的：读记录时按缺省处理，旧记录照常能读。
 换段：程序启动（startup）、判定新的一局（newgame）、单段超过 MAX_BYTES（size）。对局结束只记标记，不换段。
 导出：collect() 取上一段和当前段。打完一局在结算页或房间里导出（当前段就是整局）、刚判了新的一局
-（上一段是刚打完的那局）、中途重启过工具（两段拼成整局），都能拿到整局。
+（上一段是刚打完的那局）、中途重启过工具（两段拼成整局），都能拿到整局。collect_stats() 另取识别记录还留着的
+各段里、最近 12 小时以内的统计类记录（STATS_KINDS），诊断包另写成 stats.jsonl：连着打了几局再导出时，
+前几局的每分钟统计也看得到。
 写盘：add() 先记在内存里；距上次写盘满 FLUSH_S 秒、积满 FLUSH_LINES 行、或遇到 URGENT 里的事件时写一次；
 导出前、识别暂停时、退出时由调用方 flush()。程序目录常在 OneDrive 里，少写一次少同步一次；程序崩溃时最多丢 FLUSH_S 秒。
 写盘出错时记一次错误记录，本次运行不再写盘，内存里照常记录，导出不受影响。
@@ -74,6 +97,17 @@ URGENT = frozenset({"newgame", "picked", "missed_pick", "panel_read", "game_over
 SEGMENT = "segment"  # 段头的 kind
 SEGMENT_UNDO = "segment_undo"  # 撤销换段时插在两段之间的一行
 MARK = "mark:"  # 标记的 kind 前缀
+# collect_stats() 留在 stats.jsonl 里的记录：每分钟一条的统计（recog_stats、grab_stats、download_stats、ocr_check），
+# 识别暂停和恢复（pause、resume）、截取方式和窗口层次的变化（capture、layer），对局的边界和分段（segment、
+# segment_undo、mark:*），以及停在一处时的识别状态（read:menu_idle、read:quiet、read:finish_look）。这样统计能对上
+# 当时在干什么，又不带对局里逐帧的读数（那些在 events.jsonl 里，太大）。read:finish_look 这样记的还很少，照样列上
+STATS_KINDS = frozenset({
+    SEGMENT, SEGMENT_UNDO, "recog_stats", "grab_stats", "pause", "resume", "capture", "layer",
+    "ocr_check", "download_stats", "read:menu_idle", "read:quiet", "read:finish_look", "mark:game_over",
+})
+# collect_stats() 留下的记录里去掉的项：窗口层次（layer）里盖住悬浮窗的那个窗口的类名，那可能是别的程序的窗口。识别记录
+# 本身照旧记着它，随本局和上一局的识别记录导出；统计一取就是最近 12 小时，不把这一项也带上这么久
+STATS_DROP = {"layer": frozenset({"cover_class"})}
 SEGMENT_NAME = re.compile(r"^(\d{8}-\d{6})(?:-(\d+))?\.jsonl$")
 
 # ---------------------------------------------------------------- 脱敏
@@ -145,16 +179,47 @@ def _parse_lines(lines) -> list[dict]:
     return [r for r in (_parse(line) for line in lines if line.strip()) if r is not None]
 
 
+def _stats_kind(record: dict) -> bool:
+    """是不是 collect_stats() 留下的记录：STATS_KINDS 里的，或任何 mark: 标记。"""
+    kind = record.get("kind")
+    return isinstance(kind, str) and (kind in STATS_KINDS or kind.startswith(MARK))
+
+
+def _stats_view(record: dict) -> dict:
+    """collect_stats() 交出去的这一条：去掉 STATS_DROP 里这一类不带的项（另拷一份，原来的那条不动）；没有要去掉的原样返回。"""
+    drop = STATS_DROP.get(record.get("kind"))
+    if not drop or drop.isdisjoint(record):
+        return record
+    return {key: value for key, value in record.items() if key not in drop}
+
+
+def _not_before(value, since: float) -> bool:
+    """记录里的 time（ISO 格式）不早于 since；读不出来的不算。不设上限：系统时间被调回以后，调回以前记的那些时刻比现在
+    还晚，它们正是最近的记录，照样要带上。"""
+    if not isinstance(value, str):
+        return False
+    try:
+        when = datetime.fromisoformat(value).timestamp()
+    except (ValueError, OverflowError, OSError):
+        return False
+    return when >= since
+
+
 def _read_lines(path: Path) -> list[str]:
-    """一段文件里能读的行（原文）；写到一半的半行等跳过，文件读不了时返回空表。
+    """一段文件里能读的行（原文）；写到一半的半行等跳过，文件读不了时返回空表。"""
+    try:
+        return _read_lines_or_raise(path)
+    except OSError:
+        return []
+
+
+def _read_lines_or_raise(path: Path) -> list[str]:
+    """一段文件里能读的行（原文）；写到一半的半行等跳过，文件读不了时抛 OSError。
 
     按「\\n」切行，不用 str.splitlines()：后者还会在 U+2028、U+2029、U+0085 处断开，而 json.dumps(ensure_ascii=False)
     不转义这几个字，含它们的记录会被切成两半、整条丢掉。断电后末尾留下的一串零字节一并去掉。
     """
-    try:
-        text = Path(path).read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return []
+    text = Path(path).read_text(encoding="utf-8", errors="replace")
     return [line for line in (part.strip("\x00") for part in text.split("\n")) if _parse(line) is not None]
 
 
@@ -230,6 +295,13 @@ class GameRecorder:
         with self._lock:
             if self._path is not None:
                 return self
+            # 每个端各写一个文件夹（logs/games/taptap），第一次用时建出来；已经存在（哪怕是同名文件，写盘会报原来的错）
+            # 或建不了时不动，留给下面的写盘处理
+            if not self.folder.exists():
+                try:
+                    self.folder.mkdir(parents=True, exist_ok=True)
+                except OSError:
+                    pass
             self._older = [(p, None) for p in self.segments()[-2:]]
             self._start(reason, info)
             self.prune()
@@ -394,6 +466,62 @@ class GameRecorder:
         meta: dict = {"segments": scope, "since": next((s["start"] for s in scope if s["start"]), None)}
         if error:
             meta["write_error"] = error
+        return records, meta
+
+    def collect_stats(self, hours: float = 12.0) -> tuple[list[dict], dict]:
+        """导出用：识别记录还留着的各段里、最近 hours 小时以内的统计类记录（STATS_KINDS），按时间顺序。
+
+        取文件夹里的全部段（segments()，旧的在前），加上本次运行内存里的段：当前段用还没写盘的行也在内的 _lines，
+        之前的两段有内存行的用内存行。当前段的文件可能不在 segments() 里（写盘出过错时就是这样），这时也带上内存里的
+        当前段；同一个文件只读一次。只留 kind 在 STATS_KINDS 里、或以 "mark:" 开头的记录，时间不早于 self._clock() 往前
+        hours 小时（time 读不出来的不要；系统时间被调回以后比现在还晚的照样留）。哪一段里有留下的记录，就把那一段的段头
+        放在前面，即使段头本身早于这么久。留下的记录去掉 STATS_DROP 里的项（另拷一份，识别记录本身不动）。
+        读文件出错的那一段跳过，说明里另记 errors。读文件、解析都放在锁外做，不卡识别线程写记录。
+
+        说明：{"hours", "since"（第一条的时刻或 None）, "segments"（带上的段数）, "lines"（条数）}；
+        读文件出错时另有 "errors": {文件名: 原因}。
+        """
+        now = self._clock()
+        since = now - hours * 3600.0
+        with self._lock:
+            memory: dict[Path, list[str]] = {}
+            for path, lines in self._older:
+                if lines is not None:
+                    memory[path] = list(lines)
+            if self._path is not None:
+                memory[self._path] = list(self._lines)
+            paths = list(self.segments())
+            seen = set(paths)
+            for path in memory:
+                if path not in seen:
+                    paths.append(path)
+                    seen.add(path)
+            parts = [(path, memory.get(path)) for path in paths]
+        records: list[dict] = []
+        taken = 0
+        errors: dict[str, str] = {}
+        for path, lines in parts:
+            if lines is None:
+                try:
+                    lines = _read_lines_or_raise(path)
+                except OSError as e:
+                    errors[path.name] = f"{type(e).__name__}: {e}"
+                    continue
+            recs = _parse_lines(lines)
+            if not recs:
+                continue
+            picked = [_stats_view(r) for r in recs if _stats_kind(r) and _not_before(r.get("time"), since)]
+            if not picked:
+                continue
+            head = recs[0]
+            if head.get("kind") == SEGMENT and head not in picked:
+                picked.insert(0, head)
+            records.extend(picked)
+            taken += 1
+        meta: dict = {"hours": hours, "since": records[0].get("time") if records else None,
+                      "segments": taken, "lines": len(records)}
+        if errors:
+            meta["errors"] = errors
         return records, meta
 
     # ------------------------------------------------------------ 内部

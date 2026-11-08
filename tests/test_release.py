@@ -56,10 +56,10 @@ def tmpdir() -> tempfile.TemporaryDirectory:
 
 class VersionTest(unittest.TestCase):
     def test_version_format(self):
-        self.assertEqual(version.VERSION, "1.0.0")
+        self.assertEqual(version.VERSION, "1.1.0")
         self.assertRegex(version.VERSION, r"^\d+\.\d+\.\d+$")
-        self.assertEqual(version.file_version(), (1, 0, 0, 0))
-        self.assertEqual(version.version_text(), f"{version.APP_NAME} 1.0.0")
+        self.assertEqual(version.file_version(), (1, 1, 0, 0))
+        self.assertEqual(version.version_text(), f"{version.APP_NAME} 1.1.0")
 
     def test_data_date_from_meta(self):
         with tmpdir() as d:
@@ -117,12 +117,16 @@ class VersionTest(unittest.TestCase):
         self.assertNotIn("开发环境", privacy)  # 给玩家看的隐私说明不写开发环境的情形
         self.assertIn("只在您点击「复制到剪贴板」时把方案复制到剪贴板", privacy)
         self.assertNotIn("设置文件只保存在程序目录下", privacy)
-        self.assertIn("推荐全文、设置和筹码方案文件，以及版本和系统信息", privacy)
-        # 联网两项：下载识别图片；检查和下载新版本（软件内更新，advisor/update.py）：连哪两处、请求里带什么、怎么关
-        self.assertIn("本工具的联网行为有两项。", privacy)
-        for words in ("从吉星派对 WIKI 下载这些图片", "检查和下载新版本", "一天最多一次", "下载镜像 dl.astral-chip-compass.com",
+        self.assertIn("推荐全文、设置和筹码方案文件、错误记录和崩溃记录、", privacy)
+        # 占用记录写明只有什么（advisor/usage.py 的模块说明：不记第三方模块、别的进程）
+        self.assertIn("导出时各线程的占用（只有百分比和拾星助手运行时的文件名、函数名，没有别的程序的信息），以及版本和系统信息", privacy)
+        # 联网三项：下载识别图片；检查和下载新版本（软件内更新，advisor/update.py）：连哪两处、请求里带什么、怎么关；
+        # 发送对局报告（advisor/game_report.py，设置里的开关）
+        self.assertIn("本工具的联网行为有三项。", privacy)
+        for words in ("从吉星派对 WIKI 下载这些图片", "检查和下载新版本", "每次启动约 15 秒后", "下载镜像 dl.astral-chip-compass.com",
                       "api.github.com", "本工具的名字、版本号和源代码地址", "网络地址（IP 地址）", "「启动时自动检查更新」",
-                      "只在您点击「检查更新」时检查"):
+                      "只在您点击「检查更新」时检查", "三是发送对局报告", "「帮助拾星助手改善推荐准确度」",
+                      "本数据仅用于统计和改善拾星助手内置推荐引擎的准确度", "报告里有：", "随机生成的一个编号"):
             with self.subTest(network=words):
                 self.assertIn(words, privacy)
         for old in ("不检查更新", "联网行为只有一项"):
@@ -214,8 +218,8 @@ class VersionTest(unittest.TestCase):
         for words in ("「使用未经授权的第三方程序」", "《用户服务协议》", "封停账号", "风险由您自行承担"):
             with self.subTest(risk=words):
                 self.assertIn(words, risk)
-        # 获取渠道：官方下载的两处（下载镜像上最新版的压缩包、GitHub 上的发布页面）和源代码的地址；隐私：联网的两项（下载识别
-        # 图片、检查和下载新版本），写明连哪两处、自动检查能关
+        # 获取渠道：官方下载的两处（下载镜像上最新版的压缩包、GitHub 上的发布页面）和源代码的地址；隐私：联网的三项（下载识别
+        # 图片、检查和下载新版本、发送对局报告），写明连哪两处、自动检查能关
         from advisor import update
 
         channels = dict(items)["获取渠道"]
@@ -224,8 +228,9 @@ class VersionTest(unittest.TestCase):
             with self.subTest(channels=words):
                 self.assertIn(words, channels)
         privacy = dict(items)["隐私"]
-        for words in ("联网只有两项", "下载识别用的图片", "检查和下载新版本",
-                      f"下载镜像 {update.LATEST_JSON.split('/')[2]} 和 GitHub", "「拾星助手设置」中关掉"):
+        for words in ("联网有三项", "下载识别用的图片", "检查和下载新版本",
+                      f"下载镜像 {update.LATEST_JSON.split('/')[2]} 和 GitHub", "「拾星助手设置」中关掉",
+                      "发送对局报告", "改善推荐准确度"):
             with self.subTest(privacy=words):
                 self.assertIn(words, privacy)
         self.assertNotIn("唯一的联网", privacy)
@@ -881,6 +886,29 @@ class LogbookTest(unittest.TestCase):
         logbook.undo_new_game(g2)
         self.assertEqual(logbook.resumable(), g2)  # 撤销新一局：接回的那一局
 
+    def test_resumable_new_game_gap(self):
+        """最后一条是新的一局（撤销新一局写的那条也算）时也看 GAME_GAP：离现在超过就不接（resumable 为 None，下一次三选一
+        开新的局号），不到就照旧接上。"""
+        g1 = logbook.new_game()
+        logbook._reset_for_tests()
+        self.clock += timedelta(hours=3)
+        self.assertIsNone(logbook.resumable())
+        g2 = logbook.record_offer(State(hero="凛", round=1), {}, "o1")
+        self.assertNotEqual(g2, g1)
+
+        g3 = logbook.new_game()
+        logbook._reset_for_tests()
+        self.clock += timedelta(hours=1)
+        self.assertEqual(logbook.resumable(), g3)
+        self.assertEqual(logbook.record_offer(State(hero="凛", round=2), {}, "o2"), g3)
+
+        logbook.undo_new_game(g3)
+        logbook._reset_for_tests()
+        self.clock += timedelta(hours=3)
+        self.assertIsNone(logbook.resumable())
+        g4 = logbook.record_offer(State(hero="凛", round=3), {}, "o3")
+        self.assertNotEqual(g4, g3)
+
     def test_calibration_due_after_20_games(self):
         for i in range(logbook.CALIBRATION_GAMES):
             logbook.new_game(f"g{i}")
@@ -1141,11 +1169,57 @@ class DiagnosticsTest(unittest.TestCase):
             out = diagnostics.export(None, {}, [], "")
         self.assertNotIn("settings.json", [p.name for p in out.iterdir()])
         self.assertIn("文件过大", json.loads((out / "state.json").read_text(encoding="utf-8"))["settings_files_error"]["settings.json"])
-        with mock.patch.object(Path, "read_bytes", side_effect=PermissionError(13, "拒绝访问")):
+        read = Path.read_bytes
+
+        def locked(path: Path) -> bytes:  # 只锁设置文件：错误记录、崩溃记录没有时不算问题，不能也让它们读不了
+            if path == self.settings / "state.json":
+                raise PermissionError(13, "拒绝访问")
+            return read(path)
+
+        with mock.patch.object(Path, "read_bytes", locked):
             out = diagnostics.export(None, {}, [], "")
         errors = json.loads((out / "state.json").read_text(encoding="utf-8"))["settings_files_error"]
         self.assertEqual(list(errors), ["settings.json"])
         self.assertTrue(errors["settings.json"].startswith("PermissionError"))
+
+    def test_settings_install_hidden(self):
+        """诊断包里的设置文件不带对局报告的本机编号和随机值，都只写「有」「没有」（编号只用来数人数，随机值只用来算编号，
+        都不该随诊断包发出去）。"""
+        install = "0123456789abcdef0123456789abcdef"
+        secret = "fedcba9876543210fedcba9876543210"
+        (self.settings / "state.json").write_text(
+            '{"hero": "凛", "report_install": "%s", "report_secret": "%s", "report_enabled": true}'
+            % (install, secret), encoding="utf-8")
+        out = diagnostics.export(None, {}, [], "")
+        text = (out / "settings.json").read_text(encoding="utf-8")
+        self.assertNotIn(install, text)
+        self.assertNotIn(secret, text)
+        self.assertIn('"report_install": "有"', text)
+        self.assertIn('"report_secret": "有"', text)
+        raw = '{"report_install": "", "report_secret": null}'
+        (self.settings / "state.json").write_text(raw, encoding="utf-8")
+        out = diagnostics.export(None, {}, [], "")
+        self.assertEqual((out / "settings.json").read_text(encoding="utf-8"), raw)  # 没有编号、随机值：原样带上
+
+    def test_snapshot_install_hidden(self):
+        """诊断包 state.json 里的对局快照带着设置的副本（第一张的 settings、第二张的 lanes.<端名>.session.settings）：
+        本机编号和随机值同样只写「有」，不带它们本身。"""
+        install = "0123456789abcdef0123456789abcdef"
+        secret = "fedcba9876543210fedcba9876543210"
+        snapshot = {"settings": {"hero": "凛", "report_enabled": True, "report_install": install,
+                                 "report_secret": secret},
+                    "lanes": {"taptap": {"session": {"settings": {"report_install": install,
+                                                                  "report_secret": secret}}}}}
+        out = diagnostics.export(None, snapshot, [], "")
+        text = (out / "state.json").read_text(encoding="utf-8")
+        self.assertNotIn(install, text)
+        self.assertNotIn(secret, text)
+        state = json.loads(text)
+        self.assertEqual(state["settings"]["report_install"], "有")
+        self.assertEqual(state["settings"]["report_secret"], "有")
+        self.assertEqual(state["lanes"]["taptap"]["session"]["settings"]["report_install"], "有")
+        self.assertEqual(state["lanes"]["taptap"]["session"]["settings"]["report_secret"], "有")
+        self.assertEqual(state["settings"]["hero"], "凛")
 
     def test_settings_dir_line(self):
         """version.txt 的「设置目录」一行紧接在「运行方式」下面；开发版是程序目录（发行版见 tests/test_storage.py）。"""
@@ -1518,11 +1592,14 @@ class BuildReleaseCheckTest(unittest.TestCase):
 
     def test_missing_font(self):
         """皮肤用的字体文件（各套皮肤 Fonts.FILES 里的：思源黑体 Heavy 的子集 ACCHeading-Heavy.otf、Bold 的子集
-        ACCTitle-Bold.otf）不在发行版 app 文件夹的 fonts 里：检查不通过；项目里的字体文件在（打包时拷得到）。"""
+        ACCTitle-Bold.otf，以及繁体界面的 ACCHeadingTC-Heavy.otf、ACCTitleTC-Bold.otf）不在发行版 app 文件夹的 fonts 里：
+        检查不通过；项目里的字体文件在（打包时拷得到）。"""
         self.make_clean()
         fonts = self.br.bundled_fonts()
         self.assertIn("ACCHeading-Heavy.otf", fonts)
         self.assertIn("ACCTitle-Bold.otf", fonts)
+        self.assertIn("ACCHeadingTC-Heavy.otf", fonts)
+        self.assertIn("ACCTitleTC-Bold.otf", fonts)
         for name in fonts:
             self.assertTrue((paths.fonts_dir() / name).is_file(), name)
         for name in fonts:
@@ -1724,7 +1801,7 @@ class BuildReleaseCheckTest(unittest.TestCase):
         self.assertFalse([a for a in cmd if a.startswith(("--company-name", "--windows-company-name"))])
         # 根目录的启动程序的版本信息和真正的程序取同一份（version_strings）
         info = br.version_strings()
-        self.assertEqual(info["version"], "1.0.0.0")
+        self.assertEqual(info["version"], "1.1.0.0")
         self.assertEqual(sorted(info), ["copyright", "description", "product", "version"])
         self.assertIn(version.AUTHOR, info["copyright"])
         for arg in (f"--product-name={info['product']}",
@@ -1732,7 +1809,7 @@ class BuildReleaseCheckTest(unittest.TestCase):
                     f"--file-version={info['version']}", f"--product-version={info['version']}"):
             self.assertIn(arg, cmd)
         header = br.launcher_header()
-        for line in ("#define ACC_VERSION_NUMS 1,0,0,0", '#define ACC_VERSION_TEXT "1.0.0.0"',
+        for line in ("#define ACC_VERSION_NUMS 1,1,0,0", '#define ACC_VERSION_TEXT "1.1.0.0"',
                      '#define ACC_PRODUCT "Astral Chip Compass"',
                      '#define ACC_DESCRIPTION "Astral Chip Compass"', f'#define ACC_COPYRIGHT "{info["copyright"]}"',
                      f'#define ACC_INTERNAL_NAME "{version.APP_NAME}"',
@@ -1865,6 +1942,24 @@ class BuildReleaseCheckTest(unittest.TestCase):
         passing["selfcheck"]["build"] = None
         self.assertEqual(self.br.smoke_problems(passing),
                          ["自检读不到打包信息（app\\build.json）：「关于」窗口和诊断包里会看不出是哪一个包"])
+
+    def test_smoke_problems_ocr_render(self):
+        """自检「识别合成图」在程序里不算关键项，打包时要求通过（发行版的 OpenCV 是精简编译的）；自检结果里没有这一项（加这项
+        检查以前打的包）时不查。"""
+        name = diagnostics.OCR_RENDER_CHECK
+        capture = {"name": diagnostics.WINDOW_CAPTURE_CHECK, "ok": True, "critical": False}
+        home = "X:\\release-test\\appdata\\Roaming\\AstralChipCompass"
+
+        def result(*checks):
+            return {"selfcheck_exit": 0, "launches": [], "settings_dir_expected": home,
+                    "selfcheck": {"ok": True, "frozen": True, "settings_dir": home, "storage_fallback": None,
+                                  "checks": [capture, *checks]}}
+
+        self.assertEqual(self.br.smoke_problems(result({"name": name, "ok": True, "critical": False})), [])
+        failed = {"name": name, "ok": False, "critical": False, "detail": "RuntimeError: 只读到 3 段文字，应有 8 段以上"}
+        self.assertEqual(self.br.smoke_problems(result(failed)),
+                         [f"自检「{name}」未通过：RuntimeError: 只读到 3 段文字，应有 8 段以上"])
+        self.assertEqual(self.br.smoke_problems(result()), [])
 
     def test_smoke_problems_settings_dir(self):
         """试启动时设置目录要正好是指定的个人目录（.tmp 下）：发行版没认出自己是发行版、设置目录不对、退回了程序文件夹，

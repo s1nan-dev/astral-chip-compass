@@ -26,6 +26,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ... import hub
+from .. import lang, names
 from ..text import tip_html
 from ..theme import COMMON as C
 from ..theme import OVERLAY as O
@@ -77,7 +79,7 @@ def build(ov) -> None:
         chrome.cut_corners(card.toggle)  # 折叠按钮：皮肤要切角时画成切角的框；别的皮肤照样式表画
     ov._notice_boxes = {
         "global": ov.global_notice_box, "recog": ov.recog_notice_box, "recog_top": ov.recog_top_box,
-        "advice": ov.advice_notice_box, "owned": ov.owned_notice_box,
+        "advice": ov.advice_notice_box, "owned": ov.owned_notice_box, "scheme": ov.scheme_notice_box,
     }
 
     build_toolbar(ov, box)
@@ -97,13 +99,13 @@ def build_head(ov, box) -> None:
     ov.summary.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
     ov.head_spacer = QWidget()
     ov.head_spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-    ov.quick_add = _button("补录筹码", accent="primary")
+    ov.quick_add = _button(lang.t("补录筹码"), accent="primary")
     ov.quick_add.setObjectName("quickAdd")
     ov.quick_add.clicked.connect(ov.open_add)
     ov.toggle_btn = _button(EXPAND_ALL)
     ov.toggle_btn.setObjectName("toggleAll")  # 皮肤的样式表可以单独给它样子
     ov.toggle_btn.clicked.connect(ov.toggle_expanded)
-    close = ov.close_btn = _button("×", tip="退出拾星助手")
+    close = ov.close_btn = _button("×", tip=lang.t("退出拾星助手"))
     close.setObjectName("closeButton")  # 皮肤的样式表可以单独给它样子
     # 只有一个字符，左右内边距比其他按钮小（只作用于按钮本身，悬停说明的内边距照样式表里的 QToolTip）
     ov._skinned(lambda w=close: _own_style(w, f"padding: {O.CLOSE_PADDING}"))
@@ -113,9 +115,16 @@ def build_head(ov, box) -> None:
     ov.head_lead.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
     ov.head_lead_stretch = QWidget()
     ov.head_lead_stretch.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+    # 同时识别时标题栏最左边的小标签（「Steam」「TapTap」）：两张悬浮窗的标题一样，靠它分得出跟的是哪个端。只在同时
+    # 识别时显示，只选一个端时藏着、不占地方。TagLabel 不接鼠标，按在字上照样能拖动悬浮窗
+    ov.lane_tag = TagLabel("", "")
+    ov.lane_tag.setObjectName("laneTag")  # 样式表按它给各套皮肤画小胶囊
+    ov.lane_tag.setTextFormat(Qt.PlainText)
+    ov.lane_tag.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)  # 别被摘要挤窄
+    ov.lane_tag.hide()
     for w in (ov.head_lead, ov.head_lead_stretch):
         w.hide()
-    for w in (ov.head_lead, ov.head_lead_stretch, title, ov.summary, ov.head_spacer, ov.quick_add,
+    for w in (ov.lane_tag, ov.head_lead, ov.head_lead_stretch, title, ov.summary, ov.head_spacer, ov.quick_add,
               ov.toggle_btn, close):
         head.addWidget(w, 1 if w is ov.summary else 0)
     # 面板画底纹时要看标题栏这一行的几个控件（_Panel.head）
@@ -139,7 +148,7 @@ def build_global(ov, box) -> None:
 
 def build_recog(ov, box) -> None:
     """「识别」卡片：状态胶囊（角色胶囊在里面，地图胶囊可点击）、地图选择行、新一局（撤销）、不支持的情况。"""
-    recog = ov.recog_card = Card("recog", "识别")
+    recog = ov.recog_card = Card("recog", lang.t("识别"))
     recog.toggle_clicked.connect(lambda: ov._toggle_card("recog"))
     # 对局中途判定的新一局（可撤销）和截取方式的提示排在卡片最上面
     ov.recog_top, ov.recog_top_box = _column_widget(5)
@@ -151,14 +160,17 @@ def build_recog(ov, box) -> None:
     ov.status_flow = FlowLayout(ov.status_box, 4, 4)
     ov.hero_state = Pill()
     ov.hero_state.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)  # 一行写完
-    ov.hero_restore = _button("恢复自动识别")
+    ov.hero_restore = _button(lang.t("恢复自动识别"))
     ov.hero_restore.clicked.connect(ov._hero_restore_clicked)
     ov.hero_restore.hide()
     ov.map_box = MapPill()
-    ov.map_box.addItem(MAP_AUTO)
-    ov.map_box.addItems(ov.db.maps)
+    # 显示名照繁体界面，程序用的简体地图名放在 itemData；选择时按 itemData 交给 Session
+    ov.map_box.addItem(lang.t(MAP_AUTO), MAP_AUTO)  # 显示名照界面语言，itemData 仍是交回自动识别的值
+    for map_name in ov.db.maps:
+        ov.map_box.addItem(names.map_in(ov.db, map_name), map_name)
     draw_combo_rows(ov.map_box)  # 下拉列表每一行自己画（鼠标所在的行亮灰圆角框，当前的值左边一根短条）
-    ov.map_box.currentTextChanged.connect(ov._map_changed)
+    ov.map_box.currentIndexChanged.connect(
+        lambda index: ov._map_changed(ov.map_box.itemData(index) or MAP_AUTO))
     for widget in (ov.hero_state, ov.hero_restore, ov.map_box):
         ov.status_flow.addWidget(widget)
     recog.body_box.addWidget(ov.status_box)
@@ -167,7 +179,7 @@ def build_recog(ov, box) -> None:
     ov.map_prompt = WrapLabel("")  # 自动换行时不拆开「打开」「任务栏」等词
     ov.map_buttons = _grid()
     ov.map_dismiss = _button(
-        DISMISS, tip="不打开任务栏，关闭本条提示（这一局不再提示；也可点击上方的地图下拉框手动指定地图）")
+        DISMISS, tip=lang.t("不打开任务栏，关闭本条提示（这一局不再提示；也可点击上方的地图下拉框手动指定地图）"))
     ov.map_dismiss.hide()
     map_line.addWidget(ov.map_prompt, 1)
     map_line.addLayout(ov.map_buttons)
@@ -182,8 +194,11 @@ def build_recog(ov, box) -> None:
 
 def build_scheme(ov, box) -> None:
     """「筹码方案」卡片：角色下拉框（「称号 · 角色名」，按六类排，每一类前面一行不能选的组名「── 物理主C ──」）在上、
-    方案下拉框在下（等宽、左对齐，都是默认样式、不加颜色），右边并排「编辑方案」「导入/导出」两个按钮（图标在上、字在下），
-    都跨两行：高度等于两个下拉框加中间的间距。"""
+    方案下拉框在下（等宽、左对齐，都是默认样式、不加颜色），右边并排「编辑方案」「导入/导出」「作业站」三个一样宽的按钮
+    （图标在上、字在下，字都写一行；宽度都取最宽的一个），都跨两行：高度等于两个下拉框加中间的间距。下拉框占
+    剩下的宽度，最长的角色名要放得下（放不下的皮肤加宽悬浮窗，皮肤的 WIDTH）。「作业站」打开浏览器里当前角色的方案列表
+    （ov.open_hub("plans")）。hub.ENABLED 为 False 时「作业站」按钮不显示（照样放在网格里，看不见的部件不占位，那一列
+    也不加间距），另外两个按钮按它们两个取一样的宽度。"""
     scheme = ov.scheme_card = Card("scheme", SCHEME_CARD)
     scheme.toggle_clicked.connect(lambda: ov._toggle_card("scheme"))
     ov.hero_box = QComboBox()
@@ -199,11 +214,20 @@ def build_scheme(ov, box) -> None:
     for combo in (ov.hero_box, ov.scheme_box):
         draw_combo_rows(combo)
     ov.edit_btn = IconTextButton(SCHEME_EDIT_ICON, SCHEME_EDIT, SCHEME_EDIT_TIP)
-    ov.edit_btn.setProperty("tool", "edit")  # 皮肤的样式表可以给两个按钮不同的底色（[tool="share"]）
+    ov.edit_btn.setProperty("tool", "edit")  # 皮肤的样式表可以给三个按钮不同的底色（[tool="share"]、[tool="hub"]）
     ov.edit_btn.clicked.connect(ov.dialogs.open_editor)
     ov.share_btn = IconTextButton(SCHEME_SHARE_ICON, SHARE_BTN, SHARE_TIP)
     ov.share_btn.setProperty("tool", "share")
     ov.share_btn.clicked.connect(ov.dialogs.open_share)
+    ov.hub_btn = IconTextButton(SCHEME_HUB_ICON, HUB_BTN, HUB_TIP)
+    ov.hub_btn.setProperty("tool", "hub")
+    ov.hub_btn.clicked.connect(lambda: ov.open_hub("plans"))
+    if hub.ENABLED:
+        IconTextButton.same_width(ov.edit_btn, ov.share_btn, ov.hub_btn)
+    else:
+        # 放进网格之前先藏：放进去以后父部件是卡片（不落成单独的顶层部件），悬浮窗显示时它也不跟着显示
+        ov.hub_btn.hide()
+        IconTextButton.same_width(ov.edit_btn, ov.share_btn)
     ov.scheme_body = QWidget()
     grid = QGridLayout(ov.scheme_body)
     grid.setContentsMargins(0, 0, 0, 0)
@@ -213,8 +237,12 @@ def build_scheme(ov, box) -> None:
     grid.addWidget(ov.scheme_box, 1, 0)
     grid.addWidget(ov.edit_btn, 0, 1, 2, 1)
     grid.addWidget(ov.share_btn, 0, 2, 2, 1)
+    grid.addWidget(ov.hub_btn, 0, 3, 2, 1)
     grid.setColumnStretch(0, 1)
     scheme.body_box.addWidget(ov.scheme_body)
+    # 按地图换用了方案的那一行（方案下拉框下面）：换回保存的方案、这一局不再按地图自动换
+    ov.scheme_notices, ov.scheme_notice_box = _column_widget(5)
+    scheme.body_box.addWidget(ov.scheme_notices)
     ov.scheme_msg = _message_label()  # 切换方案后的一次性提示
     scheme.body_box.addWidget(ov.scheme_msg)
     box.addWidget(scheme)
@@ -222,7 +250,7 @@ def build_scheme(ov, box) -> None:
 
 def build_advice(ov, box) -> None:
     """「推荐」卡片：三选一的推荐（选项块）和附注、改正栏；关闭后的「已选」和「未选择首推的原因」、上一次推荐。"""
-    advice = ov.advice_card = Card("advice", "推荐")
+    advice = ov.advice_card = Card("advice", lang.t("推荐"))
     advice.toggle_clicked.connect(lambda: ov._toggle_card("advice"))
     # 「正在刷新」：刚点了刷新、新的候选筹码还没读全时紧跟在区域名后面（REFRESHING）
     ov.refresh_pill = Pill(REFRESHING.segments(), REFRESHING.tone, point_size=C.FONT_S)
@@ -250,16 +278,26 @@ def build_advice(ov, box) -> None:
     ov.picked_label = _rich_label("")
     advice.body_box.addWidget(ov.picked_label)
     ov.question, question_box = _column_widget(4)
+    # 问句那一行：问句占满剩下的宽，「×」靠最右端
+    question_line, question_line_lay = _row_widget(6)
     ov.question_label = _rich_label("")
+    ov.feedback_dismiss = _button(FEEDBACK_DISMISS, tip=lang.t(FEEDBACK_DISMISS_TIP))
+    ov.feedback_dismiss.clicked.connect(lambda _=False: ov.advice.dismiss_feedback())
+    # 只有一个字，左右内边距照标题栏的「×」；不用 closeButton 这个对象名（那是标题栏专用的）
+    ov._skinned(lambda w=ov.feedback_dismiss: _own_style(w, f"padding: {O.CLOSE_PADDING}"))
+    question_line_lay.addWidget(ov.question_label, 1)
+    question_line_lay.addWidget(ov.feedback_dismiss, 0, Qt.AlignVCenter)
     reasons, reasons_line = _row_widget(6)
     ov.reason_buttons: list[QPushButton] = []
     for text in FEEDBACK_REASONS:
-        btn = _button(text, tip=FEEDBACK_TIP.format(reason=text))
+        # 「想试别的玩法」不是推荐不准，悬停说明另写（按原因比，不按排在第几个）
+        tip = FEEDBACK_TRY_TIP if text == FEEDBACK_TRY else FEEDBACK_TIP.format(reason=text)
+        btn = _button(lang.t(text), tip=lang.t(tip))
         btn.clicked.connect(lambda _=False, r=text: ov.advice.submit_feedback(r))
         ov.reason_buttons.append(btn)
         reasons_line.addWidget(btn)
     reasons_line.addStretch(1)
-    question_box.addWidget(ov.question_label)
+    question_box.addWidget(question_line)
     question_box.addWidget(reasons)
     advice.body_box.addWidget(ov.question)
     ov.stale, ov.stale_box = _column_widget(0)  # 回看上一次推荐（全部展开时）
@@ -273,8 +311,8 @@ def build_advice(ov, box) -> None:
     ov.fix_label.setTextInteractionFlags(Qt.NoTextInteraction)
     ov._skinned(lambda w=ov.fix_label: _own_style(w, f"color:{C.DIM_COLOR}"))  # 固定文字暗色
     ov.fix_box = ov._chip_combo()
-    fix_ok = ov.fix_ok = _button("确定")
-    fix_cancel = ov.fix_cancel = _button("取消")
+    fix_ok = ov.fix_ok = _button(lang.t("确定"))
+    fix_cancel = ov.fix_cancel = _button(lang.t("取消"))
     fix.addWidget(ov.fix_label)
     fix.addWidget(ov.fix_box, 1)
     fix.addWidget(fix_ok)
@@ -289,25 +327,25 @@ def build_advice(ov, box) -> None:
 def build_owned(ov, box) -> None:
     """「已有筹码」卡片：卡片头「已有筹码 6 个」「＋ 补录筹码」；补录栏、补录行、提示、地图发放的筹码；
     主体左边是 3-4-3 图标格子，右边是筹码小卡片（随筹码数往下延伸，超出屏幕时在卡片内滚动）。"""
-    owned = ov.owned_card = Card("owned", "已有筹码")
+    owned = ov.owned_card = Card("owned", lang.t("已有筹码"))
     owned.toggle_clicked.connect(lambda: ov._toggle_card("owned"))
     ov.owned_count = _rich_label("", wrap=False)
     ov.owned_count.setObjectName("ownedCount")  # 皮肤的样式表可以把它写在深色胶囊里
     owned.add_title_widget(ov.owned_count)
-    ov.add_btn = _button("＋ 补录筹码", tip=ADD_TIP)
+    ov.add_btn = _button(lang.t("＋ 补录筹码"), tip=ADD_TIP)
     ov.add_btn.setObjectName("addOwned")  # 皮肤的样式表可以单独给它样子
     ov.add_btn.clicked.connect(ov.open_add)
     owned.add_header_widget(ov.add_btn)
     # 补录栏：点「＋ 补录筹码」按钮后出现，可输入筹码名搜索
     ov.add_row, add = _row_widget()
-    ov.add_label = QLabel("补录筹码")
+    ov.add_label = QLabel(lang.t("补录筹码"))
     ov.add_label.setTextInteractionFlags(Qt.NoTextInteraction)
     ov._skinned(lambda w=ov.add_label: _own_style(w, f"color:{C.DIM_COLOR}"))
     ov.add_box = ov._chip_combo()
     ov.add_box.lineEdit().returnPressed.connect(ov._add_confirm)
-    add_ok = _button("确定")
+    add_ok = _button(lang.t("确定"))
     add_ok.clicked.connect(ov._add_confirm)
-    add_cancel = _button("取消")
+    add_cancel = _button(lang.t("取消"))
     add_cancel.clicked.connect(ov.close_add)
     add.addWidget(ov.add_label)
     add.addWidget(ov.add_box, 1)
@@ -380,7 +418,7 @@ def build_toolbar(ov, box) -> None:
     """底栏（全部展开时）：只有「设置」，靠左（识别模式、热键、导出诊断、关于都在设置窗口里）。
     收回一行的按钮在标题栏（「全部折叠」）。"""
     ov.toolbar, tools = _row_widget()
-    ov.settings_btn = _button("设置", tip=SETTINGS_TIP)
+    ov.settings_btn = _button(lang.t("设置"), tip=SETTINGS_TIP_HANT if lang.HANT_ENABLED else SETTINGS_TIP)
     ov.settings_btn.setObjectName("settingsButton")  # 皮肤的样式表可以单独给它样子
     ov.settings_btn.clicked.connect(ov.dialogs.show_settings)
     ov._skinned(ov._settings_glyph)  # 皮肤要时字前面一个齿轮图标
@@ -392,13 +430,14 @@ def build_toolbar(ov, box) -> None:
 # 一行显示（四张卡片都收起）时，各卡片出现与否：卡片 key → 判断（ov, view, keys, prompt）。
 # 全部展开（full）时四张卡片都显示，不看这张表。键的顺序就是界面上卡片的先后（同 CARD_KEYS）。
 #   recog、owned：有当前要显示的提示行（keys）时出现；
-#   scheme：三选一出现但角色待识别、推荐暂停时整张出现，供选择角色；
+#   scheme：三选一出现但角色待识别、推荐暂停时整张出现，供选择角色；这一局按地图换着方案（「本局按地图换用了……」那一行）
+#   时整张出现，带「换回原来的」；
 #   advice：三选一显示中，或要问「未选择首推的原因」（只问 QUESTION_LINE_MS 那么久，含刚记录时的一下；prompt），或 keys
 #   不空。keys 比「只看提示行」多三种键（live:、question:、fix），一行显示时它们只在前两项成立时才出现，所以结果和只看
 #   提示行一样。
 CARD_WHEN_COLLAPSED = {
     "recog": lambda ov, view, keys, prompt: bool(keys),
-    "scheme": lambda ov, view, keys, prompt: ov.live_state.hero_needed,
+    "scheme": lambda ov, view, keys, prompt: ov.live_state.hero_needed or bool(keys),
     "advice": lambda ov, view, keys, prompt: ov.live_state.on or prompt or bool(keys),
     "owned": lambda ov, view, keys, prompt: bool(keys),
 }
@@ -408,7 +447,8 @@ def apply_mode(ov, view) -> None:
     """按「一行 / 全部展开」和各卡片的折叠状态决定各部分显示与否。view 是这一轮刷新的快照。
 
     一行显示时，卡片只在有提示时出现（三选一的推荐、请用户选地图或补录等），而且只显示那几行提示；三选一出现但角色待识别
-    （推荐暂停）时「筹码方案」卡片整张出现，供选择角色。全部展开时四张卡片都显示。卡片收起着、又出现了新的提示时
+    （推荐暂停）时「筹码方案」卡片整张出现，供选择角色；这一局按地图换着方案时也整张出现（那一行带「换回原来的」）。全部展开时
+    四张卡片都显示。卡片收起着、又出现了新的提示时
     自动展开（用户收起时已在显示的提示除外）。各卡片「一行显示时出现与否」的规则在 CARD_WHEN_COLLAPSED。"""
     full = ov._expanded
     waiting = ov._waiting_text(over=view.game_over)
@@ -428,7 +468,7 @@ def apply_mode(ov, view) -> None:
     ov.quick_add.setVisible(not full and source is not None)
     _set_accent(ov.add_btn, "primary" if source else "")
     if source:
-        tip = EXTRA_CHIP_TIP.format(source=source)
+        tip = EXTRA_CHIP_TIP.format(source=source)  # 来源（OwnedCard.extra_chip_source）交过来时已按界面语言写好
         _set_tip(ov.quick_add, tip)
         _set_tip(ov.add_btn, tip)
     else:
@@ -443,7 +483,8 @@ def apply_mode(ov, view) -> None:
 
     # 「推荐」卡片要用的状态先算出来（表里 advice 一行用 prompt）：要问/刚记录「未选择首推的原因」时，一行显示也出现。一行
     # 显示时要问的那一块只挂 QUESTION_LINE_MS（AdviceCard.ask_until），到点不点就收起（这一次不记原因）；全部展开时照旧挂到
-    # 下一次三选一（收起以后再全部展开也照旧显示）
+    # 下一次三选一（收起以后再全部展开也照旧显示）。点了问句右边的「×」（AdviceCard.dismiss_feedback）以后 question_state()
+    # 为 None，两种显示方式都不再问
     live = ov.live_state.on
     question = ov.advice.question_state()
     flash = question == "done" and time.monotonic() < ov.advice.feedback_until
@@ -467,11 +508,15 @@ def apply_mode(ov, view) -> None:
     ov._place_card(ov.recog_card, full or CARD_WHEN_COLLAPSED["recog"](ov, view, keys, prompt), keys,
                    ov._recog_summary())
 
-    # ---- 筹码方案：一行显示时平时不出现；三选一出现但角色待识别（推荐暂停）时出现，供选择角色（收起着也自动展开）
+    # ---- 筹码方案：一行显示时平时不出现；三选一出现但角色待识别（推荐暂停）时出现，供选择角色；这一局按地图换着方案时也
+    # 出现（那一行带「换回原来的」，收起着也自动展开）
     keys = {"hero"} if ov.live_state.hero_needed else set()
+    notes = notices.keys("scheme")
+    keys |= notes
+    ov.scheme_notices.setVisible(bool(notes))
     ov._set_message(ov.scheme_msg, ov._area_message("scheme", waiting) if full else "")
     ov._place_card(ov.scheme_card, full or CARD_WHEN_COLLAPSED["scheme"](ov, view, keys, prompt), keys,
-                   ov.scheme.summary(view.hero))
+                   ov.scheme.summary(view.hero, view))
 
     # ---- 推荐
     keys = set()
@@ -485,6 +530,7 @@ def apply_mode(ov, view) -> None:
     ov.question.setVisible(not live and question is not None and (full or prompt))
     for btn in ov.reason_buttons:
         btn.setVisible(question == "ask")
+    ov.feedback_dismiss.setVisible(question == "ask")
     stale = not live and full and ov.advice.last_ev is not None
     if stale:
         ov.advice.show_stale(view)

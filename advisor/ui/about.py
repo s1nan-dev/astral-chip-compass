@@ -31,7 +31,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import chrome, theme
+from . import chrome, lang, theme
 from .text import linkify
 from .theme import ABOUT as L
 from .window_base import SkinnedWindow
@@ -49,6 +49,7 @@ HEADING_MARK = "◆"  # 皮肤要求时各节标题前面的小菱形（AboutLoo
 LAYOUTS = {"default": "_build", "panel": "_build_panel", "plain": "_build_plain", "card": "_build_card",
            "scroll": "_build_scroll", "accordion": "_build_accordion"}
 VERSION_SECTION = "版本"  # 「版本」一节（accordion 排法写在顶上的版本卡里，其余各节一行一行）
+HANT_KEEP = ("VERSION_SECTION",)  # 用来和 version.about_sections() 的节名比，必须简体
 SCREEN_MARGIN = 40  # 按屏幕可用高度缩小时，给系统标题栏和边框留的高度（自己画外框时不留）
 
 
@@ -66,14 +67,14 @@ def about_html(sections: list[tuple[str, str]]) -> str:
     parts = []
     for title, text in sections:
         if title:
-            name = html.escape(title)
+            name = html.escape(lang.t(title))
             if L.HEADING_BG:  # 皮肤把小标题写成标签的样子（底色只铺在字后面）
                 name = f'<span style="background-color:{L.HEADING_BG}">&nbsp;{name}&nbsp;</span>'
             if L.HEADING_MARK:  # 皮肤在小标题前面加几颗小菱形
                 marks = "".join(f'<span style="color:{c}">{HEADING_MARK}</span>' for c in L.HEADING_MARK)
                 name = f"{marks}&nbsp;{name}"
             parts.append(f'<h3 style="color:{L.HEADING_COLOR};margin:{L.HEADING_MARGIN}{font}">{name}</h3>')
-        parts.append(f'<p style="margin:{L.PARAGRAPH_MARGIN}">{linkify(text)}</p>')
+        parts.append(f'<p style="margin:{L.PARAGRAPH_MARGIN}">{linkify(lang.t(text))}</p>')
     return "".join(parts)
 
 
@@ -128,7 +129,7 @@ class _VersionCard(QFrame):
         col = QVBoxLayout()
         col.setSpacing(1)
         for i, line in enumerate(self.lines):
-            label = QLabel(line)
+            label = QLabel(lang.t(line))
             label.setTextFormat(Qt.PlainText)
             label.setTextInteractionFlags(Qt.NoTextInteraction)
             label.setWordWrap(i > 0)
@@ -223,10 +224,10 @@ class _Fold(QFrame):
         from . import theme
 
         self.title, self.plain = title, text
-        self.head = _FoldHead(title, color)
+        self.head = _FoldHead(lang.t(title), color)
         self.head.clicked.connect(lambda: on_click(self))
         c = theme.COMMON
-        self.body = QLabel(f'<div style="color:{c.SOFT_COLOR}; line-height:140%">{linkify(text)}</div>')
+        self.body = QLabel(f'<div style="color:{c.SOFT_COLOR}; line-height:140%">{linkify(lang.t(text))}</div>')
         self.body.setTextFormat(Qt.RichText)
         self.body.setWordWrap(True)
         self.body.setOpenExternalLinks(True)  # 点链接用系统默认浏览器打开（用户自己点才打开）
@@ -412,7 +413,7 @@ class AboutDialog(SkinnedWindow, chrome.HideNotice, QDialog):
         sections = list(self._sections)
         self._lead_texts = [text for title, text in sections if not title]
         for text in self._lead_texts:
-            lead = QLabel(f'<div style="color:{c.TEXT_COLOR}; line-height:140%">{linkify(text)}</div>')
+            lead = QLabel(f'<div style="color:{c.TEXT_COLOR}; line-height:140%">{linkify(lang.t(text))}</div>')
             lead.setObjectName("aboutLead")
             lead.setTextFormat(Qt.RichText)
             lead.setWordWrap(True)
@@ -430,7 +431,7 @@ class AboutDialog(SkinnedWindow, chrome.HideNotice, QDialog):
             self.version_card = _VersionCard(lines[:card])
             body.addWidget(self.version_card)
             for line in lines[card:]:
-                note = QLabel(line)
+                note = QLabel(lang.t(line))
                 note.setTextFormat(Qt.PlainText)
                 note.setTextInteractionFlags(Qt.NoTextInteraction)
                 note.setWordWrap(True)
@@ -525,7 +526,7 @@ class AboutDialog(SkinnedWindow, chrome.HideNotice, QDialog):
 
     def _mark_toc(self, title: str | None) -> None:
         for name, item in getattr(self, "toc", {}).items():
-            item.set_current(name == title)
+            item.set_current(name == title or lang.t(name) == title)
 
     def _sync_toc(self, *_) -> None:
         """正文滚动了：目录标出最上面露出来的那一节（滚到底时为最后一节）。"""
@@ -599,7 +600,7 @@ class AboutDialog(SkinnedWindow, chrome.HideNotice, QDialog):
         block = doc.begin()
         while block.isValid():
             # 标题前面皮肤加的小菱形（HEADING_MARK）不算
-            if block.text().strip().lstrip(HEADING_MARK).strip().replace(" ", "") == title:
+            if block.text().strip().lstrip(HEADING_MARK).strip().replace(" ", "") == lang.t(title):
                 break
             block = block.next()
         else:
@@ -653,8 +654,8 @@ def toc_html(sections: list[tuple[str, str]]) -> str:
     for title, text in sections:
         if title:
             parts.append(f'<h3 style="color:{L.HEADING_COLOR};margin:{L.HEADING_MARGIN};font-style:italic{font}">'
-                         f"{html.escape(title)}</h3>")
-        parts.append(f'<p style="margin:{L.PARAGRAPH_MARGIN}">{linkify(text)}</p>')
+                         f"{html.escape(lang.t(title))}</h3>")
+        parts.append(f'<p style="margin:{L.PARAGRAPH_MARGIN}">{linkify(lang.t(text))}</p>')
     return "".join(parts)
 
 
@@ -702,7 +703,7 @@ class _TocItem(QAbstractButton):
     def __init__(self, number: str, title: str):
         super().__init__()
         self.number = number
-        self.setText(title)
+        self.setText(lang.t(title))  # 显示的标题照界面语言；找那一节、标出当前项按 AboutDialog.toc 的键（简体节名）
         self.current = False
         self.setCursor(Qt.PointingHandCursor)
         self.setFocusPolicy(Qt.StrongFocus)
@@ -749,3 +750,6 @@ class _TocItem(QAbstractButton):
         p.drawText(text_rect, Qt.AlignVCenter | Qt.AlignLeft,
                    QFontMetricsF(font).elidedText(self.text(), Qt.ElideRight, text_rect.width()))
         p.end()
+
+
+lang.localize(globals())

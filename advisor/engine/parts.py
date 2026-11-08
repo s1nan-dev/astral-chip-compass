@@ -1,8 +1,10 @@
 """打分的各分项：一个筹码在给定的已有筹码、轮次、地图下的分项（Part）和总分（score），不含前瞻。
 
-分项 = 游戏内置推荐分 × official.scale + 适配分（玩家思路或自动层、组合、队友、难度、收入折算）+ 推荐流派分，
-另有不加分的职业倾向说明。各分项的先后由 _build_parts 定：玩家思路、循环往复、自动层三者只取其一；带「已持有」条件的
-规则不再叠加组合；治愈来源折算排在组合之后；方案模式不加推荐流派分；收入折算要看到前面所有分项；职业倾向排在最后。
+分项 = 适配分（玩家思路或自动层、组合、队友、难度、收入折算）+ 推荐流派分，另有不加分的职业倾向说明。
+游戏内置推荐分不计入总分（official.scale 为 0）时连这几项也不列，公式留着只用来判断游戏的推荐角标。
+各分项的先后由 _build_parts 定：玩家思路、循环往复、自动层三者只取其一；带「已持有」条件的规则不再叠加组合；
+开套预判、美工刀按还没有治愈来源算的两项排在组合之后；方案模式不加推荐流派分；收入折算要看到前面所有分项；
+职业倾向排在最后。
 总分和收入折算的 base 都按这个先后求和，先后会影响浮点末位，调整时要连同基准一起核对。
 之后选到某筹码的概率（美工刀、治愈来源、配套筹码三个预判）在 chances，这里只把概率折成分项。
 """
@@ -15,8 +17,9 @@ from ..data import LEVEL_NIGHTMARE, NORMAL, TIER_LABEL, TIERS, Chip, Rule
 from ..pool import expected_best, expected_max_with, owned_schools, player_pool
 from .advice_text import (SCHEME_TIER_WORD, SHORT_LIMIT, chance_text, fill_mates_short, free_short, mates_short,
                           origin_short, origin_text, shown_int)
-from .chances import (HEAL_DISCOUNT_ORIGIN, HEAL_DISCOUNT_REASON, HEAL_DISCOUNT_SHORT, has_heal_source, heal_chance,
-                      heal_knife, knife_chance, knife_school_bonus, layer_value, partner_chance)
+from .chances import (HEAL_ADVANCE_ORIGIN, HEAL_ADVANCE_REASON, HEAL_ADVANCE_SHORT, HEAL_DISCOUNT_ORIGIN,
+                      HEAL_DISCOUNT_REASON, HEAL_DISCOUNT_SHORT, has_heal_source, heal_chance, heal_knife, knife_chance,
+                      knife_school_bonus, layer_value, partner_chance)
 from .context import (harmonic, hero_classes, keep_count, next_sources, pool_and_dists, reroll_keep,
                       reward_rounds_left, task_tiers)
 
@@ -159,26 +162,28 @@ def _build_parts(sc: Scorer, name: str, owned, rnd: int | None, map_name) -> lis
     owned = tuple(n for n in owned if n in db.chips)
     owned_set = frozenset(owned)
     s = db.rules["synergy"]
-    out = official_parts(sc, name, owned, rnd)
-    tendency = _tendency_part(sc, chip, out)
+    # 内置分不计入总分时（[official] scale 为 0）不列这几项：分值都是 0，玩家会看到不再起作用的理由。
+    # 游戏推荐角标另按原值判断（official_raw），和这里无关。
+    scaled = db.rules["official"].get("scale", 1.0) != 0
+    out = official_parts(sc, name, owned, rnd) if scaled else []
+    tendency = _tendency_part(sc, chip, out) if scaled else None
     layer: list[Part] = []
 
     player, cond = _player_match(sc, name, owned_set, rnd, map_name)
-    discount = None  # 美工刀的治愈来源折算（_heal_discount），排在组合规则之后
+    heal: list[Part] = []  # 美工刀按「还没有治愈来源」算的两项（_heal_parts），排在组合规则之后
     if player:
         layer.append(player)
     elif name == db.rules["endless_cycle"]["chip"]:
         layer.extend(_endless_parts(sc, owned, rnd, map_name))
     else:
-        auto, discount = _auto_parts(sc, name, owned_set, rnd, map_name)
+        auto, heal = _auto_parts(sc, name, owned_set, rnd, map_name)
         layer.extend(auto)
     if not cond:  # 玩家思路里带「已持有」「有来源」条件的规则已经考虑了组合关系，不再叠加组合规则
         layer.extend(_combo_parts(sc, name, owned_set, map_name))
-        charge = _charge_anticipation(sc, name, owned_set, map_name)
-        if charge:
-            layer.append(charge)
-    if discount is not None:
-        layer.append(discount)
+        school = _school_anticipation(sc, name, owned_set, map_name)
+        if school:
+            layer.append(school)
+    layer.extend(heal)
     layer.extend(teammate_parts(sc, name))
     layer.extend(_survival_parts(sc, name, map_name))
     layer.extend(_extreme_parts(sc, name))
@@ -248,7 +253,8 @@ def official_parts(sc: Scorer, name: str, owned, rnd: int | None, scale: float |
 def _classes_with(sc: Scorer, owned) -> frozenset[str]:
     """持有 owned 时角色的职业（hero_classes）：和现在的已有筹码是同一组时就是 sc.classes；推算「拿了以后」时
     （选了美工刀以后获得治愈来源的概率、开套预判里获得配套筹码的概率，都按「已有筹码 + 这一张」给之后的候选打分；
-    之后获得美工刀的概率不含正在评估的这一张，见 chances.knife_chance）按假设的已有筹码重算。"""
+    之后获得美工刀的概率按「已有筹码 + 正在评估的这个治愈来源」给美工刀打分，筹码池不含这一张，见 chances.knife_chance）
+    按假设的已有筹码重算。"""
     if frozenset(owned) == frozenset(sc.known_owned):
         return sc.classes
     return hero_classes(sc.db, sc.st.hero, tuple(dict.fromkeys(n for n in owned if n in sc.db.chips)))
@@ -450,9 +456,9 @@ def _origin_label(rule: Rule) -> str:
 
 
 def _auto_parts(sc: Scorer, name: str, owned_set: frozenset, rnd: int | None,
-                map_name) -> tuple[list[Part], Part | None]:
+                map_name) -> tuple[list[Part], list[Part]]:
     """自动层的分项：加分的规则取最高的一条，其余按 extra_rule_factor 合成「其他特性」；扣分的规则各列一项。
-    返回（自动层的分项，美工刀的治愈来源折算那一项或 None）：折算那一项由 _build_parts 排在组合规则之后。
+    返回（自动层的分项，美工刀按「还没有治愈来源」算的分项）：后者由 _build_parts 排在组合规则之后。
 
     净效果：扣分规则写了 net、其中有最高那条加分规则的来源时，这条扣分说的是那条加分里的同一个效果，
     两项记同一个 Part.net（净效果的短句），推荐卡片上合成一个标签（ui.text.reason_pills）。一条加分规则只和一条扣分合成
@@ -488,10 +494,48 @@ def _auto_parts(sc: Scorer, name: str, owned_set: frozenset, rnd: int | None,
         if net and not out[0].net:
             out[0].net = part.net = net
         out.append(part)
-    return out, _heal_discount(sc, name, owned_set, map_name, positive, shares)
+    return out, _heal_parts(sc, name, owned_set, map_name, positive, shares)
 
 
-def _heal_discount(sc: Scorer, name: str, owned_set: frozenset, map_name, positive, shares: dict) -> Part | None:
+def _heal_parts(sc: Scorer, name: str, owned_set: frozenset, map_name, positive, shares: dict) -> list[Part]:
+    """美工刀还没有治愈来源时的两项：提前加分（_heal_advance）和折算（_heal_discount）。
+    条件：[heal_knife] traits 那条特性给这把美工刀实际计入了分，没有治愈来源（chances.has_heal_source），不带 exclude_traits。"""
+    cfg = heal_knife(sc)
+    if cfg is None or name not in cfg["knives"] or set(cfg.get("exclude_traits", ())) & set(sc.traits):
+        return []
+    rule = next((r for r in positive if r.origin in cfg["traits"]), None)
+    counted = shares.get(id(rule), 0.0) if rule is not None else 0.0
+    if counted <= 0 or has_heal_source(sc, owned_set, cfg):
+        return []
+    parts = (_heal_advance(sc, name, owned_set, map_name, cfg),
+             _heal_discount(sc, name, owned_set, map_name, counted))
+    return [p for p in parts if p is not None]
+
+
+def _about_chance(p: float) -> str:
+    """概率在整句里的写法：「约 78%」；取整后为 0、100 时用 chance_text（「不到 1%」「超过 99%」）。"""
+    shown = shown_int(p)
+    return f"约 {shown}%" if 0 < shown < 100 else chance_text(p)
+
+
+def _heal_advance(sc: Scorer, name: str, owned_set: frozenset, map_name, cfg: dict) -> Part | None:
+    """还没有治愈来源时，预支之后再获得治愈来源才有的组合分：之后获得治愈来源的概率 × 以这把美工刀为「已持有」一方的
+    组合规则（[heal_knife] combos，适用这个角色的）里最高的组合分 × [school_build] factor。
+    和开套预判同一种结构：概率见 chances.heal_chance，系数的依据见 rules.toml。"""
+    build = sc.db.rules.get("school_build")
+    values = [c.score for c in sc.db.combos
+              if c.name in cfg["combos"] and name in c.owned and c.applies_to(sc.hero.name, sc.traits)]
+    if not build or not values:
+        return None
+    p = heal_chance(sc, name, owned_set, map_name)
+    score = p * max(values) * build["factor"]
+    if score < 0.5:
+        return None
+    return Part("组合", score, HEAL_ADVANCE_REASON.format(p=_about_chance(p)), HEAL_ADVANCE_ORIGIN,
+                HEAL_ADVANCE_SHORT.format(p=chance_text(p)))
+
+
+def _heal_discount(sc: Scorer, name: str, owned_set: frozenset, map_name, counted: float) -> Part | None:
     """还没有治愈来源时，[heal_knife] traits 那条特性给美工刀的加分按「之后获得治愈来源的概率」折算：
     少算的部分 = 这条规则实际计入的分 ×（1 − 概率），记一项「组合」扣分（这条特性规则本身照常列出）。
 
@@ -499,20 +543,12 @@ def _heal_discount(sc: Scorer, name: str, owned_set: frozenset, map_name, positi
     不折算。概率见 chances.heal_chance。
     要尽量保住推荐流派的角色（keep_schools）在默认推荐里给美工刀的推荐流派加分一并折算（美工刀属于要保的流派时，
     chances.knife_school_bonus）。"""
-    cfg = heal_knife(sc)
-    if cfg is None or name not in cfg["knives"] or set(cfg.get("exclude_traits", ())) & set(sc.traits):
-        return None
-    rule = next((r for r in positive if r.origin in cfg["traits"]), None)
-    counted = shares.get(id(rule), 0.0) if rule is not None else 0.0
-    if counted <= 0 or has_heal_source(sc, owned_set, cfg):
-        return None
     counted += knife_school_bonus(sc, name)
     p = heal_chance(sc, name, owned_set, map_name)
     loss = counted * (1 - p)
     if loss < 0.5:
         return None
-    shown = shown_int(p)
-    text = f"约 {shown}%" if 0 < shown < 100 else chance_text(p)
+    text = _about_chance(p)
     return Part("组合", -loss, HEAL_DISCOUNT_REASON.format(p=text), HEAL_DISCOUNT_ORIGIN, HEAL_DISCOUNT_SHORT)
 
 
@@ -544,7 +580,7 @@ def _knife_anticipation(sc: Scorer, name: str, combo, owned_set: frozenset, cfg:
 
     预判分按 anticipation_factor 打折（rules.toml [heal_knife]）：算出的概率仍偏高。
     """
-    p = knife_chance(sc, owned_set, cfg, map_name)
+    p = knife_chance(sc, name, owned_set, cfg, map_name)
     score = p * layer_value(name, 1, cfg, combo.score) * cfg.get("anticipation_factor", 1.0)
     if score < 0.5:
         return None
@@ -555,35 +591,38 @@ def _knife_anticipation(sc: Scorer, name: str, combo, owned_set: frozenset, cfg:
     )
 
 
-def _charge_anticipation(sc: Scorer, name: str, owned_set: frozenset, map_name=None) -> Part | None:
-    """还没有持有 [charge_build] school 流派的筹码时：该流派的筹码加
+def _school_anticipation(sc: Scorer, name: str, owned_set: frozenset, map_name=None) -> Part | None:
+    """还没有持有 [school_build] schools 里这个筹码所属流派的筹码时：该流派的筹码加
     「之后出现并会选择的配套筹码的概率 × 组合分 × factor」，分项名「组合」。
 
     配套筹码和组合分取以该筹码为「已持有」一方、
     配的是同一流派筹码的组合规则（有几条时组合分取最高的一条）；概率见 chances.partner_chance。
     """
-    cfg = sc.db.rules.get("charge_build")
     db = sc.db
-    if not cfg or db.chips[name].school != cfg["school"]:
+    cfg = db.rules.get("school_build")
+    school = db.chips[name].school
+    if not cfg or school not in cfg["schools"]:
         return None
-    if any(db.chips[o].school == cfg["school"] for o in owned_set if o in db.chips):
+    if any(db.chips[o].school == school for o in owned_set if o in db.chips):
         return None
-    # 配套筹码只算同一流派的（以该筹码为「已持有」一方、配的又是别的流派的组合规则不算，例：电流核心与探天卫星）
+    # 配套筹码只算同一流派、不是自己、也不在已有筹码里的。以该筹码为「已持有」一方、配的是别的流派（例：电流核心与探天卫星），
+    # 或者只配到自己的组合规则（例：星光的转账筹码叠加，ATM机两边都有）不算
     combos = [c for c in db.combos if name in c.owned and c.applies_to(sc.hero.name, sc.traits)
-              and any(x in db.chips and db.chips[x].school == cfg["school"] for x in c.chips)]
+              and any(x in db.chips and db.chips[x].school == school and x != name and x not in owned_set
+                      for x in c.chips)]
     if not combos:
         return None
     value = max(c.score for c in combos)
     partners = frozenset(x for c in combos for x in c.chips
-                         if x in db.chips and db.chips[x].school == cfg["school"]) - owned_set - {name}
+                         if x in db.chips and db.chips[x].school == school) - owned_set - {name}
     p = partner_chance(sc, name, partners, owned_set, map_name)
     score = p * value * cfg["factor"]
     if score < 0.5:
         return None
     return Part(
         "组合", score,
-        f"预计之后获得配套{cfg['school']}筹码的概率约 {p:.0%}：持有该筹码后，配套筹码的{cfg['school']}效果可持续触发",
-        "charge_build", f"之后获得配套筹码 {p:.0%}",
+        f"预计之后获得配套{school}筹码的概率约 {p:.0%}：持有该筹码后，配套筹码的{school}效果可持续触发",
+        "school_build", f"之后获得配套筹码 {p:.0%}",
     )
 
 

@@ -12,6 +12,9 @@ from datetime import date, timedelta
 
 from ... import unlock
 from ...schemes import FORMAT_SHORT, FORMAT_TEXT
+from .. import lang
+from ..glyphs import ICON_BOOK
+from .. import names as ui_names
 from ..text import SUMMARY_RUNNING, Bit
 from ..theme import COMMON as C
 
@@ -24,11 +27,15 @@ __all__ = [  # layout.py 用 import * 取这些
     "EGGS_ERROR", "ERR_RECORD",
     "EXPAND_ALL",
     "EXPAND_ALL_STALE", "EXPAND_ALL_TIP", "EXTRA_CHIP", "EXTRA_CHIP_MUTATORS", "EXTRA_CHIP_OWNED", "EXTRA_CHIP_TIP",
-    "FEEDBACK_DONE", "FEEDBACK_QUESTION", "FEEDBACK_REASONS", "FEEDBACK_TIP", "FLASH_MS", "FOLDER_UNWRITABLE",
+    "FEEDBACK_DISMISS", "FEEDBACK_DISMISS_TIP", "FEEDBACK_DONE", "FEEDBACK_QUESTION", "FEEDBACK_REASONS",
+    "FEEDBACK_TIP", "FEEDBACK_TRY", "FEEDBACK_TRY_TIP", "FLASH_MS", "FOLDER_UNWRITABLE",
     "FOLLOW_FRAMES",
-    "GAIN_TEXT", "GAIN_WHY", "GAME_OVER_BIT", "GAME_OVER_TIP", "GAME_OVER_WAITING", "HERO_AUTO_TIP", "HERO_BOX_TIP",
-    "HERO_PAUSED", "HERO_PAUSED_TIP", "HERO_PENDING_TIP", "HERO_UNRECORDED", "HOTKEY_CHANGE_FAILED", "LIVE_TIP",
+    "GAIN_TEXT", "GAIN_WHY", "GAME_OVER_BIT", "GAME_OVER_TIP", "GAME_OVER_WAITING", "HANT_STAY", "HANT_STAY_TIP",
+    "HANT_NOTICE_TEXT", "HANT_SWITCH", "HANT_SWITCH_TIP", "HERO_AUTO_TIP", "HERO_BOX_TIP",
+    "HERO_PAUSED", "HERO_PAUSED_TIP", "HERO_PENDING_TIP", "HERO_UNRECORDED", "HOTKEY_CHANGE_FAILED", "HUB_BTN",
+    "HUB_OPEN_FAILED", "HUB_TIP", "LIVE_TIP",
     "MANUAL_SWITCHED", "MANUAL_SWITCHED_NO_KEY", "MAP_ASK", "MAP_ASK_NO_CHOICE", "MAP_AUTO", "MAP_PLACE", "MAP_READ",
+    "MAP_SCHEME_REVERT", "MAP_SCHEME_REVERTED", "MAP_SCHEME_REVERT_TIP", "MAP_SCHEME_SWITCHED", "MAP_SCHEME_TEXT",
     "MAP_SOURCE_TIP", "MISSED_PROMPT", "NEWGAME_MIDGAME", "NEWGAME_MIDGAME_NOTICE_MS", "NEWGAME_NOTICE_MS",
     "NEWGAME_OWNED", "NEWGAME_TEXT",
     "NEW_USER_COLLAPSED",
@@ -38,12 +45,15 @@ __all__ = [  # layout.py 用 import * 取这些
     "PROMPT_PANEL_RESUME", "RAW_TEXT_TIP", "RECOG_CAPTURE", "RECOG_ERROR_MS", "RECOG_FRAME", "RECOG_ITEM",
     "RECOG_ITEMS", "RECOG_REPEAT_S", "RECOG_STARTUP", "RECOG_STOPPED", "RECOG_STOPPED_WAITING", "REFRESHING",
     "REFRESHING_TIP",
-    "REMOVED_TEXT", "REMOVE_TIP", "REVERTED_NOTICE", "REVERTED_PROMPT", "RUNNING", "RUNNING_BIT", "RUNNING_TIP",
+    "REMOVED_TEXT", "REMOVE_TIP", "RESTART_FAILED", "REVERTED_NOTICE", "REVERTED_PROMPT", "RUNNING", "RUNNING_BIT",
+    "RUNNING_TIP",
     "SCHEMES_NOTICE", "SCHEMES_UNSAVED", "SCHEME_BOX_TIP", "SCHEME_CARD", "SCHEME_DEFAULT_TIP", "SCHEME_DEFAULT_TIP_TIERS",
     "SCHEME_EDIT",
-    "SCHEME_EDIT_ICON", "SCHEME_EDIT_TIP", "SCHEME_GROUP", "SCHEME_NO_SCHOOL", "SCHEME_SHARE_ICON", "SCHEME_SUMMARY",
-    "SCHEME_SWITCHED", "SCHEME_TARGET_TIP", "SCHEME_UNRECORDED_TIP", "SETTINGS_GLYPH_PX", "SETTINGS_TIP",
-    "SETTLE_MAX_TICKS", "SETTLE_MS", "SETTLE_TICKS", "SHARE_BTN", "SHARE_FORMATS", "SHARE_TIP", "SHUTDOWN_DOWNLOAD_S",
+    "SCHEME_EDIT_ICON", "SCHEME_EDIT_TIP", "SCHEME_GROUP", "SCHEME_HUB_ICON", "SCHEME_MAPS_TIP", "SCHEME_NO_SCHOOL",
+    "SCHEME_SHARE_ICON",
+    "SCHEME_SUMMARY", "SCHEME_SWITCHED", "SCHEME_TARGET_TIP", "SCHEME_UNRECORDED_TIP", "SETTINGS_GLYPH_PX",
+    "SETTINGS_TIP", "SETTINGS_TIP_HANT", "SETTLE_MAX_TICKS", "SETTLE_MS", "SETTLE_TICKS", "SHARE_BTN", "SHARE_FORMATS",
+    "SHARE_TIP", "SHUTDOWN_DOWNLOAD_S",
     "SHUTDOWN_WATCHER_S", "STALE_CAPTION", "STOPPED", "STOPPED_BIT", "STORAGE_FALLBACK", "TITLE", "TITLE_DEV",
     "UNDONE_SAVED", "UNDONE_TEXT",
     "UNDO_TIP", "UNLOCKED_CONDITIONS", "UNLOCKED_NOTICE",
@@ -174,17 +184,20 @@ REFRESHING = Bit("正在刷新", key="refreshing")
 REFRESHING_TIP = "正在识别刷新后的候选筹码：「推荐」卡片中暂时仍是刷新前的推荐，识别完成后自动更新。"
 # 悬停在筹码名按钮上：识别到的文字和筹码名不同时（文字有错，但按图标边框颜色和筹码表只对得上这一个筹码）
 RAW_TEXT_TIP = "识别文字「{raw}」，按「{name}」计算。"
-# 找不到游戏窗口（同 vision/capture.py 的 NOT_FOUND，后台识别发来的也是这一句，测试核对）。不写窗口标题：国服、国际服两个
-# 标题都写上，一行显示的摘要放不下，句末的「请先启动游戏」会被省略掉；按哪两个标题找写在使用说明的常见问题里
+# 找不到游戏窗口（同 vision/capture.py 的 NOT_FOUND，后台识别发来的也是这一句，测试核对）。不写窗口标题：三个标题都写上，
+# 一行显示的摘要放不下，句末的「请先启动游戏」会被省略掉；按哪些标题找写在使用说明的常见问题里。设了游戏平台、开着的是
+# 另一个端时，后台识别发来的是 capture.NOT_FOUND_PLATFORM（也是一句固定的中文）
 NO_GAME = "未找到游戏窗口，请先启动游戏。"
 # 系统托盘（follow.Tray）：每次运行第一次点 × 收到托盘时，贴着托盘图标弹出的小提示框的标题和正文（advisor/ui/tray_toast.py：
 # 不用 Windows 的系统通知，系统通知会放提示音）。菜单各项照原样写在 Tray.setup_tray 里
 TRAY_TOAST_TITLE = "拾星助手"
 TRAY_TOAST = "已收到系统托盘，识别继续进行。点击托盘图标可重新显示悬浮窗。"
-# 托盘菜单的「使用说明」：用系统默认的程序打开使用说明（paths.manual_path；{name} 是它的文件名）。文件不在、打不开时显示
-# 悬浮窗，在标题栏下方提示（一次性提示），不写报错原文
+# 悬浮窗打开使用说明（Overlay.open_manual）：用系统默认的程序打开使用说明（paths.manual_path；{name} 是它的文件名）。
+# 文件不在、打不开时显示悬浮窗，在标题栏下方提示（一次性提示），不写报错原文
 MANUAL_MISSING = "找不到「{name}」：请把拾星助手的压缩包整个重新解压。"
 MANUAL_OPEN_FAILED = "无法打开「{name}」：请在拾星助手的文件夹中直接双击打开它。"
+# 托盘菜单的「打开作业站」、卡片的「作业站」、导入/导出窗口的两个按钮：系统没打开浏览器时显示悬浮窗，在标题栏下方提示
+HUB_OPEN_FAILED = "无法打开浏览器，请手动打开 {url}"
 # 后台识别出错时的提示（Watcher 经 recog_error 信号发来）：界面上只写给玩家看的中文，报错原文只进错误
 # 记录。四种情形：一帧里几项没读出来（RECOG_ITEM，{item} 是界面上的叫法，见 RECOG_ITEMS；同一帧的几项用「、」连成一句，
 # recog_items_text）、整帧识别出错（RECOG_FRAME）、截取出错（RECOG_CAPTURE）、识别组件启动出错（RECOG_STARTUP）。
@@ -293,11 +306,20 @@ FOLDER_UNWRITABLE = ("程序文件夹写不进（可能是受保护的文件夹�
 # {exe} 是程序文件：发行版写 app\ACC.exe，开发版写正在运行的 Python（notices.dpi_program）
 DPI_CHANGED = ("检测到「替代高 DPI 缩放行为」被改过，识别会认错：请在 {exe} 的属性 → 兼容性 → 更改高 DPI 设置里"
                "取消勾选")
-# 没选首推时问原因：三选一关闭后在「推荐」卡片里问一句，不点也不影响
-FEEDBACK_REASONS = ("照顾队友", "地图因素", "推荐有误")
+# 没选首推时问原因：三选一关闭后在「推荐」卡片里问一句，不点也不影响。原因写进推荐日志，和 logbook 的
+# FEEDBACK_REASONS、FEEDBACK_TRY 一字不差；FEEDBACK_TRY（推荐没有问题，只是这一次想换个玩法）是其中一项，悬停说明另写
+FEEDBACK_REASONS = ("照顾队友", "地图因素", "推荐有误", "想试别的玩法")
+FEEDBACK_TRY = "想试别的玩法"
 FEEDBACK_QUESTION = "未选择「{best}」的原因？"
 FEEDBACK_DONE = "已记录：{reason}"
-FEEDBACK_TIP = "未选择首推的原因：{reason}。点击后记入推荐日志，校准推荐参数时参考；不点击不影响使用。"
+FEEDBACK_TIP = ("未选择首推的原因：{reason}。点击后记入推荐日志，校准推荐参数时参考；「帮助拾星助手改善推荐准确度」"
+                "开着时随对局报告发出。不点击不影响使用。")
+# FEEDBACK_TRY 不是「推荐不准」：校准时不把它算进一致率，说明里写清这一条
+FEEDBACK_TRY_TIP = ("未选择首推的原因：想试别的玩法（推荐没有问题，只是这一次想换个玩法）。点击后记入推荐日志，"
+                    "校准推荐参数时不算作推荐不准；「帮助拾星助手改善推荐准确度」开着时随对局报告发出。不点击不影响使用。")
+# 不想选原因时收起这一问（放在问句那一行的最右端）；只有一个字，左右内边距照标题栏的「×」
+FEEDBACK_DISMISS = "×"
+FEEDBACK_DISMISS_TIP = "不选原因，收起这一问（这一次不记原因）"
 PICKED_LABEL = "已选："
 LIVE_TIP = (
     "候选筹码识别有误时，点击筹码名按钮可改正，推荐按改正后的筹码重新计算。"
@@ -347,17 +369,23 @@ REMOVE_UNDONE = "已撤销移出：「{chip}」已放回已有筹码"
 REMOVE_UNDO_GONE = "无法撤销移出「{chip}」：之后已有筹码或对局有了变化"
 CARD_KEYS = ("recog", "scheme", "advice", "owned")  # 四张卡片：识别、筹码方案、推荐、已有筹码
 # 「筹码方案」卡片（「识别」卡片下面）：上面是角色下拉框、下面是方案下拉框，两个下拉框等宽、左对齐，前面不加「角色」「方案」
-# 字样（悬停说明写明各管什么）；框和文字在任何状态下都不加颜色，下拉列表也不加。右边并排「编辑方案」「导入/导出」两个按钮
-# （IconTextButton：系统图标在上、字在下），都跨两行：高度等于两个下拉框加中间的间距；两个下拉框随之变窄（最长的角色名仍放得下）。
-# 能单独收起，收起后卡片头写「芬妮 · 治愈坦克」（SCHEME_SUMMARY，默认推荐时「芬妮 · 默认推荐」，不加颜色）。
-# 一行显示时平时不出现；三选一出现但角色待识别时自动出现，供选择角色
+# 字样（悬停说明写明各管什么）；框和文字在任何状态下都不加颜色，下拉列表也不加。右边并排「编辑方案」「导入/导出」「作业站」
+# 三个一样宽的按钮（IconTextButton：图标在上、字在下，字都写一行），都跨两行：高度等于两个下拉框加中间的间距；两个下拉框
+# 随之变窄（最长的角色名、最长的方案名仍写得下，放不下的皮肤加宽悬浮窗）。
+# 「作业站」打开浏览器里当前角色的方案列表（advisor/hub.py）。能单独收起，收起后卡片头写「芬妮 · 治愈坦克」（SCHEME_SUMMARY，
+# 默认推荐时「芬妮 · 默认推荐」，不加颜色）。一行显示时平时不出现；三选一出现但角色待识别时自动出现，供选择角色
 SCHEME_CARD = "筹码方案"
 SCHEME_SUMMARY = "{hero} · {scheme}"
 SCHEME_EDIT = "编辑方案"
 SCHEME_EDIT_TIP = "打开「编辑筹码方案」窗口：新建、编辑、复制或删除筹码方案"
-# 两个按钮上的系统图标（settings.draw_glyph 画；系统里没有图标字体时只写字）的编号；大小、颜色、内边距见皮肤的 SCHEME_TOOL_*
+# 三个按钮上的图标（笔形、左右双箭头是系统图标字体里的，没有时只写字；「作业站」翻开的书是程序自己画的，照样画）的编号或
+# 名字；大小、颜色、内边距见皮肤的 SCHEME_TOOL_*
 SCHEME_EDIT_ICON = 0xE70F  # 笔
 SCHEME_SHARE_ICON = 0xE8AB  # 左右双箭头
+SCHEME_HUB_ICON = ICON_BOOK  # 自己画的、正面看翻开的书（glyphs.ICON_BOOK）
+HUB_BTN = "作业站"
+HUB_TIP = ("在浏览器里打开作业站，看其他玩家分享的当前角色的筹码方案（资料库没收录这个角色时看全部角色的）；对局中认出了"
+           "地图（或手动选了地图）时，只看这张地图能用的方案。看中的复制下来，点「导入/导出」粘贴导入")
 HERO_BOX_TIP = "当前角色。根据游戏画面左下角的角色立绘自动识别；手动指定后不再被自动识别覆盖。"
 # 方案下拉框：只列当前角色的方案。第一项「默认推荐」（text.SCHEME_DEFAULT），有我的方案时下面是不能选的分组标题
 # SCHEME_GROUP 和各套方案（没有时不显示分组标题）；选中该角色上次用的方案
@@ -373,6 +401,9 @@ SCHEME_DEFAULT_TIP = "拾星助手自带的筹码方案：按角色特性计算�
 SCHEME_DEFAULT_TIP_TIERS = "拾星助手自带的筹码方案：部分筹码按攻略标了必选、推荐、可选、不选，其余按角色特性计算。推荐流派：{schools}"
 SCHEME_TARGET_TIP = "目标流派：{schools}"
 SCHEME_NO_SCHOOL = "无"
+# 方案下拉列表里标了适用地图的那一项：悬停说明另起一段写出来（下拉列表一行放不下，行上不另加字）。{maps} 是地图名按
+# Scheme.maps 的先后用「、」连起来的，通用方案（一张都没标）不加这一段
+SCHEME_MAPS_TIP = "适用地图：{maps}"
 # 资料库未收录的角色：角色下拉框里这样写，方案下拉框不可用、固定为「默认推荐」，悬停说明换成 SCHEME_UNRECORDED_TIP
 HERO_UNRECORDED = "（资料库未收录）{name}"
 SCHEME_UNRECORDED_TIP = "资料库未收录该角色，无法使用筹码方案"
@@ -382,6 +413,19 @@ SCHEME_SWITCHED = "筹码方案已切换为「{name}」，已按新方案重新�
 # 在编辑窗口里新建、复制，或导入后点「使用这套方案」，悬浮窗当场换用、但没有重算出推荐（三选一没显示、正在等候选读全等）
 # 时的一次性提示：SCHEME_SWITCHED 的前半句（在方案下拉框里换的，没有重算时照旧不出提示：下拉框上已经看得到）
 SCHEME_SET = "筹码方案已切换为「{name}」"
+# 对局里认出地图以后，这一局自动换用这个角色标了这张地图的方案（只换这一局，不改方案文件，见 Session.scheme_choice）时的
+# 一次性提示，地图改判以后又换了一套也出（写在「筹码方案」卡片里，一行显示时在摘要里；三选一显示着时同时按它重算）。
+# 换着的时候点了「换回原来的」（Overlay.revert_map_scheme；在方案下拉框里选回原来那套也算）以后换成 MAP_SCHEME_REVERTED。
+# 对局结束回到原来那套时不出提示（方案下拉框跟着换回）
+MAP_SCHEME_SWITCHED = "这张地图有专用方案：已换用「{name}」"
+MAP_SCHEME_REVERTED = "已换回「{name}」，这一局不再按地图自动换方案"
+# 「筹码方案」卡片里「按地图换着」的这一局一直留着的一行（提示行，级别 info，在方案下拉框下面）：写这一局实际用的方案名，
+# 按钮换回保存的方案（Overlay.revert_map_scheme；提示、重算、打标记它都做了，这边不再另出提示）。不是按地图换着的这一局
+# （没换、点了换回、对局结束、新的一局）这一行收起。MAP_SCHEME_TEXT 的 {name} 是换成的那一套，MAP_SCHEME_REVERT_TIP 的
+# {name} 是保存的方案的叫法（默认推荐写 SCHEME_DEFAULT）
+MAP_SCHEME_TEXT = "本局按地图换用了「{name}」"
+MAP_SCHEME_REVERT = "换回原来的"
+MAP_SCHEME_REVERT_TIP = "换回「{name}」，这一局不再按地图自动换"
 # 「推荐」卡片头标题右边的暗色小字：这次推荐按哪个角色、哪套方案算，写法同「筹码方案」卡片收起时的摘要（scheme_summary：
 # 「芬妮 · 银行卡流」，默认推荐时「芬妮 · 默认推荐」），角色是手动指定的时角色名后接 HERO_MANUAL_MARK。卡片上有三选一的
 # 推荐（或刷新时还留着的刷新前的推荐）时显示，按这次推荐自己记的角色和方案写，不跟下拉框此刻的值；全部展开时回看上一次推荐
@@ -430,8 +474,13 @@ EXPAND_ALL_TIP = (
 EXPAND_ALL_STALE = "；筹码三选一界面关闭后，可在「推荐」卡片中回看上一次推荐"
 COLLAPSE_ALL_TIP = "将悬浮窗折叠为一行（出现筹码三选一界面时自动显示「推荐」卡片）"
 # 底栏（全部展开时）只有「设置」，靠左：打开「拾星助手设置」窗口（advisor/ui/settings/）。
-# 识别模式、热键、低配模式、导出诊断、检查更新、关于都在这个窗口里；「导入/导出」在「筹码方案」卡片里（托盘菜单里也有「关于」）
-SETTINGS_TIP = "打开「拾星助手设置」窗口：识别模式、识别热键、低配模式、悬浮窗背景、导出诊断、检查更新、关于拾星助手"
+# 游戏平台、识别模式、热键、低配模式、悬浮窗背景、导出诊断、检查更新、关于都在这个窗口里；「导入/导出」在
+# 「筹码方案」卡片里（托盘菜单里也有「关于」）。繁体界面打开（lang.HANT_ENABLED）时窗口里另有「界面语言」，悬停说明换成
+# SETTINGS_TIP_HANT（layout.py 按开关挑）
+SETTINGS_TIP = ("打开「拾星助手设置」窗口：游戏平台、识别模式、识别热键、低配模式、悬浮窗背景、导出诊断、"
+                "检查更新、关于拾星助手")
+SETTINGS_TIP_HANT = ("打开「拾星助手设置」窗口：游戏平台、识别模式、识别热键、低配模式、悬浮窗背景、界面语言、导出诊断、"
+                     "检查更新、关于拾星助手")
 # 「筹码方案」卡片的「导入/导出」按钮：打开导入/导出筹码方案窗口（advisor/ui/scheme_share.py）；悬停说明写窗口全称
 SHARE_BTN = "导入/导出"
 SHARE_TIP = "打开「导入/导出筹码方案」窗口：复制筹码方案的文字或短字符串，或粘贴方案文字、短字符串导入"
@@ -455,14 +504,103 @@ NEW_USER_COLLAPSED = ("owned",)
 # 提示行放在哪一块：global 为标题栏下方的全局提示，其余放进对应的卡片。截取方式的提示（capture）在「识别」卡片最上面，
 # 排在对局中途判定的新一局之后。方案文件读取的结果（schemes）、个人目录存不进（storage）、第一次启动时的「免费软件」声明
 # （free）、这次运行里一直留着的三条（识别已停止 stopped、DPI 设置被改过 dpi、程序文件夹写不进 folder）、软件内更新的两条
-# （有新版本、下载、出错等 update，刚换上新版本 updated）是全局提示
+# （有新版本、下载、出错等 update，刚换上新版本 updated）、性能自检（ocr_check）是全局提示
 NOTICE_AREA = {
     "unsupported": "recog", "newgame": "recog", "newgame_owned": "owned", "reverted": "advice", "panel": "owned",
-    "gain": "owned", "removed": "owned", "assets": "global", "calibrate": "global", "export": "global",
-    "capture": "recog_top", "schemes": "global", "storage": "global", "unlocked": "recog", "free": "global",
-    "stopped": "global", "dpi": "global", "folder": "global", "hotkey": "global", "update": "global",
+    "gain": "owned", "removed": "owned", "map_switch": "scheme", "assets": "global", "calibrate": "global",
+    "export": "global", "capture": "recog_top", "schemes": "global", "storage": "global", "unlocked": "recog",
+    "free": "global", "hant": "global", "stopped": "global", "dpi": "global", "folder": "global", "hotkey": "global",
+    "update": "global",
     "updated": "global",
+    "ocr_check": "global",
 }
+# 文字识别线程数的性能自检（ocr_check.OcrCheck）在标题栏下方的一条。量的时候绿字，写明可以照常玩、还要多久（OCR_CHECK_SOON：
+# 估的时间到了还没量完）；量完换成结果，{threads} 用几个线程，{seconds} 读一次几秒（程序自己画的图，真实的三选一慢一倍左右）。
+# 结果差时（一般、查到排在小核上时也是）后面接查到的原因和建议做法（ocr_reason_text）。{retry} 是下次启动还会再测时的那一句。结果按句分行：悬浮窗窄，不分行
+# 时结论和原因连成一片，最后一两个字还容易单独掉到下一行
+OCR_CHECK_RUNNING = "正在进行性能自检，可正常进行游戏。{left}"
+OCR_CHECK_LEFT = "剩余约 {n} 秒"
+OCR_CHECK_SOON = "马上完成"
+OCR_CHECK_TIP = ("试一下这台电脑上文字识别开几个线程合适：只算拾星助手自己画的一张图，不碰游戏、不联网，也不影响识别。"
+                 "进入对局时自动停下，之后再测；测出结果以后不再测。结果差的原因是没插电、别的程序占着这类一时的情况时，"
+                 "下次启动再测一次。")
+OCR_CHECK_RESULT = {
+    "good": "自检结果：性能良好。\n文字识别用 {threads} 个线程，读一次约 {seconds} 秒。",
+    "fair": "自检结果：性能一般，推荐可能晚一点出现。\n文字识别用 {threads} 个线程，读一次约 {seconds} 秒。",
+    "poor": "自检结果：性能较差，推荐会晚一些出现。\n文字识别用 {threads} 个线程，读一次约 {seconds} 秒。",
+    "slow": "自检结果：性能很差，文字识别太慢，没能测完。\n先用默认的 {threads} 个线程。",
+    "noisy": "自检结果：这次没测出来，可能是电脑正忙。\n先用默认的 {threads} 个线程。",
+    "error": "自检结果：这次没能测完。\n先用默认的 {threads} 个线程。",
+}
+OCR_CHECK_NOISY_FOUND = "自检结果：这次没测出来，读一次时快时慢。\n先用默认的 {threads} 个线程。"  # 查到了原因时，原因另写
+OCR_CHECK_RETRY = "下次启动时再测一次。"
+# 替玩家改了以后（ocr_check.OcrCheck.accept）：改好了接着重新量，打开了低配模式、没改成的过一会儿自己收起
+OCR_CHECK_AFTER = {
+    "fixed": "已改好，重新自检。",
+    "lowend_on": "已打开「低配模式」，可以在设置里关掉。",
+    "fix_failed": "没改成，可能是别的程序又改了回去。",
+}
+# 能替玩家改的那几条下面的两个按钮（notices.ocr_check_row）；悬停说明：「是」按修法（Reason.fix）写，「否」都一样
+OCR_CHECK_YES = "是"
+OCR_CHECK_NO = "否"
+OCR_CHECK_YES_TIP = {
+    "big_cores": "让拾星助手只用大核，可以在设置里改回来",
+    "eco": "把拾星助手改回正常运行，只改拾星助手自己的设置",
+    "priority": "把拾星助手改回正常优先级，只改拾星助手自己的设置",
+    "affinity": "让拾星助手能用全部核心，只改拾星助手自己的设置",
+    "lowend": "打开「低配模式」，可以在设置里关掉",
+}
+OCR_CHECK_NO_TIP = "这台电脑上不再问这件事"
+# 查到的原因（advisor/vision/ocr_reason.py 的 Reason，键见它的 diagnose）。只写查到的事实，每条写清是什么、怎么办。
+# 只能玩家自己做的：键 → （原因, 建议做法）
+OCR_REASON_MANUAL = {
+    "no_ac": ("笔记本没插电，Windows 可能在限制处理器速度", "插上电源"),
+    "saver": ("Windows 开着节电模式，处理器速度受限", "在系统设置的「电源和电池」里关掉节电模式"),
+    "power_mode": ("Windows 的电源模式是「最佳能效」，处理器速度受限", "在系统设置的「电源和电池」里改成「平衡」或「最佳性能」"),
+    "power_plan": ("Windows 的电源计划是「节能」，处理器速度受限", "在控制面板的「电源选项」里改成「平衡」或「高性能」"),
+    "others_busy": ("自检时别的程序占了约 {percent}% 的处理器", "等下载、杀毒扫描、录屏这类程序忙完，或者先关掉"),
+    "throttled": ("处理器被限速了，现在只跑到标称频率的约 {perf}%，可能是过热或功耗限制", "让电脑凉一凉，笔记本插上电源"),
+    "low_memory": ("内存快用完了，只剩约 {available_gb:.1f} GB，文字识别每次要临时多用几百 MB", "关掉用不到的程序"),
+}
+OCR_REASON_NO_AC_PERF = "笔记本没插电，处理器现在只跑到标称频率的约 {perf}%"  # 量到了限速
+OCR_REASON_WITH_GAME = "自检时游戏和别的程序一共占了约 {percent}% 的处理器"  # 读不到游戏的占用，分不开
+# 能替玩家改的：键 → （原因, 建议做法, 排在一条只能自己做的后面时的原因、「也可以」那一句、问法）
+OCR_REASON_FIX = {
+    "small_core": ("这台电脑有大小核（{big} 个大核、{small} 个小核），文字识别被排到了小核。只用大核试过，快约 {gain}",
+                   "让拾星助手只用大核。游戏帧数可能略受影响，可以在设置里改回来",
+                   "文字识别被排到了小核，只用大核试过，快约 {gain}",
+                   "也可以让拾星助手只用大核，游戏帧数可能略受影响，可以在设置里改回来", "是否允许只用大核？"),
+    "eco": ("拾星助手被设成了「效率模式」，Windows 在限制它的速度", "改回正常运行",
+            "拾星助手被设成了「效率模式」，Windows 在限制它的速度", "也可以把拾星助手改回正常运行", "是否允许改回正常运行？"),
+    "low_priority": ("拾星助手的运行优先级被调低了，可能是优化软件或任务管理器改的", "改回正常优先级",
+                     "拾星助手的运行优先级被调低了，可能是优化软件或任务管理器改的", "也可以把拾星助手改回正常优先级",
+                     "是否允许改回正常优先级？"),
+    "affinity": ("拾星助手被限制只能用 {allowed} 个核心（这台电脑一共 {total} 个），可能是优化软件改的", "改回能用全部核心",
+                 "拾星助手被限制只能用 {allowed} 个核心（这台电脑一共 {total} 个），可能是优化软件改的",
+                 "也可以让拾星助手改回能用全部核心", "是否允许改回能用全部核心？"),
+}
+OCR_REASON_ASK = "是否允许？"
+# 改不了根子、只能建议打开低配模式的：键 → 原因
+OCR_REASON_LOW_SPEC = {
+    "old_cpu": "这台电脑的处理器较旧，不支持 AVX2 指令，文字识别会慢很多",
+    "few_cores": "这台电脑只有 {cores} 核 {logical} 线程，文字识别和游戏要抢处理器",
+}
+OCR_LOW_SPEC_ADVICE = "玩游戏也卡的话，打开「低配模式」：识别隔得久一些，游戏更流畅，推荐会再晚一点"
+OCR_LOW_SPEC_ALSO = "玩游戏也卡的话，也可以打开「低配模式」：识别隔得久一些，游戏更流畅，推荐会再晚一点"
+OCR_LOW_SPEC_ASK = "是否打开？"
+OCR_LOW_SPEC_ASK_ALSO = "是否打开「低配模式」？"
+OCR_REASON_UNKNOWN = "可能的原因：电源、内存、别的程序、限速都查过，没有问题，这台电脑的处理器跑文字识别本身就比较慢。"
+# 界面是简体、三选一认出游戏是繁体中文时标题栏下方的一条（排在本节「免费软件」声明前面，见 notices.NoticeModel.rows）：
+# 用简体写，显示时才用 lang.to_hant 转成繁体（简体界面平时不读对照表）。「换」把界面语言存成繁体、马上重新打开拾星助手
+# （Overlay.switch_to_hant），「不换」以后不再问（UiSettings.hant_notice_closed）。两个按钮一样宽（notices.EQUAL_WIDTH_NOTICES）。
+# 对局进行中先不显示，这一局结束、回到大厅或游戏关了再显示
+HANT_NOTICE_TEXT = "认出游戏是繁体中文，界面要换成繁体中文吗？"
+HANT_SWITCH = "换"
+HANT_SWITCH_TIP = "界面换成繁体中文，马上重新打开拾星助手"
+HANT_STAY = "不换"
+HANT_STAY_TIP = "保持简体界面，以后不再问"
+# 设置窗口的「现在重开」没能起新的进程（relaunch.start 为假）：不退出，悬浮窗的标题栏下方提示一次
+RESTART_FAILED = "没能重新打开拾星助手。请从托盘菜单选「退出」，再重新打开。"
 # 第一次启动时「免费软件」声明（version.FREE_NOTICE）后面接的一句账号风险提醒：提示行是 FREE_NOTICE + FREE_NOTICE_RISK，
 # 「关于」窗口最上面照旧只写 FREE_NOTICE。其中 FREE_NOTICE_LINK 那几个字做成能点的链接（地址 ABOUT_LINK：不是网址，提示行
 # 自己接，不交给浏览器），点了打开「关于」窗口、停在 ABOUT_DISCLAIMER 那一节（version.about_sections 里的标题）
@@ -487,13 +625,13 @@ HOTKEY_CHANGE_TIP = "打开「拾星助手设置」窗口，按下新的组合�
 # 软件内更新（overlay_parts/updates.py 的 UpdateControl；查、下载、备好在 advisor/update.py，换版本在 advisor/update_apply.py）：
 # 标题栏下方的一条（NOTICE_AREA 的 update；刚换上新版本时另一条 updated），排在「免费软件」声明前面。只在对局外显示：对局中
 # 先攒着，下载在后台照常进行。有新版本、下载中、解压核对中、下好了、已经是最新、刚换上新版本是说明（边框不变色）；出错时
-# ⚠ 橙色、边框不变色，都带「手动下载」。有新版本（四个按钮）、下好了和出错（两个按钮）时按钮排在文字下面
+# ⚠ 橙色、边框不变色，都带「手动下载」。有新版本（四个按钮）、上次已下好的那一版和出错（两个按钮）时按钮排在文字下面
 # （NoticeView.update、notices.STACKED_NOTICES）。
 # 有新版本：{version} 是新版本号，{date} 是资料同步日期那一段（UPDATE_DATE，没有日期时为空），{size} 是要下载多少的那一段
 # （update_size_text：这一版有文件清单时是 UPDATE_SIZE_MAX，点「更新」以后先比对本机的文件、只下变了的部分，压缩包的大小
-# 是上限；没有时是 UPDATE_SIZE）。点「更新」才下载（下载之前先问的就是这一条）；这一版不能自动换上（Release.auto 为假）时换成
-# UPDATE_AVAILABLE_MANUAL，「更新」换成「手动下载」
-UPDATE_AVAILABLE = "拾星助手有新版本 {version}{date}。点击「更新」开始下载（{size}），下载期间照常使用。"
+# 是上限；没有时是 UPDATE_SIZE）。点「更新」才下载（下载之前先问的就是这一条），下好以后在对局外自动重启换上，不用再点；
+# 这一版不能自动换上（Release.auto 为假）时换成 UPDATE_AVAILABLE_MANUAL，「更新」换成「手动下载」
+UPDATE_AVAILABLE = "拾星助手有新版本 {version}{date}。点击「更新」开始下载（{size}），下载期间照常使用，下好后自动重启换上。"
 UPDATE_AVAILABLE_MANUAL = "拾星助手有新版本 {version}{date}。这一版需要手动更新：点击「手动下载」，在浏览器中下载压缩包。"
 UPDATE_DATE = "（资料同步到 {date}）"
 UPDATE_SIZE = "约 {size} MB"
@@ -506,15 +644,30 @@ UPDATE_DOWNLOADING_DELTA = "正在下载新版本 {version} 变了的部分（{d
 UPDATE_ASSEMBLING = "正在用本机的文件拼出新版本 {version}…"
 UPDATE_DOWNLOADING = "正在下载新版本 {version}（{done} / {total} MB）"
 UPDATE_PREPARING = "正在解压、核对新版本 {version}…"
+# 下好了（UpdateNotice.restart 选一句）：这次点了「更新」下好的，在对局外时写马上重启（没有按钮，停 updates.RESTART_NOTICE_MS
+# 就重启），还有一张悬浮窗在对局中时写等对局结束（设置窗口那一行在对局中也写它），在对局外、开着拾星助手的其他窗口（设置、
+# 编辑方案、导入/导出、消息框等）时写等那些窗口关掉（设置窗口那一行同样）；上次已下好、检查时直接是下好了的那一版写
+# UPDATE_READY，带「重启更新」「关闭本条提示」
+UPDATE_RESTARTING = "新版本 {version} 已下好，马上重启换上。"
+UPDATE_READY_WAIT = "新版本 {version} 已下好，对局结束后自动重启换上。"
+UPDATE_READY_WINDOWS = "新版本 {version} 已下好，关掉拾星助手的其他窗口后自动重启换上。"
 UPDATE_READY = "新版本 {version} 已下好：点击「重启更新」马上换上；不点的话，下次启动拾星助手时自动换上。"
 UPDATE_LATEST = "已经是最新版本（{version}）。"
 UPDATE_DONE = "拾星助手已更新到 {version}。"
+# 刚换上新版本那一条（UPDATE_DONE）下面列的这一版的主要改动（update_done_text）：换上的正是 UPDATE_NEWS_VERSION 这一版时，
+# UPDATE_NEWS 一条一行、前面加「· 」（UPDATE_NEWS_ITEM），最后一行是 UPDATE_NEWS_SOON（空时不写）；版本号对不上（改了版本号、
+# 列表没跟着改）或者列表是空的，只写 UPDATE_DONE 那一句。发版定号时照这一版的发布说明挑几条短的改这几项（软件维护说明「版本号」）
+UPDATE_NEWS_VERSION = "1.1.0"
+UPDATE_NEWS = ("TapTap 版支持", "两个客户端同时开", "繁中游戏识别及软件界面", "方案按地图自动切换", "推荐模型优化",
+               "性能优化")
+UPDATE_NEWS_ITEM = "· {item}"
+UPDATE_NEWS_SOON = ""  # 即将上线的（例如「即将上线：……」）；这一版不写
 # 出错的几种（update_failed_text 按种类选一句；{reason} 是白话原因，{version} 是没换上的版本号）：检查、下载、解压核对失败；
-# 「重启更新」起不来换版本的程序；上一次换版本的结果（advisor/update_apply.py 的 take_result）是新版本启动失败、已退回
-# （rolled_back，这一版记进跳过），或者没换上（not_applied）。起不来、没换上的两种按这一版没换上的次数分两种说法：次数还没到
-# 上限（update_apply.MAX_FAILED）时下次启动会再试一次；到了上限（_final）时旧版本启动时不再自动换它，这一版记进跳过，
-# 自动检查不再提示它，在设置窗口点「检查更新」照样能查到、能再试。起不来、又读不到这一次的结果（launch_unrecorded：说不准
-# 下次启动会不会再试）时不许诺再试
+# 下好以后自动重启、点「重启更新」时起不来换版本的程序；上一次换版本的结果（advisor/update_apply.py 的 take_result）是
+# 新版本启动失败、已退回（rolled_back，这一版记进跳过），或者没换上（not_applied）。起不来、没换上的两种按这一版没换上的
+# 次数分两种说法：次数还没到上限（update_apply.MAX_FAILED）时下次启动会再试一次；到了上限（_final）时旧版本启动时不再自动
+# 换它，这一版记进跳过，自动检查不再提示它，在设置窗口点「检查更新」照样能查到、能再试。起不来、又读不到这一次的结果
+# （launch_unrecorded：说不准下次启动会不会再试）时不许诺再试
 UPDATE_FAILED = {
     "check": "检查更新失败：{reason}。",
     "download": "新版本下载失败：{reason}。",
@@ -537,9 +690,9 @@ UPDATE_UNKNOWN = "原因不明"  # 出错却没有给原因时
 # 程序出了意外的错（不是 advisor/update.py 给的白话原因）：原文只进错误记录。{err_file} 同 DOWNLOAD_CROP_FAILED
 UPDATE_ERROR = "出了意外的错误，详细信息已写入错误记录（{err_file}）"
 # 设置窗口「启动时自动检查更新」那一行的一句（UpdateControl.settings_note，有字时代替这一行的说明显示）：检查中、开发版点了
-# 「检查更新」、有新版本（提示在悬浮窗上，对局中不显示）、下好了；下载中、解压核对中、已经是最新同悬浮窗上的那一句；出错时
-# 检查、下载、解压核对失败同悬浮窗上的那一句，其余几种写短的一句（UPDATE_FAILED_NOTE，详细的在悬浮窗上）；没事时不写。
-# 都尽量写成一行：分页的皮肤里设置窗口的高度是固定的
+# 「检查更新」、有新版本（提示在悬浮窗上，对局中不显示）、上次已下好的那一版（UPDATE_READY_NOTE）；下载中、解压核对中、
+# 已经是最新、这次下好以后马上重启或等对局结束同悬浮窗上的那一句；出错时检查、下载、解压核对失败同悬浮窗上的那一句，其余
+# 几种写短的一句（UPDATE_FAILED_NOTE，详细的在悬浮窗上）；没事时不写。都尽量写成一行：分页的皮肤里设置窗口的高度是固定的
 UPDATE_FAILED_NOTE = {
     "launch": "没能启动换版本的程序，新版本没有换上。",
     "launch_final": "没能启动换版本的程序，新版本没有换上。",
@@ -552,9 +705,10 @@ UPDATE_CHECKING = "正在检查更新…"
 UPDATE_DEV = "开发版不检查更新。"
 UPDATE_FOUND = "有新版本 {version}，悬浮窗上有更新的提示（对局中不显示）。"
 UPDATE_READY_NOTE = "新版本 {version} 已下好，下次启动拾星助手时自动换上。"
-# 提示行的按钮：（文字, 悬停说明）。「重启更新」照这个说法写，不改。「更新」的 {size} 同 UPDATE_AVAILABLE；「看看改了什么」
-# 打开这一版的更新说明（Release.notes），没有时打开发布页面（Release.page）
-UPDATE_START = ("更新", "下载新版本（{size}），下好后点击「重启更新」换上")
+# 提示行的按钮：（文字, 悬停说明）。「重启更新」只在上次已下好的那一版上有：点了马上关掉拾星助手，所以按钮名先说清要重启
+# （这次点「更新」下好的自动重启，没有这个按钮）。「更新」的 {size} 同 UPDATE_AVAILABLE；「看看改了什么」打开这一版的更新
+# 说明（Release.notes），没有时打开发布页面（Release.page）
+UPDATE_START = ("更新", "下载新版本（{size}），下好后自动重启换上；对局中下好的，等对局结束再重启")
 UPDATE_NOTES = ("看看改了什么", "在浏览器中打开这一版的更新说明；没有更新说明时打开发布页面")
 UPDATE_SKIP = ("跳过这个版本", "不更新到 {version}：自动检查不再提示这一版，有更新的版本时照常提示")
 UPDATE_LATER = ("以后再说", "关闭本条提示，下次自动检查时再提示")
@@ -564,8 +718,8 @@ UPDATE_MANUAL = ("手动下载", "在浏览器中下载最新版拾星助手的�
 # 「手动下载」打开发布页面时（认下的这一版的下载地址里没有下载镜像上的：镜像没拿到，或者和 GitHub 对不上；这个版本不用下载
 # 镜像时一律开发布页面，见 updates.py 的 UpdateControl._manual_page）的悬停说明
 UPDATE_MANUAL_PAGE = "在浏览器中打开最新版拾星助手的发布页面"
-# 一行显示时，选的不是首推后出现的「已选：……」「未选择「X」的原因？」和三个按钮那一块挂多久（毫秒）：到点不点就收起，这一次
-# 不记原因（不点也不影响）；全部展开时照旧挂到下一次三选一
+# 一行显示时，选的不是首推后出现的「已选：……」「未选择「X」的原因？」和原因按钮那一块挂多久（毫秒）：到点不点就收起，这一次
+# 不记原因（不点也不影响）；全部展开时照旧挂到下一次三选一。点了问句右边的「×」时两种显示方式都马上收起
 QUESTION_LINE_MS = 20000
 
 # 默认位置：游戏客户区内，悬浮窗右上角放在 (98.5%, 52.5%)，即右侧「刷新」按钮正下方，向下展开。
@@ -601,10 +755,14 @@ SETTINGS_GLYPH_PX = 14  # 底栏「设置」前齿轮图标的大小（逻辑像
 
 # ------------------------------------------------------------ 几处共用的写法（只拼文字，不读状态、不碰部件）
 
+# 诊断包位置的写法里程序文件夹的叫法（short_path）：界面是繁体时随本模块的常量转成繁体，后面接的路径不转
+PROGRAM_FOLDER = "程序文件夹"
+
 
 def short_path(path: str) -> str:
     """诊断包位置的显示写法：在程序文件夹里时写相对路径（相对用户看到的程序文件夹 paths.program_folder：发行版里诊断包在
-    其中的 app 文件夹，写作「程序文件夹\\app\\reports\\…」）；反斜杠后加零宽空格只影响显示的标签，悬停说明自己也会在「\\」处断行。"""
+    其中的 app 文件夹，写作「程序文件夹\\app\\reports\\…」）；反斜杠后加零宽空格只影响显示的标签，悬停说明自己也会在「\\」处断行。
+    只有开头的 PROGRAM_FOLDER 跟着界面语言，路径本身原样（不整句转换：路径里的汉字转了就不是那个文件夹了）。"""
     from ...paths import program_folder
 
     try:
@@ -612,7 +770,7 @@ def short_path(path: str) -> str:
         if shown.startswith(".."):
             shown = path
         else:
-            shown = f"程序文件夹\\{shown}"
+            shown = f"{PROGRAM_FOLDER}\\{shown}"
     except ValueError:  # 不同盘符
         shown = path
     return shown.replace("\\", "\\​")
@@ -621,7 +779,7 @@ def short_path(path: str) -> str:
 def resume_time(when: float, now: float) -> str:
     """下载被站点防护拦下以后几点几分自动接着下（DOWNLOAD_BLOCKED 的 {time}），按本机时间：今天的写「15:42」，明天的写
     「明天 01:20」，更晚的写「10 月 19 日 15:42」（数字和汉字之间加空格，同界面上「第 9 轮」「2 星」的写法）。when、now 同
-    time.time()。"""
+    time.time()。照旧简体：它记在下载的状态里，提示行显示时整句再转（NoticeView），错误记录里也写它。"""
     at, today = time.localtime(when), time.localtime(now)
     hm = f"{at.tm_hour:02d}:{at.tm_min:02d}"
     day, base = date(at.tm_year, at.tm_mon, at.tm_mday), date(today.tm_year, today.tm_mon, today.tm_mday)
@@ -651,7 +809,7 @@ def join_items(items, sep: str = "｜") -> list:
 def recog_items_text(items) -> str:
     """一帧里几项子识别出错时给玩家看的一句（RECOG_ITEM）：items 是这几项界面上的叫法（RECOG_ITEMS 的值），照先后用「、」
     连起来，例如「进度条、星数这次没读出来，……」。哪几项写进来由 Watcher 定（Watcher._emit_recog_items）。"""
-    return RECOG_ITEM.format(item="、".join(items))
+    return lang.t(RECOG_ITEM.format(item="、".join(items)))
 
 
 MB = 1024 * 1024  # 更新提示里的大小按这个算 MB（同资源管理器的写法）
@@ -691,6 +849,19 @@ def update_failed_text(failure: str, reason: str = "", version: str = "", short:
     return template.format(reason=reason, version=version or "")
 
 
+def update_done_text(version: str) -> str:
+    """刚换上新版本那一条：「拾星助手已更新到 x。」（UPDATE_DONE）；换上的正是 UPDATE_NEWS_VERSION 这一版、UPDATE_NEWS 不空时，
+    下面一条一行列出这一版的主要改动（前面加「· 」），最后一行写即将上线的（UPDATE_NEWS_SOON，空时不写）。版本号对不上、
+    列表是空的时只写第一句：改了版本号、列表还没跟着改时，不把上一版的改动当成这一版的写出来。"""
+    text = UPDATE_DONE.format(version=version)
+    if version != UPDATE_NEWS_VERSION or not UPDATE_NEWS:
+        return text
+    lines = [text, *(UPDATE_NEWS_ITEM.format(item=item) for item in UPDATE_NEWS)]
+    if UPDATE_NEWS_SOON:
+        lines.append(UPDATE_NEWS_SOON)
+    return "\n".join(lines)
+
+
 def update_progress_text(version: str, done, total) -> str:
     """下整包时的那一句（UPDATE_DOWNLOADING）：已下载多少整 MB（不满 1 MB 写 0）、总共多少 MB（update_mb）。"""
     return UPDATE_DOWNLOADING.format(version=version, done=_whole_mb(done), total=update_mb(total))
@@ -721,12 +892,78 @@ def _whole_mb(done) -> str:
         return "0"
 
 
+def ocr_gain_text(ratio: float) -> str:
+    """只用大核快多少（ocr_reason.Reason 的 ratio，保留一位小数的比值）：不到 2 倍写百分比，到了写倍数。"""
+    if ratio >= 1.95:
+        return f"{ratio:g} 倍"
+    return f"{round((ratio - 1) * 10) * 10}%"
+
+
+def _ocr_manual_parts(reason) -> tuple[str, str]:
+    """一条只能玩家自己做的原因：（原因, 建议做法），句子里的数填好。"""
+    cause, advice = OCR_REASON_MANUAL[reason.key]
+    if reason.key == "no_ac" and reason.values.get("perf") is not None:
+        cause = OCR_REASON_NO_AC_PERF
+    elif reason.key == "others_busy" and reason.values.get("with_game"):
+        cause = OCR_REASON_WITH_GAME
+    return cause.format(**reason.values), advice
+
+
+def _ocr_offer_parts(reason, after_manual: bool) -> tuple[str, str, str]:
+    """一条能替玩家改的原因：（原因, 建议做法, 问法），句子里的数填好。排在一条只能玩家自己做的后面时，原因写短一点（前面已经
+    有一句了），建议做法写成「也可以」，问法写明问的是哪一件。"""
+    values = dict(reason.values)
+    if "ratio" in values:
+        values["gain"] = ocr_gain_text(values["ratio"])
+    if reason.fix == "lowend":
+        cause = OCR_REASON_LOW_SPEC[reason.key]
+        advice, ask = (OCR_LOW_SPEC_ALSO, OCR_LOW_SPEC_ASK_ALSO) if after_manual else (OCR_LOW_SPEC_ADVICE, OCR_LOW_SPEC_ASK)
+    else:
+        alone, advice_alone, cause_after, advice_after, ask_after = OCR_REASON_FIX[reason.key]
+        cause, advice, ask = (cause_after, advice_after, ask_after) if after_manual else (alone, advice_alone, OCR_REASON_ASK)
+    return cause.format(**values), advice, ask
+
+
+def ocr_reason_text(reasons, retry: bool = False) -> str:
+    """自检结果后面接的文字：reasons 是查到的原因（ocr_reason.shown 挑的，最多两条，能替玩家改的放最后）。
+
+    能替玩家改的写到问法为止（等玩家答，这时不提下次再测）；只能玩家自己做的写到建议做法，retry 时接「下次启动时再测一次」。
+    两条时原因连成一句、建议做法一句接一句。没有原因时只有 retry 的那一句，接在结果的最后一句后面；都不写时是空串。"""
+    if not reasons:
+        return OCR_CHECK_RETRY if retry else ""
+    if reasons[-1].key == "unknown":
+        return f"\n{OCR_REASON_UNKNOWN}\n建议做法：{OCR_LOW_SPEC_ADVICE}。\n{OCR_LOW_SPEC_ASK}"
+    parts = [_ocr_manual_parts(reason) for reason in reasons if not reason.fix]
+    ask = ""
+    if reasons[-1].fix:
+        cause, advice, ask = _ocr_offer_parts(reasons[-1], bool(parts))
+        parts.append((cause, advice))
+    causes = parts[0][0]
+    if len(parts) > 1:
+        # 第二条以 Windows 这类英文开头时，和前面的「另外」隔一个空格
+        causes += f"；另外{' ' if parts[1][0][:1].isascii() else ''}{parts[1][0]}"
+    advices = "".join(f"{advice}。" for _, advice in parts)
+    ending = f"\n{ask}" if ask else (OCR_CHECK_RETRY if retry else "")
+    return f"\n原因：{causes}。\n建议做法：{advices}{ending}"
+
+
 def teammates_text(teammates, db) -> str:
     """「队友：邦妮、凛（电脑）、待识别」（放在悬停说明里）；没有队友时为空。"""
     names = []
     for m in teammates:
         hero = m.get("hero") if isinstance(m, dict) else getattr(m, "hero", None)
         bot = m.get("bot") if isinstance(m, dict) else getattr(m, "bot", False)
-        name = db.heroes[hero].name if hero in db.heroes else "待识别"
+        name = ui_names.hero_in(db, hero) if hero in db.heroes else "待识别"
         names.append(name + ("（电脑）" if bot else ""))
     return "队友：" + "、".join(names) if names else ""
+
+
+# 写进错误记录、拿去比对或当键的常量不转（界面是繁体时也照旧写简体）：
+# ERR_RECORD 是文件路径；EXTRA_CHIP 是解析筹码效果的正则；ABOUT_LINK 是点「关于」时自己认的链接；
+# EGGS_ERROR、ZIP_FAILED 是错误记录的标题；FEEDBACK_REASONS、FEEDBACK_TRY 记进推荐日志，又和日志里的原因、按钮上的原因比对；
+# MAP_AUTO 是地图下拉框交回自动识别的值（和选项的 itemData 比）；ABOUT_DISCLAIMER 是交给「关于」窗口找那一节的节名
+# （和 version.about_sections 的简体标题比，同设置窗口的 NOTE_SECTIONS）。
+HANT_KEEP = ("ABOUT_DISCLAIMER", "ABOUT_LINK", "EGGS_ERROR", "ERR_RECORD", "EXTRA_CHIP", "FEEDBACK_REASONS",
+             "FEEDBACK_TRY", "MAP_AUTO", "ZIP_FAILED")
+
+lang.localize(globals())

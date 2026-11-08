@@ -13,10 +13,10 @@
   - `SamplesTest`：`samples/` 的截图和三份标注互相对得上，标注里的名称都在资料库里，标注里不写玩家昵称（缺样本时整个类跳过）。
   - `TerminologyTest`：`docs/使用说明.md` 里引用的提示原文是悬浮窗上实际显示的文字（面板、任务栏、下载、未选首推的原因、角色、地图、页签、补录、星数增加、新一局、难度胶囊、对局结束、设置窗口和热键、热键被占用、这次运行里一直留着的三条提示、下载被拦和个别图片下不了、一行显示的摘要、开发版的标题）；软件维护说明里的校准提醒照 `rules.toml` 的局数写；几处写法确实在源码里（新一局和对局结束的依据由 Session 写，撤销、补录、面板、地图依据的句子在悬浮窗里，难度推算和矛盾的说明在资料和记账里）；截取方式「原因」的四种写法在设置窗口、诊断包、提示三处逐字相同；切换模式后的提示和设置窗口里的说明是同一句；底栏「设置」按钮的悬停说明按窗口里的各项写；下载那几句不说检查网络、不用「到点」；「允许截图」已取消；「导出诊断」的悬停说明写明诊断包含本局和上一局。
   - `RecommendCardTest`：「推荐」卡片上「刷新」的标签是悬浮窗上实际显示的文字（使用说明「推荐的写法和规则」一节不写总分和分值）；标签和悬停明细不写分值，按分值的绝对值排、按色调着色，概率写百分数不写「几成」，很偏时写「不到 1%」「超过 99%」；推荐流派、队友、同系列、未收录、循环往复、畸变组件、职业倾向、前瞻几处的写法（不写计分用语），使用说明照抄的标签；队友刚需名单。
-  - `SchemeCardWordingTest`：「筹码方案」卡片相关的界面文字和测试里的对照表逐字相同，悬浮窗的界面文字里没有和现有布局对不上的说法（例如「左侧下拉框」）；星币的状态胶囊、摘要、悬停的写法（`text.py` 的顶层字面量）和使用说明；使用说明里「识别」卡片、底栏、「筹码方案」卡片两个按钮、角色待识别的写法。
+  - `SchemeCardWordingTest`：「筹码方案」卡片相关的界面文字和测试里的对照表逐字相同，悬浮窗的界面文字里没有和现有布局对不上的说法（例如「左侧下拉框」）；星币的状态胶囊、摘要、悬停的写法（`text.py` 的顶层字面量）和使用说明；使用说明里「识别」卡片、底栏、「筹码方案」卡片三个按钮、角色待识别的写法。
   - `SchemeWordingTest`：使用说明「筹码方案的规则」「编辑筹码方案的操作」「导入和导出的规则」几节引用的写法（卡片、位次、提醒和刷新那一行、档位前瞻那一条的短句和悬停整句、编辑窗口、导入/导出窗口、方案文件的提示）是界面上实际显示的文字；能导入的一套的写法；方案文件来自更新版本时几处只读提示是同一句；旧档名「必拿」「不推荐」和旧前缀「玩家思路：」不再出现，四档的叫法几处一致。
   - `ReadmePathsTest`：首页（`README.md`）、`docs/使用说明.md`、`docs/软件维护说明.md` 里反引号、代码块、链接和图片提到的项目文件都存在（`.tmp`、`.venv`、`dist`、`logs` 等运行时目录除外）；链接和图片（不算锚点和网址）从所在文件的文件夹算找得到，和 GitHub 上点开时一样（docs 下的两份说明写 `manual/…`、`使用说明.md`，写成 `docs/…` 在网页上点不开）；「目录结构」表在 `docs/软件维护说明.md` 里。不随仓库发布的识别样本、本机数据和运行时下载的识别图片（`NOT_SHIPPED`：`samples`、`tests/data/coins`、`tests/data/private.json`、`assets/heroes`、`assets/profiles`、`assets/chips`）只在本机整个没有时才跳过核对，不当作写错。
-  - `DiagnosticsDocsTest` / `AssetsManifestTest`：`docs/使用说明.md` 的「隐私」「反馈问题」「文件夹说明」和「关于」窗口的隐私说明一致（含筹码三选一有候选筹码没识别出来时那一帧只留在内存里、导出诊断时另带一张的两处写法，以及记下选中项用的那一帧、被临时遮挡而没有采用的那一帧那一句 `version.PRIVACY_SELECT_SHOTS`；「反馈问题」写到另带的 select-picked、select-covered 两张，诊断包大小按通常带的几张整幅截图说）、`data/assets_manifest.json` 的条目和汇总数字和 `docs/使用说明.md` 对得上（都取自 BWIKI、不带 `api`，BWIKI 的项文件页名就是文件名，从卡面现裁的项文件页是同一编号、同一皮肤的卡面）。
+  - `DiagnosticsDocsTest` / `AssetsManifestTest`：`docs/使用说明.md` 的「隐私」「反馈问题」「文件夹说明」和「关于」窗口的隐私说明一致（含筹码三选一有候选筹码没识别出来时那一帧只留在内存里、导出诊断时另带一张的两处写法，以及记下选中项用的那一帧、被临时遮挡而没有采用的那一帧那一句 `version.PRIVACY_SELECT_SHOTS`、对局中途像一局打完时的那一帧那一句 `version.PRIVACY_FINISH_SHOT`；两处都写全识别记录里会记的游戏窗口标题（`advisor/ui/winapi.py` 的 `GAME_TITLES`），并写明不读、不记别的窗口的标题；两处都写到诊断包另带识别记录里最近 12 小时的每分钟统计；每分钟的处理器占用记录存在哪那一句 `version.PRIVACY_USAGE` 两处逐字相同、文件名和 `advisor/usage.py` 的 `FILE_NAME` 一致，「文件夹说明」也写到它（`test_privacy_usage_sentence`）；「反馈问题」写到另带的 select-picked、select-covered、finish-look 几张，诊断包大小按通常带的几张整幅截图说）、`data/assets_manifest.json` 的条目和汇总数字和 `docs/使用说明.md` 对得上（都取自 BWIKI、不带 `api`，BWIKI 的项文件页名就是文件名，从卡面现裁的项文件页是同一编号、同一皮肤的卡面）。
   - `UiWordingTest`：界面文字用书面语，没有口语语气词，不用「我」「你」指代工具（「我的方案」除外）；几处偏口语的说法（「更常出」「到账」「快速处理」）在界面文字和资料里都不出现。
   - `LicenseTextTest`：首页「许可证与资料来源」一节写明程序代码和资料的许可证、放在末节，「从这里开始」链到使用说明的网页版（GitHub Pages，另留 `docs/使用说明.md` 原稿的链接）和 `docs/软件维护说明.md`；「免费软件」声明照 `version.FREE_NOTICE` 写在使用说明的「声明」里；限制使用的说法（不准商用、不提供源码一类）和「使用条款」这个标题都不出现在首页、两份说明、第三方声明和「关于」窗口里。
 - **检证对象**：只读项目文件——`README.md`、`docs/使用说明.md`、`docs/软件维护说明.md`、`THIRD_PARTY_NOTICES.md`、`data/*.json`（含 `assets_manifest.json`）、`tools/build_release.py`；以及源码 `advisor/version.py`、`advisor/paths.py`、`advisor/assets.py`、`advisor/gamelog.py`、`advisor/schemes.py`、`advisor/data.py`、`advisor/engine/`、`advisor/session/`、`advisor/prefs.py`、`advisor/ui/`（含 `text.py`、`overlay.py`、`overlay_parts/`、`settings/dialog.py`）、`advisor/diagnostics.py`。界面文字用 `ast` 从源码里取，不导入 PySide6、不跑识别。
@@ -88,19 +88,21 @@
 
 - **测试观点**
   - `CalibrateReportTest`：校准工具按推荐日志汇总推荐与实际选择、「不认同」的反馈；按「查看筹码」面板改正的选择记在同一编号上，单列一句、不计入一致率；记了「已校准」以后重新计数。
+  - `CalibrateTryOtherSchoolTest`：没选首推、原因点的是「想试别的玩法」的三选一单列一句，不计入一致率，也不进「推荐 → 实际」的对照，原因统计照旧列出；同一次有几条原因时以最后一条为准（先点别的、后点它的不计入，先点它、后点别的照常计入）；最后记下的选择就是首推的照常计入；本机推荐日志和校准导出文件两条路都查。
   - `CalibrateGameOverTest`：推荐日志里同一局有两条对局结束（误认的结束、新一局撤销、真正的结束）时，汇总只算一局（开头写「局数 1；」）；局面借 `tests/test_logbook_game_over_again.py` 的 `GameOverAgainTest`。
   - `CalibrateSchemeRecordsTest`：按筹码方案推荐的三选一不计入任何统计（同一个三选一中途换成方案的以最后一条为准），开头写明跳过了几次，它们的「不认同」也不列；推荐日志照 `tests/test_scheme_scoring.py` 的 `LogbookTest.write_mixed_records` 写。
+  - `CalibrateExportTest`：读校准导出文件默认只算正式版、`--group formal,beta` 两组都算；按方案推荐的不计入、坏行跳过并在开头写明，没有分组、分组认不出的行不算进任何一组、也在开头写明有几行；导出里为 null 的星数、轮次、角色、首推、筹码名照样汇总（明细里 null 的筹码名写「?」）；`--file` 与 `--mark` 冲突、不带 `--file` 给 `--group`、认不出的分组（含空的）都报错退出，文件不存在时退出码非 0。
   - `LiveToolTest`：对着游戏窗口调试的命令行工具 `tools/live.py` 和悬浮窗一样经记账算推荐：手动指定的星数不被概率行改写（和星数对不上的概率行按任务来源算，任务等级按概率行或 `--tier`）。
   - `ProbeCoverageTest`：比对脚本 `tools/compare_cv.py` 报「全部覆盖」的 `cv2` 名字，探针里真的调到（`IMPLICIT_NAMES` 写明的几个除外）；项目代码用到的每个 `cv2` 名字都在覆盖清单里；按灰度解码的读法也在探针里。
   - `BuildInfoTest`：从 `cv2.getBuildInformation()` 的文字里取 CPU 基线、分派、并行框架、IPP 版本和 JPEG、PNG 的 SIMD 两行；基线和分派下面各一行 `requested` 分开记；模块清单、媒体格式不同不报。
   - `SamplesNoteTest` / `NoSamplesTest` / `PreviewShotsTest`：要读识别样本的工具缺样本时先说明缺哪个文件、准备方法在哪里，以退出码 2 结束：识别评测、回放、耗时共用的 `tools/eval_common.need_samples`（写法和测试缺样本时的跳过原因一样）；两个比对工具一张截图都没有时不建识别引擎、不跑探针，不当成「没有差异」；界面预览在命令行上先查要读的截图（`--idle` 不读截图，`--before`、`--in-game` 的也查）。
-- **检证对象**：`tools/calibrate.py` 的 `collect`、`report`（读的是 `advisor/logbook.py` 记的推荐日志，`mark_calibrated`）；`tools/live.py` 的 `new_session`、`recommend`；`tools/compare_cv.py` 的 `PROBE`、`COVERED_NAMES`、`IMPLICIT_NAMES`、`build_info_facts`、`build_info_differences` 和 `main` 开头查样本的一段，以及 `tools/build_cv.py` 的 `used_cv2_names`；`tools/eval_common.py` 的 `samples_missing`、`need_samples`；`tools/compare_ocr_lite.py` 的 `main` 开头查样本的一段；`tools/preview_overlay.py` 的 `missing_shots`。
+- **检证对象**：`tools/calibrate.py` 的 `collect`、`report`、`read_export`、`export_header`（读 `advisor/logbook.py` 记的推荐日志或校准导出文件，`mark_calibrated`）；`tools/live.py` 的 `new_session`、`recommend`；`tools/compare_cv.py` 的 `PROBE`、`COVERED_NAMES`、`IMPLICIT_NAMES`、`build_info_facts`、`build_info_differences` 和 `main` 开头查样本的一段，以及 `tools/build_cv.py` 的 `used_cv2_names`；`tools/eval_common.py` 的 `samples_missing`、`need_samples`；`tools/compare_ocr_lite.py` 的 `main` 开头查样本的一段；`tools/preview_overlay.py` 的 `missing_shots`。
 - **什么时候要跑**：改了这几个工具；改了 `advisor/logbook.py` 的记录格式、对局结束和局数统计；改了 `advisor/session/` 里星数、三选一来源的判断（`tools/live.py` 走同一个记账）；改了 `tests/test_logbook_game_over_again.py` 的 `play_undone_end`、`later` 或 `tests/test_scheme_scoring.py` 的 `LogbookTest.write_mixed_records`（这里借用）；项目代码里新用了 `cv2` 的名字时。
 - **怎么单独跑**：`python -B tools/run_tests.py --only test_dev_tools`（上次约 2.4 秒）。
 - **需要什么**：不需要识别样本截图、不开游戏、不开窗口：推荐日志写进测试沙箱里的临时文件夹；`LiveToolTest` 的识别换成假的读数；比对脚本只核对文字（探针的源码、构建信息的样例），不起别的 Python 环境；缺样本的几条用测试沙箱里的空文件夹。
 - **输出怎么看**：同总则。
 - **出错时一般是哪里不对**
-  - `CalibrateReportTest` / `CalibrateGameOverTest` / `CalibrateSchemeRecordsTest` 失败 → 汇总的口径（面板改正的不计入一致率、按方案推荐的不计入、一局两条结束只算一局）、「不认同」的处理或汇总的文字改了（`tools/calibrate.py`、`advisor/logbook.py`）；有意改文字时把断言一起改。
+  - `CalibrateReportTest` / `CalibrateTryOtherSchoolTest` / `CalibrateGameOverTest` / `CalibrateSchemeRecordsTest` / `CalibrateExportTest` 失败 → 汇总的口径（面板改正的不计入一致率、「想试别的玩法」的不计入、按方案推荐的不计入、一局两条结束只算一局）、读校准导出文件（分组、坏行、null 字段、开头几行）、「不认同」的处理或汇总的文字改了（`tools/calibrate.py`、`advisor/logbook.py`）；有意改文字时把断言一起改。
   - `LiveToolTest` 失败 → `tools/live.py` 的推荐入口，或「手动指定的星数不被概率行改写」改坏了（`Session.judge_source`、`Settings.star_read`）。
   - `ProbeCoverageTest.test_used_names_covered` 失败 → 项目里新用了一个 `cv2` 名字而探针没补：给 `compare_cv.PROBE` 照程序里的用法补一个调用，写进 `COVERED_NAMES`。`test_covered_names_are_called` 失败 → 覆盖清单里写了探针没调到的名字。
   - `BuildInfoTest` 失败 → 比对脚本从构建信息里取的几项或取法改了（`BUILD_INFO_SCALARS`、`BUILD_INFO_SIMD_ANCHORS`）。
@@ -136,6 +138,7 @@
   - `test_manual_export_has_no_auto_and_no_prune`：手动的「导出诊断」照旧不带自动保存标记，也不按份数清理。
   - `test_unread_frame_only_in_manual_export`：后台识别留着三选一读不全时的那一帧时，自动保存的那一份不含截图，当时的画面和这一帧都不带；手动导出两样都带。
   - `test_select_shots_only_in_manual_export`：记下选中项用的那一帧、被临时盖住而没有采用的那一帧同样只在手动导出时带上。
+  - `test_rejoin_saves_nothing`：主菜单结束的局又连回同一局（记账自动撤回那次结束，不是用户撤销误判）：不存诊断包、不清理。
 - **检证对象**：`advisor/ui/overlay_parts/background.py` 的 `save_undo_record`、`export_diagnostics`、`export_done`（撤销时自动存）、`advisor/diagnostics.py` 的导出与按份数清理（含「不删的那一份」这个参数）、以及撤销那条路径（`advisor/ui/overlay.py` 里撤销新一局的判定）。
 - **什么时候要跑**：改了撤销误判时自动存诊断包的路径、诊断模块导出的参数或清理的行为、撤销后那句提示的文字以后。
 - **怎么单独跑**：`python -B tools/run_tests.py --only test_undo_auto_report`（上次约 0.2 秒）
@@ -145,5 +148,5 @@
   - `test_undo_export_auto_and_prune_spares_it` 失败 → 撤销时存诊断包不再带自动保存标记，或存好以后不按份数清理、没把刚存的那一份传进去（系统时间被调回过时它名字最旧，不传会被当成最旧的删掉）。
   - `test_undo_export_failure_no_prune_no_notice` 失败 → 「失败时不清理、不另加提示」这一条被改坏了，或失败时反而多了提示。
   - `test_manual_export_has_no_auto_and_no_prune` 失败 → 手动导出的路径也带上了自动保存标记，或也做了按份数清理。
-  - `test_unread_frame_only_in_manual_export` 失败 → 自动保存的那一份带上了三选一读不全时的那一帧（不含截图的说法就不对了），或手动导出没带上它（`background.py` 的 `export_diagnostics` 取 `unread_source`）。`test_select_shots_only_in_manual_export` 失败同理（取 `pick_source`、`covered_source`）。
+  - `test_unread_frame_only_in_manual_export` 失败 → 自动保存的那一份带上了三选一读不全时的那一帧（不含截图的说法就不对了），或手动导出没带上它（`background.py` 的 `export_diagnostics` 取 `unread_source`）。`test_select_shots_only_in_manual_export` 失败同理（取 `pick_source`、`covered_source`、`finish_source`）。
   - 提示文字的断言失败 → 撤销后那句提示改了；有意改的话把预期一起改。

@@ -32,7 +32,8 @@ EDITOR_SLOTS = ("_hero_chosen", "_list_changed", "_new", "_copy", "_copy_default
                 "_cancel_delete", "_text_edited", "_text_finished", "_filter_changed", "_remove_stale", "_tier_clicked",
                 "_row_moved", "_lock_answered", "close")
 SHARE_SLOTS = ("_hero_picked", "_select_all_clicked", "_format_picked", "copy_to_clipboard", "_paste_changed",
-               "import_schemes", "clear_paste", "close")
+               "import_schemes", "clear_paste", "fetch_by_ref", "_ref_edited", "publish_selected", "logout",
+               "_dup_update", "_dup_skip", "_view_on_hub", "close")
 
 
 def _pointer(obj) -> int:
@@ -160,6 +161,17 @@ class WiringTest(unittest.TestCase):
                             ("paste.textChanged", win.paste.textChanged, (), "_paste_changed"),
                             ("import_btn", win.import_btn.clicked, (), "import_schemes"),
                             ("clear_btn", win.clear_btn.clicked, (), "clear_paste"),
+                            # 按编号导入：按钮和输入框里的回车都接到同一个方法；改了输入框的字收起上一次的出错提示
+                            ("fetch_btn", win.fetch_btn.clicked, (), "fetch_by_ref"),
+                            ("ref_edit.returnPressed", win.ref_edit.returnPressed, (), "fetch_by_ref"),
+                            ("ref_edit.textEdited", win.ref_edit.textEdited, ("1",), "_ref_edited"),
+                            # 发到作业站：按钮直接发勾选的那一套（不再发 hub_requested 去开网页）；提示行下面的三个小按钮、
+                            # 「退出作业站」
+                            ("post_btn", win.post_btn.clicked, (), "publish_selected"),
+                            ("dup_update_btn", win.dup_update_btn.clicked, (), "_dup_update"),
+                            ("dup_skip_btn", win.dup_skip_btn.clicked, (), "_dup_skip"),
+                            ("view_btn", win.view_btn.clicked, (), "_view_on_hub"),
+                            ("logout_btn", win.logout_btn.clicked, (), "logout"),
                             ("close_btn", win.close_btn.clicked, (), "close"),
                             *((f"format_buttons[{k}].toggled", r.toggled, (True,), "_format_picked")
                               for k, r in win.format_buttons.items()),

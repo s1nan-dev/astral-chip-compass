@@ -2,7 +2,8 @@
 
   同一个三选一界面上只查绿框、不每帧做文字识别（_read_select）：读得完整时一直沿用，筹码名那一条变了才再认；读得不完整时
   半秒后再完整识别；
-  战斗等过得了预筛、却不是三选一的画面，画面没变就不再重复识别（_Unchanged）；
+  过得了预筛、却不是三选一的画面，画面没变就不再重复识别（_Unchanged）；真的战斗画面预筛就拦下，一直在动也不做三选一的
+  文字识别，静止时一样记下「不是」、沿用（读不到东西的轮次不再读）；三选一已经认出来时标题带一时被盖住不算关掉；
   三选一期间也读进度条，读数变了下一帧马上补读（ProgressInSelectTest）。
 读轮次、读进度条、认角色、读星数、选角界面判断换成假的（这里不测它们，ProgressInSelectTest 另有一条用真的），
 三选一识别用真的。
@@ -11,15 +12,30 @@
 只盯绿框；不在三选一时一帧最多做一项读数（pending），读数、先后和一帧做完时一样。只盯绿框的两个例外（SelectRereadTest、
 HudRetryTest）：刚出现那一帧读得可疑（刷新次数读成 0、概率行不在概率表里）时半秒后补认一次；读左上角出错、读不出轮次时隔约
 1 秒再读，每次三选一最多 3 次。刚出现那一帧有筹码没读出来、还没给过推荐时先完整重读三张卡、核对排到重读之后，读不全的那一帧
-留一张给诊断包（FirstRereadTest）。
+留一张给诊断包（FirstRereadTest）。刷新那一帧不读左上角、只因为读不出轮次而再读时不重读进度条、先读完那一次不认角色、
+三选一上读星数只走快的那一路（SelectTopTest）。
+轮次数字被头像挡住（读轮次时看见了标记、数字读不出）：不认选角界面，隔一会儿只在标记左边那一小块认字，隔久一点才完整读，
+一直算在对局里，三选一出来照样先给推荐（OccludedIdleTest、OccludedSelectTest）；地图未知、任务栏没开时隔一会儿才连带读
+整块（MapBlockTest）；两个客户端同时识别时另一路的三选一显示着，自己暂停要做文字识别的读数（SelectBoardTest、DualYieldTest）。
 一张截图代表画面在那一刻的样子：照截图走的几组用 FrameProcessor.settle 把到期的读数做完（悬浮窗一帧只做一项、紧接着取下一帧
 接着做，同一张截图就是接着用这一张）。
-对局外的画面（结算画面、房间等）交给 Session、上一局结束后第一次出现三选一（OutOfGameFlowTest），识别函数全部换成假的。
+对局外的画面（结算画面、房间等）交给 Session、上一局结束后第一次出现三选一（OutOfGameFlowTest），识别函数全部换成假的；
+对局中看见轮次标记以后第二次起读不到时先不判选角界面，第一次读不到、过了时限、按热键、刚从暂停恢复、看见打完时的横幅颜色
+以后照判（同一组的 test_pick_grace_*）。
 去掉画面四周的黑边：先看靠边一圈就判完的结果和整套算完全相同（BordersAndTaskPanelTest）。
-另外核对 rules.toml 写明的 coins_ms 和默认值一致。
+对局中少找字：三选一记下位置以后先快读、退回时完整读（SelectFastTest，真的文字识别）；读轮次先在标记左边那一小块只认字
+（RoundQuickTest，识别函数换成假的）；进度条那一块没变就沿用上次的读数（ProgressReuseTest），那一块的样子够灵敏
+（ProgressLookTest，真截图）。
+另外核对 rules.toml 写明的 coins_ms、occluded_recheck_ms、occluded_full_ms、blank_full_ms、round_retry_gap_ms、
+map_block_ms、select_fast、pick_grace_ms 和默认值一致。
+对局中读到过轮次以后连标记都没看见时每 blank_full_s 才完整读一次（BlankFullTest）：只认字照旧、照常认选角界面，按热键、
+连带读整块、三选一上照旧完整读；新一局还没读到轮次、本局已结束、离上次看见标记满 round_retry_gap_s 时不等。完整读轮次时
+什么时候不换大小多认两遍（HudRetryArgumentTest；和等不等是同一个条件，FrameProcessor._mid_game）。
+去黑边记住上一帧的范围（BordersAndTaskPanelTest 的 test_keep_*、test_processor_*）：黑边里零星亮点照旧去、亮成一片照新算。
 """
 import contextlib
 import dataclasses
+import itertools
 import unittest
 from datetime import datetime
 from types import SimpleNamespace
@@ -31,26 +47,44 @@ import numpy as np
 from advisor.data import LEVEL_NIGHTMARE, load_db
 from advisor.pool import difficulty_of
 from advisor.session import Session, Settings
-from advisor.vision import pipeline
-from advisor.vision.hud import Hud, Pregame, Progress
-from advisor.vision.screens import CUSTOM_ROOM, MATCH_FOUND, RESULT, REWARD, TEAM_ROOM, OutOfGame
+from advisor.vision import chip_select, hud as hud_mod, pipeline
+from advisor.vision.hud import Hud, Pregame, Progress, progress_look, same_progress_look
+from advisor.vision.screens import CUSTOM_ROOM, MAIN_MENU, MATCH_FOUND, RESULT, REWARD, TEAM_ROOM, OutOfGame
 from tests.support import samples
 
 SAMPLES = samples.SAMPLES_DIR
 REROLL1 = "20261002_013552_chipselect_levelup_star1_after_reroll1.png"  # 会员推荐信 / 手电筒-强光 / 优雅之羽
 REROLL2 = "20261002_013608_chipselect_levelup_star1_after_reroll2.png"  # 医疗箱-紧急治疗 / 书签 / 能量回收
 SELECTED = "20261002_013617_chipselect_selected_state.png"  # 同上，书签被选中
-BATTLE = "20261002_021351_battle_scene.png"  # 战斗画面：上方也有黑带，过得了三选一的预筛
+BATTLE = "20261002_021351_battle_scene.png"  # 战斗画面：上方也有黑带，过得了预筛第一段，第二段（标题带的位置）拦下
 # 10-03 实机的全队任务三选一（2 星、2 级任务）：出场动画里图标还没加载（稀有度读不出），两秒后图标加载完、最左格蓝色
 ICONS_LATE = "20261003_130848_chipselect_icons_not_loaded_team_task_real.jpg"
 ICONS_LOADED = "20261003_130850_chipselect_team_task_tier2_star2_left_blue_real.jpg"
 # 10-03 实机第 10 轮的任务三选一：任务奖励「进度 -1」已生效，进度条当前格由 11 退回 10
 PROGRESS_BACK = "20261003_131934_chipselect_team_task_tier3_star3_left_blue_real.jpg"
+# 第 4 轮，玩家列表第一行头像的天线挡住了数字（2560×1600，上下有黑边）：看得见轮次标记，数字读不出
+OCCLUDED_ANTENNA = "20261018_164911_hud_round4_antenna_2560x1600.png"
 
 
 def load(name: str) -> np.ndarray:
     img = cv2.imdecode(np.fromfile(str(SAMPLES / name), dtype=np.uint8), cv2.IMREAD_COLOR)
     return cv2.resize(img, (1920, round(img.shape[0] * 1920 / img.shape[1])), interpolation=cv2.INTER_AREA)
+
+
+def band_rows(img: np.ndarray, margin: int = 0) -> tuple[int, int]:
+    """三选一标题带占的行（位置见 chip_select.SELECT_BAND_EDGES；上下各多 margin 个界面单位）。"""
+    h, w = img.shape[:2]
+    unit = chip_select.ui_scale(w, h)
+    top, bottom = chip_select.SELECT_BAND_EDGES
+    return round(h / 2 + (top - margin) * unit), round(h / 2 + (bottom + margin) * unit)
+
+
+def with_title_band(img: np.ndarray) -> np.ndarray:
+    """照三选一的标题带画一条横贯全宽的纯黑带，带子里没有字：过得了预筛，文字识别认不出是三选一。"""
+    top, bottom = band_rows(img)
+    out = img.copy()
+    out[top:bottom] = 0
+    return out
 
 
 @unittest.skipUnless(samples.samples_ok(SELECTED), samples.samples_reason(SELECTED))
@@ -62,9 +96,11 @@ class QuickRecheckTest(unittest.TestCase):
 
     def setUp(self):
         self.session = Session(self.db, Settings(hero="凛", round=3, star=1, star_read=True))
+        # 认了几次三张卡：完整识别的次数，加上快读（记下位置以后只认字，见 FrameProcessor._select_read）读成的次数（快读退回时
+        # 紧接着完整识别，只算那一次）
         self.calls = 0
         self.incomplete_once = False  # 第一次识别到三选一时去掉概率行（假装读错了）
-        real = pipeline.read_chip_select
+        real, real_fast = pipeline.read_chip_select, pipeline.read_chip_select_fast
 
         def counted(img, db, **kw):
             self.calls += 1
@@ -74,8 +110,14 @@ class QuickRecheckTest(unittest.TestCase):
                 seen = dataclasses.replace(seen, probabilities=None)
             return seen
 
+        def counted_fast(img, db, layout):
+            got = real_fast(img, db, layout)
+            self.calls += got[0] is not None
+            return got
+
         patches = [
             mock.patch.object(pipeline, "read_chip_select", side_effect=counted),
+            mock.patch.object(pipeline, "read_chip_select_fast", side_effect=counted_fast),
             mock.patch.object(pipeline, "read_hud", return_value=Hud(round=3)),
             mock.patch.object(pipeline, "read_progress", return_value=Progress()),
             mock.patch.object(pipeline, "read_hero", return_value=SimpleNamespace(hero="凛")),
@@ -274,15 +316,20 @@ class ProgressInSelectTest(unittest.TestCase):
         self.assertEqual(self.advice_progress(events), [10])
 
 
-@unittest.skipUnless(samples.samples_ok(BATTLE, REROLL2), samples.samples_reason(BATTLE, REROLL2))
+@unittest.skipUnless(samples.samples_ok(BATTLE, REROLL2, SELECTED), samples.samples_reason(BATTLE, REROLL2, SELECTED))
 class UnchangedScreenTest(unittest.TestCase):
-    """战斗画面：认定「不是三选一」「不是选角界面」、轮次也读不到以后，画面没变就不再重复识别。"""
+    """过得了预筛、却不是三选一的画面（战斗画面上画一条没有字的标题带）：认定「不是三选一」「不是选角界面」、轮次也读不到
+    以后，画面没变就不再重复识别。真的战斗画面预筛就拦下：上方有黑带、标题带不在，不做文字识别也算认过「不是三选一」，静止时
+    照样记下、沿用（test_real_battle_never_read 等）；例外是按热键的那一帧、三选一已经认出来的时候。"""
 
     @classmethod
     def setUpClass(cls):
         cls.db = load_db()
-        cls.battle = load(BATTLE)
+        cls.real_battle = load(BATTLE)
+        cls.real_moved = np.roll(cls.real_battle, cls.real_battle.shape[1] // 20, axis=1)
+        cls.battle = with_title_band(cls.real_battle)
         cls.select = load(REROLL2)
+        cls.selected = load(SELECTED)  # 同一组候选，书签被选中
         cls.moved = np.roll(cls.battle, cls.battle.shape[1] // 20, axis=1)  # 画面明显变了：左右平移 5%
         cls.blank = np.zeros_like(cls.battle) + 90  # 过不了预筛的画面
         # 淡入到九成的三选一：和完整的三选一只差一点（指纹算「没变」），这里假装它没被认出来
@@ -302,7 +349,7 @@ class UnchangedScreenTest(unittest.TestCase):
             self.select_calls += 1
             return None if img is self.partial else real(img, db, **kw)
 
-        def fake_hud(img, db, full):
+        def fake_hud(img, db, full, **kw):
             self.hud_calls.append(full)
             return Hud()  # 战斗画面上没有轮次
 
@@ -326,6 +373,116 @@ class UnchangedScreenTest(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
         self.proc = pipeline.FrameProcessor(self.db, self.session)
+
+    def test_real_battle_never_read(self):
+        """真的战斗画面：上方的黑条不在三选一标题带的位置，预筛就拦下，画面一直在动也不做三选一的文字识别。"""
+        self.assertTrue(chip_select.looks_like_overlay_screen(self.battle))  # 其余几条用的画面过得了预筛
+        self.assertTrue(chip_select.dark_band(self.real_battle))
+        self.assertFalse(chip_select.looks_like_overlay_screen(self.real_battle))
+        for t in range(6):
+            self.proc.process(self.real_moved if t % 2 else self.real_battle, float(t))
+        self.assertEqual(self.select_calls, 0)
+        self.assertFalse(self.proc.chip_select_visible)
+
+    def test_dark_band_once_per_frame(self):
+        """预筛没过时要分「连暗行都没有」和「标题带不在」两种情况：第一段同一帧只算一次（取样落在阈值附近的帧一次要整幅缩放）。"""
+        for name, img in (("上方有黑带", self.real_battle), ("上方没有暗行", self.blank)):
+            with self.subTest(name), mock.patch.object(chip_select, "dark_band", wraps=chip_select.dark_band) as dark:
+                self.proc.process(img, 0.0)
+                self.assertEqual(dark.call_count, 1)
+
+    def test_real_battle_remembered_while_still(self):
+        """静止的真战斗画面没做文字识别也记下「不是三选一」；第一段都没过的画面（压根没有暗行）不算看过。"""
+        self.proc.process(self.real_battle, 0.0)
+        self.assertIsNone(self.proc._not_select.matched)  # 第 1 帧还不知道画面静不静止
+        self.proc.process(self.real_battle, 1.0)
+        remembered = self.proc._not_select.matched
+        self.assertIsNotNone(remembered)
+        self.proc.process(self.real_battle, 2.0)
+        self.assertIs(self.proc._not_select.matched, remembered)
+        self.proc.process(self.real_moved, 3.0)  # 画面变了：不沿用，也不算静止
+        self.assertIsNone(self.proc._not_select.matched)
+        self.proc.process(self.blank, 4.0)
+        self.assertIsNone(self.proc._not_select.matched)
+        self.assertIsNone(self.proc._not_select._last)
+        self.assertEqual(self.select_calls, 0)
+
+    def test_chip_select_after_real_battle_read_at_once(self):
+        """静止的真战斗画面记下了「不是」，三选一一出来马上完整识别、给推荐。"""
+        for t in range(5):
+            self.proc.process(self.real_battle, float(t))
+        self.assertIsNotNone(self.proc._not_select.matched)
+        self.assertEqual(self.select_calls, 0)
+        events = self.proc.process(self.select, 5.0)
+        self.assertEqual(self.select_calls, 1)
+        self.assertEqual([e.kind for e in events if e.kind == "advice"], ["advice"])
+
+    def test_title_band_back_not_taken_as_unchanged(self):
+        """标题带不在的画面记下了「不是」，标题带回来时不沿用：带子只占判定区域的一小块，其余差不多时指纹算「没变」，不能因此
+        把三选一跳过去。"""
+        top, bottom = band_rows(self.select)
+        faded = self.select.copy()
+        faded[top:bottom] = np.maximum(faded[top:bottom], chip_select.SELECT_BAND_BLACK + 10)  # 带子灰了：第一段照样过，第二段不过
+        self.assertTrue(chip_select.dark_band(faded))
+        self.assertFalse(chip_select.looks_like_overlay_screen(faded))
+        self.assertTrue(pipeline._same(
+            pipeline._fingerprint(faded, (0.0, 0.0, 1.0, pipeline.OCR_TOP)),
+            pipeline._fingerprint(self.select, (0.0, 0.0, 1.0, pipeline.OCR_TOP)),
+        ))
+        for t in range(3):
+            self.proc.process(faded, float(t))
+        self.assertIsNotNone(self.proc._not_select.matched)
+        self.assertEqual(self.select_calls, 0)
+        events = self.proc.process(self.select, 3.0)
+        self.assertEqual(self.select_calls, 1)
+        self.assertEqual([e.kind for e in events if e.kind == "advice"], ["advice"])
+
+    def _check_select_with_cover(self, frames: int) -> None:
+        """三选一已经认出来了，标题带一时被盖住不算界面关了：筹码名那一条没变就只查绿框，不结算（session.selection.GONE_FRAMES
+        连着两帧就会结算）、不重新给推荐、不算新的一次。"""
+        top, bottom = band_rows(self.selected, margin=10)
+        covered = self.selected.copy()
+        w = covered.shape[1]
+        covered[top:bottom, round(w * 0.1):round(w * 0.9)] = (200, 200, 220)
+        self.assertTrue(chip_select.dark_band(covered))
+        self.assertFalse(chip_select.looks_like_overlay_screen(covered))
+        kinds: list[str] = []
+        for i, img in enumerate([self.selected] * 3 + [covered] * frames + [self.selected] * 3):
+            kinds += [e.kind for e in self.proc.process(img, i * 0.15)]
+            self.assertTrue(self.proc.chip_select_visible, i)
+        self.assertEqual(self.select_calls, 1)
+        self.assertEqual(kinds.count("advice"), 1)
+        for kind in ("picked", "missed_pick", "pick_reverted"):
+            self.assertNotIn(kind, kinds)
+        self.assertEqual(self.session.select._select_no, 1)
+
+    def test_title_band_covered_one_frame(self):
+        self._check_select_with_cover(1)
+
+    def test_title_band_covered_two_frames(self):
+        self._check_select_with_cover(2)
+
+    def test_title_band_covered_four_frames(self):
+        self._check_select_with_cover(4)
+
+    def test_select_closed_into_dark_top_read_once_more(self):
+        """三选一真的关了、进到上方有黑带的画面：完整识别一次否定，缓存清掉，之后不再认，也不一直等绿框。"""
+        self.proc.process(self.select, 0.0)
+        self.assertEqual(self.select_calls, 1)
+        self.assertIsNotNone(self.proc._select_cache)
+        for t in range(1, 6):
+            self.proc.process(self.real_battle, float(t))
+        self.assertEqual(self.select_calls, 2)
+        self.assertIsNone(self.proc._select_cache)
+        self.assertFalse(self.proc.chip_select_visible)
+
+    def test_select_closed_into_light_screen_not_read(self):
+        """三选一关了、进到上方没有暗行的画面：不用文字识别就知道不是。"""
+        self.proc.process(self.select, 0.0)
+        self.proc.process(self.blank, 1.0)
+        self.assertEqual(self.select_calls, 1)
+        self.assertIsNone(self.proc._select_cache)
+        self.assertFalse(self.proc.chip_select_visible)
 
     def test_battle_read_once_until_screen_changes(self):
         for t in range(6):
@@ -373,24 +530,69 @@ class UnchangedScreenTest(unittest.TestCase):
         self.proc.process(self.battle, 4.0, force=True)
         self.assertEqual(self.select_calls, calls + 1)
 
-    def test_round_and_select_screen_not_reread_while_unchanged(self):
-        """每 3 秒一轮（读轮次、认选角界面……）：每个时刻的这一轮都做完再看下一个时刻（settle，悬浮窗一帧一项、紧接着几帧
-        做完）。"""
+    def test_hotkey_reads_dark_top_without_band(self):
+        """第二段只靠游戏的排版：按热键的那一帧上方有黑带就照样认；上方连暗行都没有的画面按热键也不认。"""
+        for t in range(4):
+            self.proc.process(self.real_battle, float(t))
+        self.assertEqual(self.select_calls, 0)
+        self.proc.process(self.real_battle, 4.0, force=True)
+        self.assertEqual(self.select_calls, 1)
+        self.proc.process(self.real_battle, 5.0)
+        self.assertEqual(self.select_calls, 1)
+        self.proc.process(self.blank, 6.0, force=True)
+        self.assertEqual(self.select_calls, 1)
+
+    def test_hotkey_found_select_kept_when_band_not_where_expected(self):
+        """排版变了、第二段一直认不出三选一：按热键认出来以后接着只查绿框，不当作关掉；按热键之前不认。"""
+        with mock.patch.object(pipeline, "looks_like_overlay_screen", return_value=False):
+            self.proc.process(self.select, 0.0)
+            self.proc.process(self.select, 0.5)
+            self.assertEqual(self.select_calls, 0)
+            self.assertFalse(self.proc.chip_select_visible)
+            events = self.proc.process(self.select, 1.0, force=True)
+            self.assertEqual(self.select_calls, 1)
+            self.assertEqual([e.kind for e in events if e.kind == "advice"], ["advice"])
+            for t in (1.5, 2.0, 2.5):
+                self.proc.process(self.select, t)
+                self.assertTrue(self.proc.chip_select_visible)
+            self.assertEqual(self.select_calls, 1)
+
+    def _check_round_not_reread(self, still: np.ndarray, moved: np.ndarray) -> None:
         self.proc._not_select.max_s = self.proc._not_pick.max_s = 100.0  # 这里不测「最多沿用多久」
         for t in (0.0, 3.0, 6.0, 9.0, 12.0):
-            self.proc.settle(self.battle, t)
+            self.proc.settle(still, t)
         # 第 1、2 次照常读；第 2 次时画面已经静止、记下了，之后不再读
         self.assertEqual(self.hud_calls, [False, False])
         self.assertEqual(self.pick_calls, 2)
         # 地图变成未知：上次只读了轮次，没读任务栏，要连任务栏一起再读一次
         self.session.set_map(None)
-        self.proc.settle(self.battle, 15.0)
-        self.proc.settle(self.battle, 18.0)
+        self.proc.settle(still, 15.0)
+        self.proc.settle(still, 18.0)
         self.assertEqual(self.hud_calls, [False, False, True])
         # 画面变了：重新读
-        self.proc.settle(self.moved, 21.0)
+        self.proc.settle(moved, 21.0)
         self.assertEqual(self.hud_calls, [False, False, True, True])
         self.assertEqual(self.pick_calls, 3)
+
+    def test_round_and_select_screen_not_reread_while_unchanged(self):
+        """每 3 秒一轮（读轮次、认选角界面……）：每个时刻的这一轮都做完再看下一个时刻（settle，悬浮窗一帧一项、紧接着几帧
+        做完）。真的战斗画面标题带不在，三选一的文字识别一次也不做，读轮次、认选角界面照样沿用。"""
+        self._check_round_not_reread(self.real_battle, self.real_moved)
+        self.assertEqual(self.select_calls, 0)
+
+    def test_round_not_reread_after_text_says_not_select(self):
+        """过了预筛、文字识别否定的画面（转场等）也一样。"""
+        self._check_round_not_reread(self.battle, self.moved)
+
+    def test_real_battle_round_reread_after_max_time(self):
+        """静止的真战斗画面上读不到东西的轮次也只沿用 max_s：记下的那一条换新以后再读一次，不会一直不读。"""
+        limit = self.proc._not_select.max_s
+        self.assertEqual(limit, 10.0)
+        for t in range(0, 30, 3):
+            self.proc.settle(self.real_battle, float(t))
+        # 第 0、3 秒照常读，3 秒那次记下；过了 10 秒的第一轮（15 秒）换新一条、读一次；27 秒同样
+        self.assertEqual(len(self.hud_calls), 4)
+        self.assertEqual(self.select_calls, 0)
 
 
 @unittest.skipUnless(samples.samples_ok(REROLL2), samples.samples_reason(REROLL2))
@@ -411,20 +613,150 @@ class BordersAndTaskPanelTest(unittest.TestCase):
         nearly = cv2.copyMakeBorder(img, 4, 4, 0, 0, cv2.BORDER_CONSTANT)  # 不到 1%：不去
         self.assertIs(pipeline.trim_borders(nearly)[0], nearly)
 
+    def test_keep_ignores_speck_in_border(self):
+        """上一帧的黑边里新冒出一块小亮点（16:10 屏幕上游戏画在黑边里的小图标）：带上 keep 时照旧去同样的黑边；
+        不带 keep 时和原来一样，被这点亮块引着少去了。"""
+        img = load(REROLL2)
+        h, w = img.shape[:2]
+        padded = cv2.copyMakeBorder(img, 90, 90, 0, 0, cv2.BORDER_CONSTANT, value=(0, 0, 0))
+        keep = (0, 90, w, 90 + h)
+        flagged = padded.copy()
+        flagged[20:26, 100:106] = 255
+        got, offset = pipeline.trim_borders(flagged, keep)
+        self.assertEqual((got.shape[:2], offset), ((h, w), (0, 90)))
+        self.assertTrue(np.array_equal(got, img))
+        got, offset = pipeline.trim_borders(flagged)
+        self.assertEqual((got.shape[:2], offset), ((h + 90 - 20, w), (0, 20)))  # 少去了：上边只去掉 20 行
+
+    def test_keep_uses_new_edge_when_border_is_filled(self):
+        """黑边里亮的一大片（超过 BORDER_SPECK）：照新算的。"""
+        img = load(REROLL2)
+        h, w = img.shape[:2]
+        padded = cv2.copyMakeBorder(img, 90, 90, 0, 0, cv2.BORDER_CONSTANT, value=(0, 0, 0))
+        keep = (0, 90, w, 90 + h)
+        filled = padded.copy()
+        filled[0:70] = 255
+        got, offset = pipeline.trim_borders(filled, keep)
+        self.assertEqual(offset, (0, 0))  # 上边照新算的（不去）；下边的黑边照旧去掉
+        self.assertEqual(got.shape[:2], (90 + h, w))
+
+    def test_keep_full_or_thicker_border(self):
+        """keep 是整幅（原来没有黑边）：照旧原样返回；黑边比 keep 厚的那一边照新算的。"""
+        img = load(REROLL2)
+        h, w = img.shape[:2]
+        padded = cv2.copyMakeBorder(img, 90, 90, 0, 0, cv2.BORDER_CONSTANT, value=(0, 0, 0))
+        got, offset = pipeline.trim_borders(padded, (0, 0, w, h + 180))
+        self.assertEqual((got.shape[:2], offset), ((h, w), (0, 90)))
+        got, offset = pipeline.trim_borders(padded, (0, 40, w, h + 140))
+        self.assertEqual((got.shape[:2], offset), ((h, w), (0, 90)))
+
+    def test_keep_turns_off_edge_shortcut(self):
+        """小亮点碰到最外一圈（_edges_lit 为真）：不给 keep 时那条捷径原样返回，给了 keep 时躲得过。"""
+        img = load(REROLL2)
+        h, w = img.shape[:2]
+        padded = cv2.copyMakeBorder(img, 90, 90, 0, 0, cv2.BORDER_CONSTANT, value=(0, 0, 0))
+        edge = padded.copy()
+        edge[0:4, 500:504] = 255
+        edge[h + 180 - 4:h + 180, 500:504] = 255
+        step = max(1, min(edge.shape[:2]) // 270)
+        self.assertTrue(pipeline._edges_lit(edge, step))
+        self.assertEqual(pipeline.trim_borders(edge)[1], (0, 0))  # 捷径：原样返回
+        got, offset = pipeline.trim_borders(edge, (0, 90, w, 90 + h))
+        self.assertEqual((got.shape[:2], offset), ((h, w), (0, 90)))
+        self.assertTrue(np.array_equal(got, img))
+
+    def test_processor_keeps_border_across_frames(self):
+        """连着两帧（先干净、再带亮块）去掉的黑边不变；换了画面大小就不带 keep。"""
+        db = load_db()
+        proc = pipeline.FrameProcessor(db, Session(db, Settings(hero="凛")))
+        img = load(REROLL2)
+        h, w = img.shape[:2]
+        padded = cv2.copyMakeBorder(img, 90, 90, 0, 0, cv2.BORDER_CONSTANT, value=(0, 0, 0))
+        flagged = padded.copy()
+        flagged[20:26, 100:106] = 255
+        self.assertEqual(proc._trim(padded)[1], (0, 90))
+        self.assertEqual(proc._trim(flagged)[1], (0, 90))
+        self.assertEqual(proc._border, ((h + 180, w), (0, 90, w, 90 + h)))
+        other = cv2.resize(padded, (w // 2, (h + 180) // 2))
+        with mock.patch.object(pipeline, "trim_borders", return_value=(other, (0, 0))) as trim:
+            proc._trim(other)
+        self.assertIsNone(trim.call_args.args[1])
+
+    def test_keep_speck_threshold(self):
+        """多出来的那一条里亮像素的占比在 BORDER_SPECK 两边：低一点照 keep 去，高一点照这一帧自己算的（和不给 keep 一样）。
+        亮块从第 0 行画到黑边底下（第 90 行），这一帧算出的上边是 0，那一条里亮像素的占比就是亮块的宽 / 画面宽。"""
+        img = load(REROLL2)
+        h, w = img.shape[:2]
+        padded = cv2.copyMakeBorder(img, 90, 90, 0, 0, cv2.BORDER_CONSTANT, value=(0, 0, 0))
+        keep = (0, 90, w, 90 + h)
+        for ratio, kept in ((0.9, True), (1.1, False)):
+            flagged = padded.copy()
+            flagged[0:90, 100:100 + round(pipeline.BORDER_SPECK * ratio * w)] = 255
+            with self.subTest(ratio=ratio):
+                got, offset = pipeline.trim_borders(flagged, keep)
+                if kept:
+                    self.assertEqual((got.shape[:2], offset), ((h, w), (0, 90)))
+                else:
+                    own, own_offset = pipeline.trim_borders(flagged)
+                    self.assertEqual((got.shape[:2], offset), (own.shape[:2], own_offset))
+                    self.assertEqual(offset, (0, 0))
+
+    def test_keep_never_leaves_less_than_half(self):
+        """keep 和这一帧各暗在一边：各边分别照 keep 去完剩不到一半（这里什么都不剩）时，照这一帧自己算的去。"""
+        img = np.zeros((400, 400, 3), np.uint8)
+        img[1, 200] = 255  # 最上面一个亮点：这一帧自己算的上边是 0
+        img[197:200] = 255  # 上半幅最底下三行亮着（占上半幅 1.5%，不到 BORDER_SPECK）
+        own, own_offset = pipeline.trim_borders(img)
+        self.assertEqual((own.shape[:2], own_offset), ((200, 400), (0, 0)))
+        got, offset = pipeline.trim_borders(img, (0, 200, 400, 400))  # 上一帧只留了下半幅
+        self.assertEqual((got.shape[:2], offset), ((200, 400), (0, 0)))
+
     # 平常的画面四条边上都有亮点、只看靠边一圈就判完（_edges_lit）的代表：4K 的三选一、战斗画面（上方也有黑带）、
     # 对局画面，21:9、4:3 的实机截图。只对这几张断言走了这条快路：以后加进四周偏暗、但没有黑边的样本（转场画面等）时，
     # 整套算下来照样原样返回，只是慢一点，不该让这条测试失败
     FAST_PATH_SAMPLES = (SELECTED, BATTLE, "20261002_012918_hud_round1.png", ICONS_LOADED,
                          "20261002_144039_hud_round1_2560x1057.jpg", "20261002_193639_hud_round11_2397x1798.jpg")
+    # 故意带着上下黑边的实机截图（2560×1600 的屏幕上开 16:9 的游戏，上下各一条纯黑）：头像挡住轮次的两张和大厅（主菜单）
+    # 三张，读轮次的用例（tests/test_real_games.py 的 RoundSanityTest）、主菜单空转的用例（tests/test_pipeline_sequences.py）
+    # 照流程先去黑边再读，截图要保持原样。所以不算在「样本都没有黑边」里，另由 test_letterboxed_samples 核对去掉的正是上下的
+    # 黑边。值是去掉黑边以后的（高, 宽）：大厅这三张上边 80 行纯黑，下边连着 86 行纯黑（主菜单底栏最下面几行本来就是纯黑），
+    # 一起去掉，所以剩 1434 行
+    LETTERBOXED = {
+        "20261106_211543_hud_round3_ears_hant_2560x1600.png": (1440, 2560),
+        "20261018_164911_hud_round4_antenna_2560x1600.png": (1440, 2560),
+        "20261106_211618_lobby_dates_hant_2560x1600.png": (1434, 2560),
+        "20261108_014416_lobby_banner_pass_hant_2560x1600.png": (1434, 2560),
+        "20261108_045522_lobby_banner_gift_hant_2560x1600.png": (1434, 2560),
+    }
 
     def test_samples_have_no_borders(self):
         for f in sorted(SAMPLES.glob("2026*.*")):
+            if f.name in self.LETTERBOXED:
+                continue
             img = cv2.imdecode(np.fromfile(str(f), dtype=np.uint8), cv2.IMREAD_COLOR)
             with self.subTest(f.name):
                 self.assertIs(pipeline.trim_borders(img)[0], img)
                 if f.name in self.FAST_PATH_SAMPLES:
                     self.assertTrue(pipeline._edges_lit(img, max(1, min(img.shape[:2]) // 270)))
         self.assertEqual([n for n in self.FAST_PATH_SAMPLES if not (SAMPLES / n).exists()], [])
+
+    def test_letterboxed_samples(self):
+        """上下带黑边的那几张实机截图（LETTERBOXED）：去掉的是上下各一条纯黑、左右不动，剩下的是 16:9 的游戏画面，
+        第一行、最后一行都有亮点（没多切进游戏画面）。"""
+        samples.require_samples(*self.LETTERBOXED)
+        for name, size in self.LETTERBOXED.items():
+            img = cv2.imdecode(np.fromfile(str(SAMPLES / name), dtype=np.uint8), cv2.IMREAD_COLOR)
+            got, (x, y) = pipeline.trim_borders(img)
+            h, w = got.shape[:2]
+            with self.subTest(name):
+                self.assertEqual(img.shape[:2], (1600, 2560))
+                self.assertEqual(((h, w), (x, y)), (size, (0, 80)))
+                self.assertAlmostEqual(w / h, 16 / 9, delta=0.01)
+                self.assertTrue(np.array_equal(got, img[y:y + h, x:x + w]))
+                self.assertLessEqual(int(img[:y].max()), pipeline.BORDER_DARK)
+                self.assertLessEqual(int(img[y + h:].max()), pipeline.BORDER_DARK)
+                self.assertGreater(int(got[0].max()), pipeline.BORDER_DARK)
+                self.assertGreater(int(got[-1].max()), pipeline.BORDER_DARK)
 
     def full_trim(self, img):
         """整套算（不先看靠边一圈）的结果。"""
@@ -511,7 +843,7 @@ class FlowTest(unittest.TestCase):
         self.tasks_open, self.select_info, self.pregame = False, None, Pregame()
         self.hud_calls, self.saved = [], []
 
-        def fake_hud(img, db, full):
+        def fake_hud(img, db, full, **kw):
             self.hud_calls.append(full)
             return Hud(round=self.round)
 
@@ -659,12 +991,12 @@ class FlowTest(unittest.TestCase):
         self.assertEqual(self.session.game.mutators, ["狂风", "暴雨"])
 
     def test_language_hint(self):
-        self.select_info = True  # 像三选一，但读不到简体中文标题
+        self.select_info = True  # 像三选一，但读不到简体或繁体的标题
         self.proc.process(self.img, 0.0, force=True)
         self.assertEqual(self.session.unsupported, [])
         self.proc.process(self.img + 1, 1.0, force=True)
         self.assertIn("简体中文", " ".join(self.session.unsupported))
-        self.select_info = False  # 读到了简体中文标题（假的识别仍返回 None）
+        self.select_info = False  # 读到了简体或繁体的标题（假的识别仍返回 None）
         self.proc.process(self.img + 2, 2.0, force=True)
         self.assertEqual(self.session.unsupported, [])
 
@@ -679,6 +1011,9 @@ class OutOfGameFlowTest(unittest.TestCase):
     """对局外的画面（判断对局已结束的管线部分）：选角界面判断那次的下方区域认出结算画面，离开对局后的整幅识别（read_pregame）
     认出房间、「匹配成功」画面、奖励画面，读数交给 Session.on_out_of_game；上一局结束后第一次出现三选一时，
     这一帧读到的轮次、角色和星数用进这次推荐；本局已结束时不读星数；[map_detect] 各开关关掉后整幅识别做不做。
+    停在主菜单（不在对局里、最近认出的是主菜单）时底栏和开始按钮那一块没变就不认字（主菜单空转），背景动画、横幅轮播不算；
+    这两块变了（选角界面、房间、回到对局等）、窗口大小变了、从暂停恢复、按热键时先看一眼下方区域、接着整幅识别，空转满一分钟
+    照常认一次；对局还没结束时认出的主菜单不空转；两开时让路照旧；两块里有一块自己在动时防来回进出（只看底栏、暂停空转）。
     识别函数全部换成假的。"""
 
     RESULT_SCREEN = OutOfGame(RESULT, "噩梦", "异变图书馆", 12)
@@ -689,9 +1024,16 @@ class OutOfGameFlowTest(unittest.TestCase):
         self.picking, self.bottom, self.pregame = False, None, Pregame()  # 选角界面、下方区域和整幅识别的读数
         self.star_calls, self.pregame_at = 0, []  # 读星数的次数、每次整幅识别的时刻
         self.pick_at = []  # 每次选角界面判断（下方区域的识别）的时刻
+        # 认字的三项按先后记下（哪一项, 时刻）：hud 读轮次、pick 下方区域（选角界面判断）、pregame 整幅识别
+        self.ocr = []
+
+        def fake_hud(img, db, full, **kw):
+            self.ocr.append(("hud", self.clock[0]))
+            return Hud(round=self.round)
 
         def fake_pick(img, db, info=None):
             self.pick_at.append(self.clock[0])
+            self.ocr.append(("pick", self.clock[0]))
             if info is not None:
                 info["screen"] = None if self.picking else self.bottom
             return self.picking
@@ -702,12 +1044,13 @@ class OutOfGameFlowTest(unittest.TestCase):
 
         def fake_pregame(img, db, width, catalog):
             self.pregame_at.append(self.clock[0])
+            self.ocr.append(("pregame", self.clock[0]))
             return self.pregame
 
         patches = [
             mock.patch.object(pipeline, "looks_like_overlay_screen", side_effect=lambda img: self.seen is not None),
             mock.patch.object(pipeline, "read_chip_select", side_effect=lambda img, db, **kw: self.seen),
-            mock.patch.object(pipeline, "read_hud", side_effect=lambda img, db, full: Hud(round=self.round)),
+            mock.patch.object(pipeline, "read_hud", side_effect=fake_hud),
             mock.patch.object(pipeline, "read_progress", return_value=Progress()),
             mock.patch.object(pipeline, "is_select_screen", side_effect=fake_pick),
             mock.patch.object(pipeline, "read_hero", side_effect=lambda img, db: SimpleNamespace(hero=self.hero)),
@@ -735,12 +1078,12 @@ class OutOfGameFlowTest(unittest.TestCase):
         self.session._clock = lambda: self.clock[0]
         self.proc = pipeline.FrameProcessor(db, self.session)
 
-    def step(self, t: float) -> list:
-        """处理 t 秒处的一帧，到期的读数都做完（settle）。每帧的亮度都和前 7 帧不同：整幅识别前的缩略图检查、选角界面判断
-        用的指纹都看得出画面变了。"""
+    def step(self, t: float, force: bool = False) -> list:
+        """处理 t 秒处的一帧，到期的读数都做完（settle；force 为按热键的那一帧）。每帧的亮度都和前 7 帧不同：整幅识别前的
+        缩略图检查、选角界面判断用的指纹都看得出画面变了。"""
         self.clock[0] = t
         self.n += 1
-        return self.proc.settle(np.full((1080, 1920, 3), 10 + 30 * (self.n % 8), np.uint8), t)
+        return self.proc.settle(np.full((1080, 1920, 3), 10 + 30 * (self.n % 8), np.uint8), t, force=force)
 
     def playing(self) -> None:
         """一局打到第 12 轮、3 星，认出角色凛（第 0、4、8 秒各读一次轮次）。"""
@@ -748,6 +1091,16 @@ class OutOfGameFlowTest(unittest.TestCase):
         for t in (0.0, 4.0, 8.0):
             self.step(t)
         self.assertEqual((self.session.settings.round, self.session.game.seen_hero), (12, "凛"))
+
+    def finish(self, t: float, kind: str = "banner") -> list:
+        """t 秒处一帧打完时的画面：棋盘上那条蓝色斜带（打赢、打输都有，kind 为 banner）或通关的整屏红底（coral）。只换颜色预筛的
+        结果（vision.victory.glance），认字一律认不出（这里不看胜负）。实机上结算画面紧跟在它后面出来，看见以后 pick_grace_ms
+        以内读不到轮次时照常判选角界面（FrameProcessor._ending_seen_at）。"""
+        seen = pipeline.victory.Glance(0.9 if kind == "coral" else 0.0, 0.0, banner=kind == "banner")
+        with mock.patch.object(pipeline.victory, "glance", return_value=seen), \
+                mock.patch.object(pipeline.victory, "read", return_value=False), \
+                mock.patch.object(pipeline.victory, "read_game_over", return_value=False):
+            return self.step(t)
 
     @staticmethod
     def whys(events, kind: str) -> list:
@@ -762,7 +1115,7 @@ class OutOfGameFlowTest(unittest.TestCase):
         self.assertEqual(self.whys(events, "game_over"), ["检测到结算画面（异变图书馆、噩梦、12 轮）"])
         self.assertTrue(self.session.game.game_over)
         self.assertEqual(self.session.difficulty_info.level, LEVEL_NIGHTMARE)
-        self.assertEqual(self.proc._last_round_at, float("-inf"))
+        self.assertEqual(self.proc._mark_seen_at, float("-inf"))
         self.assertEqual(self.star_calls, stars)
         self.assertEqual(self.pregame_at, [12.0])
         rec = [r for r in self.session.recent_events(60) if r["kind"] == "read:screen"]
@@ -921,6 +1274,854 @@ class OutOfGameFlowTest(unittest.TestCase):
         events = self.step(300.3)  # 同一次三选一的下一帧：不再开新的一局
         self.assertNotIn("newgame", [e.kind for e in events])
 
+    def test_main_menu_ends_game(self):
+        """对局中途退出、回到主菜单：读不到轮次时下方区域认出主菜单，隔一个 hud_ms 又认出一次就结束这一局，依据「检测到
+        主菜单」；只认出一次就回到了对局画面的那一次作废。这一局的状态保留。每次都是看见轮次标记以后第一次读不到、或刚认出
+        主菜单（看见标记的时刻已清掉），不先不判。"""
+        menu = OutOfGame("main_menu")
+        self.playing()
+        self.round, self.bottom = None, menu
+        self.assertEqual(self.whys(self.step(12.0), "game_over"), [])  # 只认出一次：还不算结束
+        self.round, self.bottom = 12, None
+        self.step(15.0)  # 回到了对局画面
+        self.round, self.bottom = None, menu
+        self.assertEqual(self.whys(self.step(18.0), "game_over"), [])
+        events = self.step(18.0 + self.proc.hud_s)
+        self.assertEqual(self.whys(events, "game_over"), ["检测到主菜单"])
+        self.assertEqual([t for t in self.pick_at if t > 8.0], [12.0, 18.0, 18.0 + self.proc.hud_s])
+        self.assertTrue(self.session.game.game_over)
+        self.assertEqual((self.session.settings.round, self.session.settings.star), (12, 3))
+        rec = [r for r in self.session.recent_events(60) if r["kind"] == "read:screen"]
+        self.assertEqual([(r["screen"], r["full"]) for r in rec], [("main_menu", False)] * 3)
+
+    def test_rejoin_rereads_hero(self):
+        """主菜单结束这一局以后又连回了同一局（status 的 cause 为 rejoined）：和开新的一局一样马上再认一次角色，不等
+        hero_ms（这里改成 100 秒，不马上认的话第 21 秒不会认）；认回这一局的角色，就不再算刚连回来。"""
+        menu = OutOfGame("main_menu")
+        reads = []
+
+        def hero(img, db):
+            reads.append(self.clock[0])
+            return SimpleNamespace(hero=self.hero)
+
+        with mock.patch.object(pipeline, "read_hero", side_effect=hero), \
+                mock.patch.object(self.proc, "hero_s", 100.0):
+            self.playing()
+            self.assertEqual(reads, [0.0])
+            self.round, self.bottom = None, menu
+            self.step(12.0)
+            self.assertEqual(self.whys(self.step(15.0), "game_over"), ["检测到主菜单"])
+            self.round, self.bottom = 12, None
+            self.step(18.0)
+            events = self.step(21.0)
+        self.assertEqual([e.cause for e in events if e.kind == "status" and e.cause], ["rejoined"])
+        self.assertFalse(self.session.game.game_over)
+        self.assertEqual(reads, [0.0, 21.0])
+        self.assertFalse(self.session.game._rejoined)
+
+    # ---- 对局中看见轮次标记以后第二次起读不到时先不判选角界面（pick_grace_ms，见 FrameProcessor._pick_grace）
+
+    def grace_run(self, times, force_at=()) -> list:
+        """playing() 以后在 times 这几秒各一帧，读不到轮次、也没有标记（战斗等）；force_at 里的那几秒是按热键的那一帧。返回这几帧
+        里先不判的次数（perfstats 的 pick_grace）。"""
+        counted = []
+        self.round, self.bottom = None, None
+        # 这里只看先不判选角界面的计数；读轮次那边的 round_no_retry、hud_full_wait 不在这一组的核对范围里
+        with mock.patch.object(pipeline.perfstats, "count",
+                               side_effect=lambda name: counted.append(name) if name.startswith("pick_") else None):
+            for t in times:
+                self.step(t, force=t in force_at)
+        return counted
+
+    def test_pick_grace_skips_after_mark(self):
+        """最后一次读到轮次（第 8 秒）以后第一次读不到（第 11 秒）照常认下方区域；之后 pick_grace_ms（10 秒）以内读不到轮次时
+        不认，照旧读星数（和认了、不是选角界面时一样），每次数一笔 pick_grace；第 20 秒（离第 8 秒 12 秒）照常认。"""
+        self.assertEqual(self.proc.pick_grace_s, 10.0)
+        self.playing()
+        stars = self.star_calls
+        counted = self.grace_run((11.0, 14.0, 17.0))
+        self.assertEqual([t for t in self.pick_at if t > 8.0], [11.0])
+        self.assertEqual(self.star_calls - stars, 3)
+        self.assertEqual(counted, ["pick_check_first", "pick_grace", "pick_grace"])
+        self.assertEqual(self.grace_run((20.0,)), ["pick_check_old"])
+        self.assertEqual([t for t in self.pick_at if t > 8.0], [11.0, 20.0])
+
+    def test_pick_grace_first_miss_each_mark(self):
+        """每看见一次轮次标记，之后第一次读不到都照认：第 11 秒照认、第 14 秒先不认；连标记都没看见时每 blank_full_s（6 秒）
+        才完整读一次，第 20 秒又读到轮次，第 23 秒（这次标记以后第一次读不到）照认，第 26、29 秒先不认，第 32 秒（离第 20 秒
+        12 秒）照认。"""
+        self.playing()
+        counted = self.grace_run((11.0, 14.0))
+        self.round = 12
+        self.step(20.0)
+        counted += self.grace_run((23.0, 26.0, 29.0, 32.0))
+        self.assertEqual([t for t in self.pick_at if t > 8.0], [11.0, 23.0, 32.0])
+        self.assertEqual(counted, ["pick_check_first", "pick_grace", "pick_check_first", "pick_grace", "pick_grace",
+                                   "pick_check_old"])
+
+    def test_pick_grace_same_reads_as_not_pick(self):
+        """先不判的那一次和原来认了下方区域、不是选角界面的那一次，这一轮排的读数一样（只读星数），读到的状态也一样。"""
+        def run(grace: float):
+            self.make()
+            self.proc.pick_grace_s = grace
+            self.playing()
+            stars = self.star_calls
+            self.grace_run((11.0, 14.0))  # 第 14 秒：时限为 0 时认，为 10 秒时先不判
+            st = self.session.settings
+            return self.star_calls - stars, (st.round, st.star), self.session.game.game_over
+
+        old, new = run(0.0), run(10.0)
+        self.assertEqual(old, new)
+        self.assertEqual(old[0], 2)
+
+    def test_pick_grace_hotkey(self):
+        """按热键的那一帧照判（这一轮不沿用任何结论）：离上次读到轮次只有 6 秒（第 14 秒）也认下方区域；下一次不按热键的又
+        先不判。按热键的那一次不算看见标记以后的「第一次」：第一次读不到时就按了热键，下一次自动读不到还照认一次。"""
+        self.playing()
+        counted = self.grace_run((11.0, 14.0, 17.0), force_at=(14.0,))
+        self.assertEqual([t for t in self.pick_at if t > 8.0], [11.0, 14.0])
+        self.assertEqual(counted, ["pick_check_first", "pick_check_force", "pick_grace"])
+        self.make()
+        self.pick_at.clear()
+        self.playing()
+        counted = self.grace_run((11.0, 14.0, 17.0), force_at=(11.0,))
+        self.assertEqual([t for t in self.pick_at if t > 8.0], [11.0, 14.0])
+        self.assertEqual(counted, ["pick_check_force", "pick_check_first", "pick_grace"])
+
+    def test_pick_grace_zero(self):
+        """pick_grace_ms 改成 0：和原来一样，读不到轮次就认下方区域；看见打完时的颜色也不记识别记录 read:finish_look（「离上次
+        看见隔了 pick_grace_ms 以上」每帧都满足，记的话颜色像的每一帧都记一条）。"""
+        self.proc.pick_grace_s = 0.0
+        self.playing()
+        self.assertEqual(self.grace_run((11.0, 14.0)), ["pick_check_old", "pick_check_old"])
+        self.assertEqual([t for t in self.pick_at if t > 8.0], [11.0, 14.0])
+        for t in (15.0, 15.2, 15.4):
+            self.finish(t)
+        self.assertEqual([r for r in self.session.recent_events(60) if r["kind"] == "read:finish_look"], [])
+
+    def test_pick_grace_lowend(self):
+        """低配模式（倍数 2）：读轮次隔 6 秒，时限也乘成 20 秒：第一次读不到（第 14 秒）照认，之后先不判的还是两次（和不开低配
+        时一样）；第 32 秒（离第 8 秒 24 秒）才认。"""
+        self.playing()
+        self.proc.set_pace(2)
+        self.assertEqual((self.proc.hud_s, self.proc.pick_grace_s), (6.0, 20.0))
+        self.assertEqual(self.grace_run((14.0, 20.0, 26.0, 32.0)),
+                         ["pick_check_first", "pick_grace", "pick_grace", "pick_check_old"])
+        self.assertEqual([t for t in self.pick_at if t > 8.0], [14.0, 32.0])
+
+    def test_pick_grace_after_resume(self):
+        """刚从暂停恢复（resumed）、还没读到轮次时照认：暂停期间可能早就离开了对局。读到轮次以后回到原样：这次标记以后第一次
+        读不到照认，第二次起先不判。"""
+        self.playing()
+        self.assertEqual(self.grace_run((11.0,)), ["pick_check_first"])
+        self.proc.resumed()
+        self.assertEqual(self.grace_run((14.0, 17.0)),  # 离第 8 秒不到 10 秒，不是刚恢复的话这两次先不判
+                         ["pick_check_stale", "pick_check_stale"])
+        self.round = 12
+        self.step(20.0)
+        self.assertEqual(self.grace_run((23.0, 26.0)), ["pick_check_first", "pick_grace"])
+        self.assertEqual([t for t in self.pick_at if t > 8.0], [11.0, 14.0, 17.0, 23.0])
+
+    def test_pick_grace_ends_with_banner(self):
+        """看见打完时的颜色（蓝色斜带、通关的整屏红底）以后 pick_grace_ms 以内，读不到轮次时照常认下方区域：第一次读不到没落在
+        结算画面上、结算画面后面才出来时也马上认出、结束这一局（不认的话要晚到离最后一次读到轮次满 pick_grace_ms）。下一局
+        （选角界面开的）离看见颜色满 pick_grace_ms 以后又照常先不判。"""
+        for kind in ("banner", "coral"):
+            with self.subTest(kind):
+                self.make()
+                self.pick_at.clear()
+                self.playing()
+                self.assertEqual(self.grace_run((11.0, 14.0)), ["pick_check_first", "pick_grace"])
+                self.finish(15.0, kind)
+                self.assertEqual(self.proc._ending_seen_at, 15.0)
+                self.bottom = self.RESULT_SCREEN
+                with mock.patch.object(pipeline.perfstats, "count") as count:
+                    events = self.step(17.0)
+                names = [c.args[0] for c in count.call_args_list if c.args[0].startswith("pick_")]
+                self.assertTrue(names)
+                self.assertEqual(set(names), {"pick_check_ending"})  # 刚看见像打完时的颜色：照判
+                self.assertEqual(self.whys(events, "game_over"), ["检测到结算画面（异变图书馆、噩梦、12 轮）"])
+                self.assertEqual([t for t in self.pick_at if t > 8.0], [11.0, 17.0])
+                # 下一局：选角界面开新的一局，读到第 1 轮以后第一次读不到照认，第二次起又先不判
+                self.bottom, self.picking = None, True
+                events = self.step(19.0)
+                self.assertEqual([(e.undo, e.cause) for e in events if e.kind == "newgame"], [(False, "select")])
+                self.picking, self.round = False, 1
+                self.step(23.0)
+                picks = len(self.pick_at)
+                # 第 29 秒离看见颜色 14 秒
+                self.assertEqual(self.grace_run((26.0, 29.0)), ["pick_check_first", "pick_grace"])
+                self.assertEqual(len(self.pick_at), picks + 1)
+
+    def test_pick_grace_back_after_stray_color(self):
+        """对局中途看见一次像打完时的颜色、其实没打完（又读到了轮次，这一局接着打）：看见以后 pick_grace_ms 以内照常认下方区域，
+        过了这么久又照常先不判，不是这一局剩下的时间都照判。第一次看见时记一条识别记录 read:finish_look（哪种、占比），
+        pick_grace_ms 以内接着看见的不再记。"""
+        for kind in ("banner", "coral"):
+            with self.subTest(kind):
+                self.make()
+                self.pick_at.clear()
+                self.playing()
+                self.finish(9.0, kind)
+                self.finish(9.5, kind)
+                self.round = 12
+                self.step(11.0)  # 回到对局画面，读到轮次
+                # 第 14 秒是这次标记以后第一次读不到，照认；第 17 秒离看见颜色（第 9.5 秒）不到 10 秒，照认；第 20 秒满了，先不判
+                counted = self.grace_run((14.0, 17.0, 20.0))
+                self.assertEqual([t for t in self.pick_at if t > 11.0], [14.0, 17.0])
+                self.assertEqual(counted, ["pick_check_first", "pick_check_ending", "pick_grace"])
+                looks = [(r["look"], r["coral"]) for r in self.session.recent_events(60) if r["kind"] == "read:finish_look"]
+                self.assertEqual(looks, [(kind, 0.9 if kind == "coral" else 0.0)])
+
+    def test_pick_grace_not_after_left_game(self):
+        """第一次读不到落在战斗等画面上（照认，什么都不是），之后才回到主菜单：离最后一次读到轮次（第 8 秒）不到 pick_grace_ms 的
+        第 14、17 秒先不认，第 20 秒才第一次认出主菜单（最多晚到离那次标记满 pick_grace_ms 以后的第一次读轮次）；认出以后看见
+        标记的时刻清掉，隔一个 hud_ms 照常再认一次、结束这一局，不再先不判。"""
+        self.playing()
+        self.grace_run((11.0,))
+        self.bottom = OutOfGame("main_menu")
+        for t in (14.0, 17.0):
+            self.assertEqual(self.whys(self.step(t), "game_over"), [])
+        self.assertEqual(self.whys(self.step(20.0), "game_over"), [])
+        with mock.patch.object(pipeline.perfstats, "count") as count:
+            events = self.step(23.0)
+        names = [c.args[0] for c in count.call_args_list if c.args[0].startswith("pick_")]
+        self.assertTrue(names)
+        self.assertEqual(set(names), {"pick_check_no_mark"})  # 离开对局时把标记清掉了：照判
+        self.assertEqual(self.whys(events, "game_over"), ["检测到主菜单"])
+        self.assertEqual([t for t in self.pick_at if t > 8.0], [11.0, 20.0, 23.0])
+
+    def test_pick_grace_counts_each_reason(self):
+        """照判、先不判各按命中的那一条数一次（perfstats 的 count）：按热键、刚从暂停恢复、还没看见标记、被挡住很久、
+        还没有对局状态、这次标记以后第一次读不到、刚看见像打完时的颜色，以及先不判的 pick_grace。"""
+        def counted(*args) -> tuple:
+            got: list[str] = []
+            with mock.patch.object(pipeline.perfstats, "count", side_effect=got.append):
+                result = self.proc._pick_grace(*args)
+            return result, got
+
+        self.playing()
+        self.assertEqual(counted(9.0, True), (False, ["pick_check_force"]))
+        self.proc._stale = True
+        self.assertEqual(counted(9.0, False), (False, ["pick_check_stale"]))
+        self.proc._stale = False
+        self.assertEqual(counted(9.0, False), (False, ["pick_check_first"]))
+        self.proc._ending_seen_at = 5.0
+        self.assertEqual(counted(9.0, False), (False, ["pick_check_ending"]))
+        self.proc._ending_seen_at = float("-inf")
+        self.assertEqual(counted(9.0, False), (True, ["pick_grace"]))
+        self.make()
+        self.assertEqual(counted(5.0, False), (False, ["pick_check_no_mark"]))
+        self.proc._mark_seen_at = 1.0
+        self.assertEqual(counted(12.0, False), (False, ["pick_check_old"]))
+        self.proc._mark_seen_at = 4.0
+        self.assertEqual(counted(5.0, False), (False, ["pick_check_no_game"]))
+
+    # ---- 对局中途像一局打完的那一帧（FrameProcessor._check_victory、_note_finish_look、finish_shot）
+
+    def look(self, t: float, kind: str, img: np.ndarray | None = None) -> None:
+        """t 秒处一帧颜色像打完时的画面（只换颜色预筛的结果，认字一律认不出），交给 _check_victory。"""
+        seen = pipeline.victory.Glance(0.9 if kind == "coral" else 0.0, 0.25, banner=kind == "banner")
+        img = np.full((1080, 1920, 3), 30, np.uint8) if img is None else img
+        with mock.patch.object(pipeline.victory, "glance", return_value=seen), \
+                mock.patch.object(pipeline.victory, "read", return_value=False), \
+                mock.patch.object(pipeline.victory, "read_game_over", return_value=False):
+            self.proc._check_victory(pipeline.as_frame(img), t, [])
+
+    def test_finish_stray_color_kept_and_resized(self):
+        """对局中途看见像打完时的颜色：留下待转正的一帧，长边缩到 1280；情况里是当时的读数、轮次和原图尺寸。"""
+        self.playing()
+        self.look(9.0, "coral", np.full((2160, 3840, 3), 40, np.uint8))
+        pending = self.proc._finish_pending
+        self.assertIsNotNone(pending)
+        _, image, details, at, games = pending
+        self.assertEqual((at, games), (9.0, self.session.games))
+        self.assertEqual(image.shape, (720, 1280, 3))
+        self.assertEqual(details, {"look": "coral", "coral": 0.9, "white": 0.25, "round": 12, "size": [3840, 2160]})
+        self.assertIsNone(self.proc.finish_shot)
+
+    def test_finish_stray_color_promoted_after_mark(self):
+        """颜色之后这一局又读到轮次、满了 pick_grace_s：转正成 finish_shot。"""
+        self.playing()
+        self.look(9.0, "banner")
+        self.round = 12
+        self.step(11.0)  # 又读到轮次：这一局接着打下去
+        self.look(19.0, None)  # 离留下满 10 秒：转正
+        shot = self.proc.finish_shot
+        self.assertIsNotNone(shot)
+        _, image, details = shot
+        self.assertEqual((image.shape, details["look"], details["round"]), ((720, 1280, 3), "banner", 12))
+        self.assertIsNone(self.proc._finish_pending)
+
+    def test_finish_stray_color_dropped_when_game_over_or_left(self):
+        """本局结束、离开对局时丢掉待转正的那一张，不转正。"""
+        self.playing()
+        self.look(9.0, "coral")
+        self.assertIsNotNone(self.proc._finish_pending)
+        self.session.game.game_over = True
+        self.proc.hints = None  # 读的提示是上一次进锁时取的：改过记账的状态要重新取一份
+        self.look(19.0, None)
+        self.assertIsNone(self.proc._finish_pending)
+        self.assertIsNone(self.proc.finish_shot)
+        self.session.game.game_over = False
+        self.proc.hints = None
+        self.look(21.0, "banner")
+        self.assertIsNotNone(self.proc._finish_pending)
+        self.proc._left_game()
+        self.assertIsNone(self.proc._finish_pending)
+
+    def test_finish_stray_color_not_promoted_into_next_game(self):
+        """像打完时的颜色其实是这一局真的打完了，之后的结算画面、选角界面都没看到（游戏切到后台、窗口最小化期间打完又开了
+        一局），回来先读到的是新一局的第 1 轮：第一次读到时记账还在等再读一次，先不转正；连读两次判了新的一局，丢掉那一帧。"""
+        self.playing()
+        self.look(9.0, "coral")
+        self.assertIsNotNone(self.proc._finish_pending)
+        self.round, self.stars = 1, None  # 一分钟以后回来：新一局的第 1 轮，星数还没读到
+        self.step(60.0)  # 离留下满 10 秒，也看见了标记；读到的轮次变小，记账在等再读一次
+        self.assertTrue(self.session.round_drop_pending)
+        self.assertIsNone(self.proc.finish_shot)
+        self.assertIsNotNone(self.proc._finish_pending)
+        games = self.session.games
+        events = self.step(63.0)
+        self.assertEqual([e.kind for e in events if e.kind == "newgame"], ["newgame"])
+        self.assertEqual(self.session.games, games + 1)
+        self.assertIsNone(self.proc.finish_shot)
+        self.assertIsNone(self.proc._finish_pending)
+        self.step(66.0)
+        self.assertIsNone(self.proc.finish_shot)
+
+    def test_finish_stray_color_dropped_after_new_game(self):
+        """留下以后判了新的一局（不论经哪一路判的）：那一帧是上一局的，丢掉、不转正。"""
+        self.playing()
+        self.look(9.0, "banner")
+        self.session.new_game()
+        self.session.settings.round = 1  # 新的一局读到了轮次：有对局状态
+        self.proc.hints = None  # 读的提示是上一次进锁时取的：改过记账的状态要重新取一份
+        self.proc._mark_seen_at = 20.0
+        self.look(21.0, None)
+        self.assertIsNone(self.proc.finish_shot)
+        self.assertIsNone(self.proc._finish_pending)
+
+    def test_finish_stray_color_waits_for_round_drop(self):
+        """记账还在等再读一次变小的轮次时先不转正；那一次是读错（读回手上的轮次）时照常转正。"""
+        self.playing()
+        self.look(9.0, "coral")
+        self.round = 3
+        self.step(20.0)  # 读错成第 3 轮：记账在等再读一次
+        self.assertTrue(self.session.round_drop_pending)
+        self.assertIsNone(self.proc.finish_shot)
+        self.round = 12
+        self.step(23.0)  # 读回第 12 轮：不是新的一局
+        self.assertFalse(self.session.round_drop_pending)
+        shot = self.proc.finish_shot
+        self.assertIsNotNone(shot)
+        self.assertEqual(shot[2]["look"], "coral")
+        self.assertIsNone(self.proc._finish_pending)
+
+    def test_finish_stray_color_not_kept_when_grace_zero(self):
+        """pick_grace_s 为 0（先不判关着）时不留。"""
+        self.proc.pick_grace_s = 0.0
+        self.playing()
+        self.look(9.0, "coral")
+        self.assertIsNone(self.proc._finish_pending)
+
+    def test_finish_stray_color_copy_error_ignored(self):
+        """复制、缩小出错时这一次不留，之前留的照旧，不算识别出错。"""
+        self.playing()
+        self.look(9.0, "coral")
+        before = self.proc._finish_pending
+        errors = list(self.proc.errors)
+        with mock.patch.object(pipeline, "_copy_frame", side_effect=RuntimeError("没有内存")):
+            self.look(19.0, "coral", np.full((540, 960, 3), 40, np.uint8))  # 长边不超过 1280：走复制
+        self.assertIs(self.proc._finish_pending, before)
+        self.assertEqual(self.proc.errors, errors)
+
+    # ---- 不在对局里时（还没有对局状态、本局已结束）每 select_ms 另外看一眼下方区域：选角界面只显示几秒
+
+    def steps(self, start: float, end: float, dt: float = 0.5) -> None:
+        """从 start 到 end（含）每 dt 秒一帧（比 select_ms 短）。"""
+        t = start
+        while t <= end + 1e-9:
+            self.step(t)
+            t += dt
+
+    def test_glance_outside(self):
+        """还没有对局状态（刚打开时在大厅）：除了每 hud_ms 读轮次（读不到时顺带认一次下方区域），另外每 select_ms 看一眼；
+        这一眼不顺带读星数。"""
+        self.assertEqual((self.proc.hud_s, self.proc.select_s), (3.0, 1.0))
+        self.step(0.0)
+        stars = self.star_calls
+        self.steps(0.5, 2.5)
+        self.assertEqual(self.star_calls, stars)
+        self.steps(3.0, 6.0)
+        self.assertEqual(self.pick_at, [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+
+    def test_glance_catches_short_select_screen(self):
+        """刚打开时在大厅，选角界面只显示了两秒（第 3.5～5.5 秒，正好落在两次读轮次之间）：看的那一眼认出它，这一局算从开局
+        看起，读到第 1 轮时不请用户打开「查看筹码」面板。不看那一眼的话（select_ms 无限长）两次读轮次都错过它。"""
+        def run():
+            self.steps(0.0, 3.0)
+            self.picking = True
+            self.steps(3.5, 5.0)
+            self.picking = False
+            return [r for r in self.session.recent_events(60) if r["kind"] == "read:hero_select"]
+
+        self.assertEqual(len(run()), 1)
+        self.assertIn(4.0, self.pick_at)
+        self.assertTrue(self.session.game.whole_game)
+        self.round = 1
+        self.assertEqual([e.kind for e in self.step(6.0) if e.kind == "panel_prompt"], [])
+        self.assertFalse(self.session.game.panel_needed)
+
+        self.make()
+        self.picking, self.round = False, None
+        self.proc.select_s = float("inf")
+        self.assertEqual(run(), [])
+
+    def test_glance_after_game_over(self):
+        """结算画面结束这一局以后也每 select_ms 看一眼：下一局的选角界面只显示了两秒（落在两次读轮次之间）照样认得出，
+        开新的一局（不可撤销）。"""
+        self.playing()
+        self.round, self.bottom = None, self.RESULT_SCREEN
+        self.step(12.0)
+        self.assertTrue(self.session.game.game_over)
+        self.bottom = None
+        self.steps(12.5, 13.0)
+        self.picking = True
+        found = []
+        for t in (13.5, 14.0, 14.5):
+            found += [(e.undo, e.cause) for e in self.step(t) if e.kind == "newgame"]
+        self.assertEqual(found, [(False, "select")])
+        self.assertEqual([t for t in self.pick_at if t > 12.0], [13.0, 14.0])
+
+    def test_glance_static_screen(self):
+        """不在对局里、画面停着不动（大厅）：下方区域和上次认定「不是」时一样就不认字，最多隔 unchanged_max_ms 认一次。"""
+        img = np.full((1080, 1920, 3), 90, np.uint8)
+        t = 0.0
+        while t <= 22.0:
+            self.clock[0] = t
+            self.proc.settle(img, t)
+            t += 0.5
+        m = self.proc._not_pick.max_s
+        self.assertEqual(m, 10.0)
+        self.assertEqual(self.pick_at, [0.0, 1.0, 1.0 + m, 1.0 + 2 * m])
+
+    def test_no_glance_in_game(self):
+        """对局中读不到轮次（战斗、面板挡住等）：不另外看那一眼，照旧只在每 hud_ms 读不到轮次时顺带认一次（最后一次读到轮次
+        以后第一次读不到照认，第二次起 pick_grace_ms 以内的几次先不认）；连着 quiet_ms 看不到对局读数（当作不在对局里了）以后
+        也一样。"""
+        self.playing()
+        self.round, self.stars = None, None
+        end = 8.0 + self.proc.quiet_s + 6.0
+        self.steps(8.5, end)
+        self.assertTrue(self.session.game_quiet)
+        hud = [8.0 + 3.0 * k for k in range(1, int((end - 8.0) // 3.0) + 1)]
+        self.assertEqual([t for t in self.pick_at if t > 8.0],
+                         hud[:1] + [t for t in hud if t - 8.0 >= self.proc.pick_grace_s])
+        self.assertEqual(hud[:3], [11.0, 14.0, 17.0])  # 第 11 秒照认，第 14、17 秒先不认
+
+    def test_no_glance_while_yielding(self):
+        """两开时另一路的三选一显示着（让路）：不在对局里也不看那一眼（要认字），那边关掉以后接着看。"""
+        self.proc.board = SimpleNamespace(others=lambda proc, now: True, note=lambda *args: None)
+        self.steps(0.0, 3.0)
+        self.assertEqual(self.pick_at, [])
+        self.proc.board = None
+        self.step(3.5)
+        self.assertEqual(self.pick_at, [3.5])
+
+    # ---- 中途退出以后认不出主菜单（弹窗挡住了等）：连着 quiet_ms 看不到对局里的读数就当作不在对局里（Session.game_quiet）
+
+    def quiet_records(self) -> list[dict]:
+        return [r for r in self.session.recent_events(600) if r["kind"] == "read:quiet"]
+
+    def walk(self, start: float, end: float) -> None:
+        """从 start 到 end（含）每 4 秒一帧（比 hud_ms 长，每帧都读一次轮次），每一帧以后 game_quiet 都还没置上。"""
+        t = start
+        while t <= end + 1e-9:
+            self.step(t)
+            self.assertFalse(self.session.game_quiet, t)
+            t += 4.0
+
+    def test_quiet_after_quiet_ms(self):
+        """中途退出、认不出主菜单：读不到轮次、星数，连着 quiet_ms 以后当作不在对局里（识别记录记一条），这一局的状态不动；
+        又读到轮次时马上改回在对局里。"""
+        self.playing()
+        self.round, self.stars = None, None
+        end = 8.0 + self.proc.quiet_s
+        self.walk(12.0, end - 4.0)
+        self.step(end)
+        self.assertTrue(self.session.game_quiet)
+        self.assertEqual((self.session.settings.round, self.session.settings.star), (12, 3))
+        self.assertTrue(self.session.has_game_state)
+        self.assertFalse(self.session.game.game_over)
+        self.assertEqual([(r["on"], r.get("seconds")) for r in self.quiet_records()], [(True, round(self.proc.quiet_s))])
+        self.step(end + 4.0)  # 满了以后不再重复记
+        self.assertEqual(len(self.quiet_records()), 1)
+        self.round = 12
+        self.step(end + 8.0)
+        self.assertFalse(self.session.game_quiet)
+        self.assertEqual([r["on"] for r in self.quiet_records()], [True, False])
+
+    def test_quiet_counts_only_looked_time(self):
+        """只算看着画面的时间：两帧之间隔得再久（暂停、手动模式不看画面、截不到画面）也最多算 QUIET_STEP_S，刚从暂停恢复的
+        第一帧不算。"""
+        self.playing()
+        self.round, self.stars = None, None
+        self.step(12.0)  # 算 4 秒
+        self.step(300.0)  # 中间没有帧：只算 QUIET_STEP_S
+        self.proc.resumed()
+        self.step(600.0)  # 刚从暂停恢复：不算
+        counted = 4.0 + pipeline.QUIET_STEP_S
+        self.assertFalse(self.session.game_quiet)
+        steps = int(-(-(self.proc.quiet_s - counted) // 4.0))  # 还要每 4 秒一帧走几帧才满
+        self.walk(604.0, 600.0 + 4.0 * (steps - 1))
+        self.step(600.0 + 4.0 * steps)
+        self.assertTrue(self.session.game_quiet)
+
+    def test_list_keeps_in_game(self):
+        """读不到轮次、玩家列表上的星数照样读得到（轮次那一块认不出字的电脑等）：一直算在对局里。"""
+        self.playing()
+        self.round = None
+        self.walk(12.0, 8.0 + 2 * self.proc.quiet_s)
+
+    def test_select_keeps_in_game(self):
+        """三选一一直显示着（轮次、星数都读不到）：在对局里；三选一关掉以后从最后一帧三选一起重新算。"""
+        self.playing()
+        self.round, self.stars = None, None
+        self.seen = offer(["标靶", "大背包", "缓冲盾牌"])
+        self.walk(12.0, 8.0 + 2 * self.proc.quiet_s)
+        last = 8.0 + 2 * self.proc.quiet_s
+        self.seen = None
+        self.walk(last + 4.0, last + self.proc.quiet_s - 4.0)
+        self.step(last + self.proc.quiet_s)
+        self.assertTrue(self.session.game_quiet)
+
+    def test_yielding_not_counted(self):
+        """两开时给另一路让路的几帧不算（那几帧不读轮次，不是看不到）；不再让路以后接着算。"""
+        self.playing()
+        self.round, self.stars = None, None
+        self.proc.board = SimpleNamespace(others=lambda proc, now: True, note=lambda *args: None)
+        last = 8.0 + 2 * self.proc.quiet_s
+        self.walk(12.0, last)
+        self.proc.board = None  # 从让路的最后一帧接着算，让路的那一段不补进来
+        self.walk(last + 4.0, last + self.proc.quiet_s - 4.0)
+        self.step(last + self.proc.quiet_s)
+        self.assertTrue(self.session.game_quiet)
+
+    # ---- 停在主菜单（不在对局里、最近认出的对局外画面是主菜单）：底栏和开始按钮那一块没变就不认字（主菜单空转）
+
+    MENU = OutOfGame(MAIN_MENU)
+
+    @staticmethod
+    def menu_frame(n: int, banner: int = 0, start: int = 150, bar: int = 120, size=(1920, 1080)) -> np.ndarray:
+        """主菜单的一帧：上方、中间按 n 换亮度（背景动画：整幅缩略图每帧都变，离开对局后的整幅识别每次到点都要做），左下角的
+        横幅按 banner 换（轮播），底下那一条和右下角开始按钮那一块（MENU_REGIONS 的两块）的亮度是 bar、start。"""
+        w, h = size
+        (_, bar_top, _, _), (left, top, _, bottom) = pipeline.MENU_REGIONS
+        bar_top, top, bottom, left = round(bar_top * h), round(top * h), round(bottom * h), round(left * w)
+        img = np.empty((h, w, 3), np.uint8)
+        img[:top] = 60 + 50 * (n % 3)
+        img[top:bottom, :left] = 90 + 40 * (banner % 3)
+        img[top:bottom, left:] = start
+        img[bar_top:] = bar
+        return img
+
+    def menu(self, t: float, force: bool = False, **kw) -> list:
+        """t 秒处的一帧主菜单（menu_frame，背景每帧都变），到期的读数都做完（settle）。"""
+        self.clock[0] = t
+        self.n += 1
+        return self.proc.settle(self.menu_frame(self.n, **kw), t, force=force)
+
+    def menus(self, start: float, end: float, banner_s: float | None = None, **kw) -> list:
+        """从 start 到 end（不含）每 0.5 秒一帧主菜单；banner_s 为数时左下角的横幅每这么多秒换一张。返回这些帧的事件。"""
+        events, t = [], start
+        while t < end - 1e-9:
+            events += self.menu(t, banner=int(t // banner_s) if banner_s else 0, **kw)
+            t += 0.5
+        return events
+
+    def other(self, t: float, value: int = 30) -> list:
+        """t 秒处的一帧别的画面（整幅一个颜色：底栏、开始按钮那一块都和主菜单不同），到期的读数都做完。"""
+        self.clock[0] = t
+        return self.proc.settle(np.full((1080, 1920, 3), value, np.uint8), t)
+
+    def ocr_at(self, t: float) -> list[str]:
+        """t 秒那一张画面上依次认字的几项。"""
+        return [kind for kind, at in self.ocr if at == t]
+
+    def idle_records(self) -> list[tuple]:
+        return [(r["on"], r.get("why")) for r in self.session.recent_events(600) if r["kind"] == "read:menu_idle"]
+
+    def idle_parts(self) -> list[tuple]:
+        """同 idle_records，另带 part（因为哪一块变了不再空转）。"""
+        return [(r["on"], r.get("why"), r.get("part")) for r in self.session.recent_events(2000)
+                if r["kind"] == "read:menu_idle"]
+
+    def flapping(self, start: float, end: float, part: str, **kw) -> None:
+        """从 start 到 end（不含）每 0.5 秒一帧主菜单（背景照旧每帧都变），part 那一块（start 开始按钮、bar 底栏）自己在动：
+        亮度每帧在两个值之间来回换。"""
+        values = {"start": (150, 180), "bar": (120, 150)}[part]
+        t, k = start, 0
+        while t < end - 1e-9:
+            self.menu(t, **{part: values[k % 2]}, **kw)
+            t, k = t + 0.5, k + 1
+
+    def flap_trips(self, part: str, last: tuple) -> list[tuple]:
+        """开始空转以后 part 那一块来回 MENU_FLAPS 次的识别记录：每次不再空转（changed，带 part）、紧接着又开始空转，最后一次
+        重新空转那一条换成 last。"""
+        trips = [(False, "changed", part), (True, None, None)] * pipeline.MENU_FLAPS
+        return [(True, None, None), *trips[:-1], last]
+
+    def end_on_menu(self) -> float:
+        """一局打到第 12 轮以后中途退出、回到主菜单（背景一直在动），下方区域隔一个 hud_ms 两次认出，结束这一局，之后停在主菜单上
+        空转。返回结束这一局的时刻。"""
+        self.playing()
+        self.round, self.bottom = None, self.MENU
+        end = 12.0 + self.proc.hud_s
+        self.menus(12.0, end)
+        self.assertEqual(self.whys(self.menu(end), "game_over"), ["检测到主菜单"])
+        return end
+
+    def test_menu_idle_one_minute(self):
+        """刚打开时停在主菜单 60 秒，背景每帧都变（整幅缩略图一直在变）、左下角的横幅每 5 秒换一张，底栏和开始按钮那一块
+        不变：第一帧认出主菜单以后就空转，这 60 秒只读了一次轮次、认了一次下方区域（都在第一帧），识别记录记一条开始空转。
+        不空转（menu_idle 关掉，同时识别两个客户端的性能测试这样用）的话读轮次、下方区域、整幅识别这 60 秒一共几十次。"""
+        self.bottom, self.pregame = self.MENU, Pregame(screen=self.MENU)
+        self.assertTrue(self.proc.menu_idle)
+        self.proc.menu_idle = False
+        self.menus(0.0, 60.0, banner_s=5.0)
+        self.assertGreaterEqual(len(self.ocr), 40)
+        self.assertEqual(self.idle_records(), [])
+        self.ocr = []
+        self.make()
+        self.menus(0.0, 60.0, banner_s=5.0)
+        self.assertEqual(self.ocr, [("hud", 0.0), ("pick", 0.0)])
+        self.assertEqual(self.idle_records(), [(True, None)])
+
+    def test_menu_idle_recheck(self):
+        """空转满 menu_idle_s（MENU_IDLE_MS，低配模式也不乘倍数）照常看一眼下方区域（不沿用「画面没变」的结论），还是主菜单就
+        接着空转：150 秒里只在第 0、60、120 秒认下方区域，读轮次只有第一帧那一次，整幅识别一次都没做。"""
+        self.bottom, self.pregame = self.MENU, Pregame(screen=self.MENU)
+        m = self.proc.menu_idle_s
+        self.assertEqual(m, pipeline.MENU_IDLE_MS / 1000)
+        self.proc.set_pace(2)
+        self.assertEqual(self.proc.menu_idle_s, m)
+        self.proc.set_pace(1)
+        self.menus(0.0, 2.5 * m)
+        self.assertEqual(self.ocr, [("hud", 0.0), ("pick", 0.0), ("pick", m), ("pick", 2 * m)])
+        self.assertEqual(self.idle_records(),
+                         [(True, None), (False, "recheck"), (True, None), (False, "recheck"), (True, None)])
+
+    def test_menu_in_game_not_idle_until_over(self):
+        """对局中途回到主菜单：第一次认出时这一局还没结束，不空转、照常读，隔 hud_ms 再认一次；第二次认出、结束了这一局以后
+        才空转，之后不再认字。"""
+        self.playing()
+        self.round, self.bottom = None, self.MENU
+        self.menus(12.0, 15.0)
+        self.assertFalse(self.session.game.game_over)
+        self.assertEqual(self.idle_records(), [])
+        self.assertEqual(self.ocr_at(12.0)[:2], ["hud", "pick"])
+        self.assertEqual(self.pregame_at, [12.0, 14.0])
+        self.assertEqual(self.whys(self.menu(15.0), "game_over"), ["检测到主菜单"])
+        self.assertEqual(self.idle_records(), [(True, None)])
+        count = len(self.ocr)
+        self.menus(15.5, 45.0, banner_s=5.0)
+        self.assertEqual(len(self.ocr), count)
+
+    def test_menu_idle_then_select_screen(self):
+        """回到主菜单空转着，下一局的选角界面出来（底栏、开始按钮那一块都变了）：这一帧先认下方区域、不先读轮次，认出选角界面
+        开新的一局（不可撤销）；接着整幅识别（选角界面上可能公布畸变组件），再读轮次。"""
+        end = self.end_on_menu()
+        self.menus(end + 0.5, end + 30.0)
+        self.picking, self.bottom = True, None
+        t = end + 30.0
+        events = self.other(t)
+        self.assertEqual([(e.undo, e.cause) for e in events if e.kind == "newgame"], [(False, "select")])
+        self.assertEqual(self.ocr_at(t)[:3], ["pick", "pregame", "hud"])
+        self.assertEqual(self.idle_records(), [(True, None), (False, "changed")])
+
+    def test_menu_idle_then_room(self):
+        """回到主菜单空转着，进了组队房间：先认下方区域（认不出），紧接着整幅识别认出组队房间、交给记账（房间上勾选的难度留给
+        下一局），不等读轮次。"""
+        end = self.end_on_menu()
+        self.menus(end + 0.5, end + 20.0)
+        self.bottom, self.pregame = None, Pregame(screen=OutOfGame(TEAM_ROOM, "噩梦"))
+        t = end + 20.0
+        self.other(t)
+        self.assertEqual(self.ocr_at(t)[:2], ["pick", "pregame"])
+        self.assertEqual(self.session.pending._next_difficulty, {"team_room": "噩梦"})
+        rec = [r for r in self.session.recent_events(60) if r["kind"] == "read:screen"]
+        self.assertEqual((rec[-1]["screen"], rec[-1]["full"]), ("team_room", True))
+
+    def test_menu_idle_small_change_full_read(self):
+        """只有整幅识别认得出主菜单（下方区域认不出）、背景不动：认出以后空转；之后只有开始按钮那一块变了，整幅缩略图变化不到
+        loading_change，照样紧接着整幅识别，认出「匹配成功」画面，画面上的难度和地图留给下一局。不丢掉空转之前主菜单那张
+        缩略图的话，这次整幅识别会因为画面没怎么变而不做。"""
+        self.bottom, self.pregame = None, Pregame(screen=self.MENU)
+        still = self.menu_frame(0)
+        for k in range(20):
+            self.clock[0] = k * 0.5
+            self.proc.settle(still, k * 0.5)
+        self.assertEqual(self.pregame_at, [0.0])
+        self.assertEqual(self.idle_records(), [(True, None)])
+        changed = self.menu_frame(0, start=200)
+        diff = np.abs(pipeline._thumb(changed).astype(np.int16) - pipeline._thumb(still)).mean() / 255
+        self.assertLess(diff, self.proc.loading_change)
+        self.pregame = Pregame(screen=OutOfGame(MATCH_FOUND, "噩梦", "水乡古镇"))
+        self.clock[0] = 10.0
+        self.proc.settle(changed, 10.0)
+        self.assertEqual(self.pregame_at, [0.0, 10.0])
+        self.assertEqual(self.session.pending._next_difficulty, {"match_found": "噩梦"})
+        self.assertEqual(self.session.pending._next_map, ("水乡古镇", "match"))
+
+    def test_menu_idle_then_game(self):
+        """回到主菜单空转着，回到了对局画面（第 1 轮）：先认下方区域、整幅识别，接着读轮次；隔 hud_ms 又读到第 1 轮（比离开时
+        的第 12 轮小）就开新的一局（可以撤销）。"""
+        end = self.end_on_menu()
+        self.menus(end + 0.5, end + 20.0)
+        self.round, self.bottom = 1, None
+        t = end + 20.0
+        self.other(t)
+        self.assertEqual(self.ocr_at(t)[:3], ["pick", "pregame", "hud"])
+        events = self.other(t + self.proc.hud_s)
+        self.assertEqual([(e.undo, e.cause) for e in events if e.kind == "newgame"], [(True, "round")])
+
+    def test_menu_idle_rejoin(self):
+        """回到主菜单空转着，断线以后又连回了同一局（连着两次读到不比离开时小的轮次）：撤回那次结束、接着记（status 的 cause
+        为 rejoined）。"""
+        end = self.end_on_menu()
+        self.menus(end + 0.5, end + 20.0)
+        self.round, self.bottom = 12, None
+        t = end + 20.0
+        self.other(t)
+        events = self.other(t + self.proc.hud_s)
+        self.assertEqual([e.cause for e in events if e.kind == "status" and e.cause], ["rejoined"])
+        self.assertFalse(self.session.game.game_over)
+
+    def test_menu_idle_resize_resume_hotkey(self):
+        """空转中窗口大小变了、从暂停恢复、按了热键：那一帧都照常认（先看一眼下方区域），还是主菜单就接着空转。"""
+        self.bottom, self.pregame = self.MENU, Pregame(screen=self.MENU)
+        small = (1600, 900)
+        self.menus(0.0, 5.0)
+        self.menus(5.0, 10.0, size=small)  # 窗口大小变了
+        self.proc.resumed()
+        self.menus(10.0, 15.0, size=small)
+        self.menu(15.0, force=True, size=small)  # 按热键
+        self.menus(15.5, 20.0, size=small)
+        self.assertEqual(self.pick_at, [0.0, 5.0, 10.0, 15.0])
+        self.assertEqual(self.idle_records(), [(True, None), (False, "resized"), (True, None), (False, "resumed"),
+                                               (True, None), (False, "hotkey"), (True, None)])
+
+    def test_menu_idle_state_changed(self):
+        """空转中界面上改了对局状态（手动选了地图：有了对局状态，不在对局外了）：不再空转，这一帧照常认。"""
+        self.bottom, self.pregame = self.MENU, Pregame(screen=self.MENU)
+        self.menus(0.0, 5.0)
+        self.session.settings.map = "异变图书馆"
+        self.menu(5.0)
+        self.assertEqual(self.idle_records(), [(True, None), (False, "in_game")])
+        self.assertIn(("pick", 5.0), self.ocr)
+
+    def test_menu_idle_yielding(self):
+        """空转中两开的另一路三选一显示着（让路），自己离开了主菜单：让路期间不看那一眼（要认字），那边不再显示以后的第一帧
+        先看那一眼、接着整幅识别。"""
+        self.bottom, self.pregame = self.MENU, Pregame(screen=self.MENU)
+        self.menus(0.0, 5.0)
+        self.proc.board = SimpleNamespace(others=lambda proc, now: True, note=lambda *args: None)
+        self.bottom, self.pregame = None, Pregame()
+        self.other(5.0)
+        self.other(5.5, value=40)
+        self.assertEqual([at for _, at in self.ocr if at >= 5.0], [])
+        self.assertEqual(self.idle_records(), [(True, None), (False, "changed")])
+        self.proc.board = None
+        self.other(6.0, value=50)
+        self.assertEqual(self.ocr_at(6.0)[:2], ["pick", "pregame"])
+
+    # ---- 主菜单空转防「来回进出」（MENU_FLAPS）：固定界面那两块里有一块自己在动
+
+    def test_menu_flap_start_bar_only(self):
+        """开始按钮那一块自己在动（每帧都变）、底栏不动：每次空转刚开始就因为它变了不再空转，看一眼下方区域又认回主菜单、紧接着
+        重新空转；来回 MENU_FLAPS 次以后这次停在主菜单期间只拿底栏判断，接着空转。两分钟里只认了这几次字：第一帧读轮次、认下方
+        区域，每次来回看一眼，满一分钟照常认一次。不防来回的话每帧都要看一眼（一分钟约 120 次，比不空转时的 57 次还多一倍）。
+        识别记录：判之前的来回照记（changed 带 part 为 start），最后一次重新空转那一条的 why 为 bar_only，满一分钟照常认的
+        那一次照记。"""
+        self.bottom, self.pregame = self.MENU, Pregame(screen=self.MENU)
+        flaps, m = pipeline.MENU_FLAPS, self.proc.menu_idle_s
+        self.flapping(0.0, 2 * m, "start")
+        trips = [("pick", 0.5 * k) for k in range(1, flaps + 1)]
+        self.assertEqual(self.ocr, [("hud", 0.0), ("pick", 0.0), *trips, ("pick", 0.5 * flaps + m)])
+        self.assertEqual(self.idle_parts(),
+                         [*self.flap_trips("start", (True, "bar_only", None)), (False, "recheck", None), (True, None, None)])
+
+    def test_menu_flap_bar_pause(self):
+        """底栏自己在动（每帧都变）：来回 MENU_FLAPS 次以后 MENU_FLAP_MS 以内不再空转、照不空转时读，过了再试，还在来回就再停：
+        两分钟里每分钟认字的次数比不空转（menu_idle 关掉）时最多多 MENU_FLAPS 次（再试时每次来回看一眼）。不防来回的话每帧都要
+        看一眼，一分钟约 120 次。识别记录：判之前的来回照记（part 为 bar），停空转时记一条 on 为 false、why 为 flapping；再试时
+        开始空转那一条照记，之后的来回不记，再停又记一条 flapping。"""
+        self.bottom, self.pregame = self.MENU, Pregame(screen=self.MENU)
+        m = pipeline.MENU_FLAP_MS / 1000
+
+        def per_minute() -> list[int]:
+            return [sum(1 for _, at in self.ocr if lo <= at < lo + m) for lo in (0.0, m)]
+
+        self.proc.menu_idle = False
+        self.flapping(0.0, 2 * m, "bar")
+        base = per_minute()
+        self.ocr = []
+        self.make()
+        self.flapping(0.0, 2 * m, "bar")
+        for before, now in zip(base, per_minute()):
+            self.assertLessEqual(now, before + pipeline.MENU_FLAPS)
+        self.assertEqual(self.idle_parts(), [*self.flap_trips("bar", (False, "flapping", None)), (True, None, None),
+                                             (False, "flapping", None)])
+
+    def test_menu_bar_only_still_leaves(self):
+        """只拿底栏判断以后（开始按钮那一块来回满 MENU_FLAPS 次），离开主菜单照样马上认得出（底栏变了）：选角界面出来的那一帧
+        先认下方区域、认出选角界面（这一局从选角开始看），接着整幅识别；进组队房间、「匹配成功」画面出来的那一帧先看一眼下方区域、
+        紧接着整幅识别认出来，难度留给下一局。判过来回以后先没记的这一次不再空转（part 为 both），认出别的画面时补记。"""
+        cases = {"select": None, "room": OutOfGame(TEAM_ROOM, "噩梦"), "match": OutOfGame(MATCH_FOUND, "噩梦", "水乡古镇")}
+        for case, screen in cases.items():
+            with self.subTest(case):
+                self.make()
+                self.ocr, self.picking = [], False
+                self.bottom, self.pregame = self.MENU, Pregame(screen=self.MENU)
+                self.flapping(0.0, 20.0, "start")
+                self.assertEqual(self.idle_parts(), self.flap_trips("start", (True, "bar_only", None)))
+                t = 20.0
+                if screen is None:
+                    self.picking, self.bottom, self.pregame = True, None, Pregame()
+                    self.other(t)
+                    self.assertTrue(self.session.game.whole_game)
+                    self.assertEqual(self.ocr_at(t)[:3], ["pick", "pregame", "hud"])
+                else:
+                    self.bottom, self.pregame = None, Pregame(screen=screen)
+                    self.other(t)
+                    self.assertEqual(self.ocr_at(t)[:2], ["pick", "pregame"])
+                    self.assertEqual(self.session.pending._next_difficulty, {screen.kind: "噩梦"})
+                self.assertEqual(self.idle_parts()[-1], (False, "changed", "both"))
+
+    def test_menu_bar_only_until_stay_over(self):
+        """只拿底栏判断只管这次停在主菜单：认出别的画面（房间）、窗口大小变了、从暂停恢复以后回到主菜单，开始按钮那一块一变照旧
+        不再空转（part 为 start；看一眼又认回主菜单，接着空转）。"""
+        small = (1600, 900)
+        for case in ("room", "resized", "resumed"):
+            with self.subTest(case):
+                self.make()
+                self.bottom, self.pregame = self.MENU, Pregame(screen=self.MENU)
+                self.flapping(0.0, 5.0, "start")
+                self.assertEqual(self.idle_parts()[-1], (True, "bar_only", None))
+                size = small if case == "resized" else (1920, 1080)
+                if case == "room":
+                    self.bottom, self.pregame = None, Pregame(screen=OutOfGame(TEAM_ROOM, "噩梦"))
+                    self.other(5.0)
+                    self.bottom, self.pregame = self.MENU, Pregame(screen=self.MENU)
+                elif case == "resumed":
+                    self.proc.resumed()
+                self.menus(5.5, 10.0, size=size)
+                self.assertEqual(self.idle_parts()[-1], (True, None, None))
+                self.menu(10.0, start=200, size=size)
+                self.assertEqual(self.idle_parts()[-2:], [(False, "changed", "start"), (True, None, None)])
+                self.assertEqual(self.pick_at[-1], 10.0)
+
 
 class TimedReadsTest(unittest.TestCase):
     """各项读数各自计时（read:名字）：识别函数换成假的，看记下了哪些名字（现有的 trace 内容另由
@@ -937,7 +2138,7 @@ class TimedReadsTest(unittest.TestCase):
         patches = [
             mock.patch.object(pipeline, "looks_like_overlay_screen", side_effect=lambda img: self.seen is not None),
             mock.patch.object(pipeline, "read_chip_select", side_effect=lambda img, db, **kw: self.seen),
-            mock.patch.object(pipeline, "read_hud", side_effect=lambda img, db, full=False: Hud(round=self.round)),
+            mock.patch.object(pipeline, "read_hud", side_effect=lambda img, db, full=False, **kw: Hud(round=self.round)),
             mock.patch.object(pipeline, "read_progress", return_value=Progress()),
             mock.patch.object(pipeline, "read_hero", return_value=SimpleNamespace(hero="凛")),
             mock.patch.object(pipeline, "read_own_stars", return_value=None),
@@ -1301,7 +2502,7 @@ class _InSelect(_FakeReads):
         super().setUp()
         self.hud_error: Exception | None = None  # 读轮次时抛的异常；None 为照常读（照样记进 log）
 
-        def fake_hud(img, db, full=False):
+        def fake_hud(img, db, full=False, **kw):
             self.log.append("hud")
             if self.hud_error is not None:
                 raise self.hud_error
@@ -2138,7 +3339,7 @@ class IdleOneReadTest(_FakeReads):
         tasks = [False]
         fulls = []
 
-        def hud(img, db, full):
+        def hud(img, db, full, **kw):
             self.log.append("hud")
             fulls.append(full)
             if tasks[0]:
@@ -2192,6 +3393,677 @@ class IdleOneReadTest(_FakeReads):
             self.assertFalse(self.proc.pending)
 
 
+class SelectTopTest(_InSelect):
+    """三选一上读左上角的几处先后：刷新（筹码名变了、这一帧要完整识别）的那一帧不读左上角，核对挪到下一帧，新推荐不等它；只因为
+    读不出轮次而再读时不重读进度条，读进度条出错时再读连同；先读完再给推荐的那一次不认角色，推荐给出以后的下一帧按间隔认；
+    三选一上读星数只走快的那一路（read_own_stars 的 quick），平时那一轮、手动模式照常全试。识别函数换成假的（_FakeReads）。"""
+
+    def test_refresh_defers_check(self):
+        self.seen = offer(OFFER_A)
+        self.frame(4.0)  # 先给推荐，下一帧核对
+        self.seen = offer(OFFER_B, rerolls=1)  # 核对那一帧刷新了
+        events, log = self.frame(4.15)
+        self.assertEqual(log[:1], ["select"])
+        self.assertNotIn("hud", log)
+        self.assertEqual(len(self.advice(events)), 1)
+        self.assertEqual(self.frame(4.3)[1][:2], ["hud", "progress"])  # 核对挪到下一帧
+
+    def test_full_read_every_frame_check_not_starved(self):
+        """只查绿框一直对不上（筹码名那一条一直被什么盖着，每一帧都要完整识别）：读左上角只挪一帧，下一帧照常核对。"""
+        with mock.patch.object(pipeline, "reread_selected", return_value=None):
+            self.seen = offer(OFFER_A)
+            self.frame(4.0)
+            _, log = self.frame(4.15)
+            self.assertEqual(log[:1], ["select"])
+            self.assertNotIn("hud", log)
+            self.assertEqual(self.frame(4.3)[1][:3], ["select", "hud", "progress"])
+
+    def test_unreadable_retry_skips_progress(self):
+        self.seen = offer(OFFER_A)
+        self.frame(4.0)
+        self.round = None
+        self.assertEqual(self.frame(4.15)[1][:2], ["hud", "progress"])  # 核对：读不出轮次，进度条读到了
+        got = self.frames(4.3, 9.0)
+        self.assertEqual(len(self.when(got, "hud")), pipeline.HUD_RETRIES)
+        self.assertEqual(self.when(got, "progress"), [])
+
+    def test_progress_error_retry_reads_progress(self):
+        self.seen = offer(OFFER_A)
+        self.frame(4.0)
+
+        def fail(img):
+            self.log.append("progress")
+            raise RuntimeError("读进度条出错")
+
+        with mock.patch.object(pipeline, "read_progress", side_effect=fail):
+            self.assertEqual(self.frame(4.15)[1][:2], ["hud", "progress"])
+        got = self.frames(4.3, 6.0)
+        reads = self.when(got, "hud")
+        self.assertEqual(len(reads), 1)
+        self.assertEqual(self.when(got, "progress"), reads)
+
+    def test_read_first_hero_next_frame(self):
+        """手动模式（先读完再给推荐），认角色又到了间隔：先读完的那一次不认角色，下一帧认一次，之后不再认。"""
+        self.proc.set_manual(True)
+        self.seen = offer(OFFER_A)
+        t = self.proc.hero_s + 1.0  # 上次认角色是第 0 秒
+        events, log = self.frame(t)
+        self.assertEqual(log[:3], ["select", "hud", "progress"])
+        self.assertNotIn("hero", log)
+        self.assertEqual(len(self.advice(events)), 1)
+        self.assertEqual(self.frame(t + self.STEP)[1][:1], ["hero"])
+        self.assertNotIn("hero", self.frame(t + 2 * self.STEP)[1])
+
+    def test_select_stars_quick(self):
+        calls = []
+        with mock.patch.object(pipeline, "read_own_stars", side_effect=lambda img, hero, **kw: calls.append(kw)):
+            self.seen = offer(OFFER_A)
+            self.frames(4.0, 4.3)  # 三选一上读满三帧
+            self.seen = None
+            self.frames(4.45, 4.6)
+            self.settle(4.15 + self.proc.hud_s)  # 对局画面上的一轮（上次读轮次是核对那一帧）
+        self.assertEqual(calls, [{"quick": True}] * pipeline.SELECT_STAR_TRIES + [{}])
+
+    def test_select_stars_full_in_manual(self):
+        """手动模式平时不看画面，没有「平时那一轮」：三选一上照旧全试（换了皮肤以后快的那一路一直认不出）。"""
+        calls = []
+        self.proc.set_manual(True)
+        with mock.patch.object(pipeline, "read_own_stars", side_effect=lambda img, hero, **kw: calls.append(kw)):
+            self.seen = offer(OFFER_A)
+            self.frames(4.0, 4.3)
+        self.assertEqual(calls, [{}] * pipeline.SELECT_STAR_TRIES)
+
+
+# 轮次标记左边那一小块（假的识别函数只原样交回、不看它的值）
+CROP = (40, 12, 30, 24)
+
+
+class _Occluded(_InSelect):
+    """轮次数字被玩家列表第一行的头像挡住的几组共用：mark 为真时读轮次（read_hud）在数字那一行看见了轮次标记、数字读不出
+    （Hud.round_mark，交回标记左边那一小块 CROP）；peek 是在那一小块认出的数（read_round_crop，记作「peek」，None 为认不出）。
+    对局画面先读两轮（第 5 轮，进度条第 9 格，同 _InSelect）；不在三选一时像悬浮窗那样隔 idle_ms 取一帧，还有排着的读数时
+    紧接着取下一帧（idle）。"""
+
+    def setUp(self):
+        super().setUp()
+        self.mark, self.peek, self.crops, self.peek_error, self.errs = False, None, [], None, []
+
+        def fake_hud(img, db, full=False, **kw):
+            self.log.append("hud")
+            if self.hud_error is not None:
+                raise self.hud_error
+            if self.mark:
+                return Hud(round=None, round_mark=True, round_crop=CROP)
+            return Hud(round=self.round)
+
+        def fake_peek(img, crop):
+            self.log.append("peek")
+            self.crops.append(crop)
+            if self.peek_error is not None:
+                raise self.peek_error
+            return self.peek
+
+        for patch in (mock.patch.object(pipeline, "read_hud", side_effect=fake_hud),
+                      mock.patch.object(pipeline, "read_round_crop", side_effect=fake_peek)):
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def idle(self, start: float, end: float, gap: float = 0.5) -> list[tuple[float, list, list]]:
+        """从 start 到 end（含）隔 gap 秒取一帧，还有排着的读数（pending）时紧接着（隔 0.01 秒）取下一帧：
+        [(时刻, 这一帧的事件, 这一帧调了哪些识别函数)]。各帧报出的出错另记进 errs：[(时刻, 出错那一项的名字)]。"""
+        out = []
+        for i in range(10000):
+            t = round(start + gap * i, 2)
+            if t > end:
+                break
+            for n in range(13):
+                at = round(t + 0.01 * n, 2)
+                events, log = self.frame(at)
+                out.append((at, events, log))
+                self.errs.extend((at, name) for name, _, _ in self.proc.errors)
+                if not self.proc.pending:
+                    break
+        return out
+
+    @staticmethod
+    def at(got, name: str) -> list[float]:
+        """这几帧（idle 的结果）里调了 name 这项识别的时刻。"""
+        return [t for t, _, log in got if name in log]
+
+    @staticmethod
+    def names(got) -> list[str]:
+        return [name for _, _, log in got for name in log]
+
+    def records(self, kind: str) -> list[dict]:
+        return [r for r in self.session.recent_events(600) if r["kind"] == kind]
+
+
+class OccludedIdleTest(_Occluded):
+    """不在三选一时轮次被挡住：完整读看见标记以后不认选角界面、照旧读星数；之后隔 occluded_s 在那一小块认一次字（一帧一项，
+    读不到时什么都不排），隔 occluded_full_s 才完整读一次（不按 hud_ms）；认出手上的轮次或往前一轮时照读到轮次处理（交给记账，
+    接着认角色、读星数等），认出别的数（跳了不止一轮、变小、手上还没有轮次、本局已结束）不交，隔 hud_ms 完整读来定；地图还要靠
+    任务栏认、任务栏开着时照常隔 hud_ms 读；被挡住期间一直算在对局里，不开始离开对局后的整幅识别；窗口大小变了、那一小块认字
+    出错时照常完整读，完整读认出选角界面时离开了对局。识别函数换成假的（_Occluded）。"""
+
+    def test_no_pick_then_peeks(self):
+        self.mark = True
+        got = self.idle(6.0, 12.0)
+        self.assertEqual(got[0][2], ["hud"])  # 6 秒完整读：看见标记、数字读不出
+        self.assertEqual(got[1][2][:1], ["stars"])  # 下一帧读星数（玩家列表还在），不认选角界面
+        self.assertNotIn("pick", self.names(got))
+        self.assertNotIn("pregame", self.names(got))
+        self.assertEqual(self.at(got, "hud"), [6.0, 12.0])  # 隔 occluded_full_s 才再完整读
+        self.assertEqual(self.at(got, "peek"), [round(6.5 + 0.5 * i, 2) for i in range(11)])
+        self.assertEqual(set(self.crops), {CROP})
+        self.assertEqual(self.session.settings.round, 5)
+        self.assertEqual([r.get("mark") for r in self.records("read:hud")][-2:], [True, True])
+
+    def test_peek_read_counts_as_round(self):
+        """数字露出来的那一下（第 6 轮）：交给记账（往前一轮，直接采用），接着排这一轮的其余几项；不再算被挡住，下一次完整读
+        从这一眼起隔 hud_ms。识别记录记一条 read:round_crop。"""
+        self.mark = True
+        self.idle(6.0, 6.0)
+        self.peek = 6
+        got = self.idle(6.5, 6.5)
+        self.assertEqual(got[0][2], ["peek"])
+        self.assertEqual(self.session.settings.round, 6)
+        rest = self.names(got[1:])
+        self.assertIn("stars", rest)
+        self.assertIn("progress", rest)
+        self.assertNotIn("hud", rest)
+        self.assertIsNone(self.proc._occluded)
+        self.assertEqual([r["round"] for r in self.records("read:round_crop")], [6])
+        self.mark, self.round = False, 6
+        self.assertEqual(self.at(self.idle(7.0, 10.0), "hud"), [9.5])
+
+    def test_peek_jump_waits_for_full_read(self):
+        """这一眼认出跳了不止一轮的数（第 5 轮 → 第 8 轮）：不交给记账（只认一小块，和第一遍找字对不上时完整读按读不出处理，
+        直接交的话连读两次就绕过了核对），不再只看那一小块，隔 hud_ms 完整读；完整读又看见标记、数字读不出时，下一眼还是第 8 轮
+        也不采用。完整读读到第 8 轮才走记账连读两次的规矩。"""
+        self.mark = True
+        self.idle(6.0, 6.0)
+        self.peek = 8
+        got = self.idle(6.5, 6.5)
+        self.assertEqual(self.at(got, "peek"), [6.5])
+        self.assertIsNone(self.proc._occluded)
+        self.assertEqual(self.session.settings.round, 5)
+        self.assertFalse(self.session.round_jump_pending)
+        got = self.idle(7.0, 11.5)
+        self.assertEqual(self.at(got, "hud"), [9.0])  # 这一眼到完整读之间不看那一小块
+        self.assertEqual(self.at(got, "peek"), [9.5])
+        self.assertEqual(self.session.settings.round, 5)
+        self.assertFalse(self.session.round_jump_pending)
+        records = self.records("read:round_crop")
+        self.assertEqual([(r["round"], r.get("held")) for r in records], [(8, True), (8, True)])
+        self.mark, self.round = False, 8
+        self.assertEqual(self.at(self.idle(12.0, 12.0), "hud"), [12.0])
+        self.assertEqual(self.session.settings.round, 5)
+        self.assertTrue(self.session.round_jump_pending)
+        self.assertEqual(self.at(self.idle(15.0, 15.0), "hud"), [15.0])
+        self.assertEqual(self.session.settings.round, 8)
+
+    def test_peek_drop_not_delivered(self):
+        """这一眼认出变小的数：不交给记账（记账那边可能判成新的一局、清掉这一局的记录），等完整读。"""
+        self.mark = True
+        self.idle(6.0, 6.0)
+        self.peek = 1
+        games = self.session.games
+        self.idle(6.5, 12.0)
+        self.assertEqual((self.session.settings.round, self.session.games), (5, games))
+        self.assertFalse(self.session.round_drop_pending)
+        self.assertEqual({r.get("held") for r in self.records("read:round_crop")}, {True})
+
+    def test_peek_same_round_delivered(self):
+        """这一眼认出手上的轮次：照读到轮次处理（确认还在这一轮，接着排这一轮的其余几项）。"""
+        self.mark = True
+        self.idle(6.0, 6.0)
+        self.peek = 5
+        got = self.idle(6.5, 6.5)
+        self.assertEqual(self.session.settings.round, 5)
+        self.assertIsNone(self.proc._occluded)
+        self.assertIn("stars", self.names(got[1:]))
+        self.assertEqual([r.get("held") for r in self.records("read:round_crop")], [None])
+
+    def test_peek_unknown_round_waits_for_full_read(self):
+        """手上还没有轮次（程序在对局中途打开、数字一直被挡住）：记账第一次读到什么就采用什么，这一眼认出的不直接交，
+        完整读读到了才算。"""
+        self.mark = True
+        self.session.settings.round = None
+        self.idle(6.0, 6.0)
+        self.peek = 7
+        self.idle(6.5, 6.5)
+        self.assertIsNone(self.session.settings.round)
+        self.mark, self.round = False, 7
+        self.idle(9.0, 9.0)
+        self.assertEqual(self.session.settings.round, 7)
+
+    def test_peek_after_game_over_waits_for_full_read(self):
+        """本局已结束：记账连读两次同一个数就开新的一局（不经过互相印证），这一眼认出的不直接交。"""
+        self.mark = True
+        self.idle(6.0, 6.0)
+        self.session.game.game_over = True
+        self.peek = 5
+        games = self.session.games
+        self.idle(6.5, 12.0)
+        self.assertEqual(self.session.games, games)
+        self.assertIsNone(self.session.game._end_votes)
+
+    def test_tasks_open_reads_every_hud_s(self):
+        """地图还要靠任务栏认、任务栏开着：被挡住也照常隔 hud_ms 连带读整块（任务栏开着的时候不长，刚打开那一帧可能还在动画里），
+        不看那一小块（只交轮次的读数没有任务，记账会当成任务栏关了）；关掉以后回到只看一小块。"""
+        fulls = []
+        real = pipeline.read_hud
+
+        def hud(img, db, full=False, **kw):
+            fulls.append(full)
+            return real(img, db, full=full)
+
+        self.mark = True
+        self.session.set_map(None)
+        self.idle(6.0, 6.0)
+        with mock.patch.object(pipeline, "read_hud", side_effect=hud), \
+                mock.patch.object(pipeline, "task_panel_visible", return_value=True):
+            got = self.idle(6.5, 12.5)
+        self.assertEqual(self.at(got, "hud"), [6.5, 9.5, 12.5])  # 刚打开那一帧读一次，之后隔 hud_ms
+        self.assertEqual(fulls, [True, True, True])
+        self.assertEqual(self.at(got, "peek"), [])
+        got = self.idle(13.0, 19.0)
+        self.assertEqual(self.at(got, "hud"), [18.5])
+        self.assertEqual(self.at(got, "peek")[:2], [13.0, 13.5])
+
+    def test_peek_error_reads_normally(self):
+        """那一小块认字出错（位置对不上这幅画面等）：这一次报一个「轮次」出错，不再只看那一小块，照常隔 hud_ms 完整读，
+        不会隔 occluded_s 就报一次。"""
+        self.mark = True
+        self.idle(6.0, 6.0)
+        self.peek_error = RuntimeError("认字出错")
+        got = self.idle(6.5, 9.0)
+        self.assertEqual(self.at(got, "peek"), [6.5])
+        self.assertEqual(self.errs, [(6.5, "hud")])
+        self.assertEqual(self.at(got, "hud"), [9.0])
+
+    def test_resized_reads_normally(self):
+        """窗口大小变了（那一小块对不上了）：不再看那一小块，照常隔 hud_ms 完整读。"""
+        self.mark = True
+        self.idle(6.0, 6.0)
+        self.img = np.full((900, 1600, 3), 90, np.uint8)
+        got = self.idle(6.5, 9.0)
+        self.assertEqual(self.at(got, "peek"), [])
+        self.assertEqual(self.at(got, "hud"), [9.0])
+
+    def test_long_occlusion_stays_in_game(self):
+        """一直挡着（超过 after_game_ms）：完整读每次都看见标记，一直算在对局里，不开始离开对局后的整幅识别。对照：读不到
+        轮次、也没看见标记时，最后一次读到轮次（第 3 秒）after_game_ms 以后开始整幅识别。"""
+        self.mark = True
+        got = self.idle(6.0, 45.0)
+        self.assertNotIn("pregame", self.names(got))
+        self.assertNotIn("pick", self.names(got))
+        self.assertEqual(self.at(got, "hud"), [6.0, 12.0, 18.0, 24.0, 30.0, 36.0, 42.0])
+        self.setUp()
+        self.round = None
+        first = self.at(self.idle(6.0, 45.0), "pregame")[0]
+        self.assertGreaterEqual(first, 3.0 + self.proc.after_game_s)
+        self.assertLess(first, 3.0 + self.proc.after_game_s + 0.5)
+
+    def test_long_occlusion_not_quiet(self):
+        """一直挡着、超过 quiet_ms：完整读每次都看见标记，不当作不在对局里（Session.game_quiet）。对照：读不到轮次、也没看见
+        标记（星数也读不到）时，最后一次读到轮次（第 3 秒）quiet_ms 以后当作不在对局里了。"""
+        quiet = self.proc.quiet_s
+        self.mark = True
+        self.idle(6.0, 3.0 + quiet + 10.0)
+        self.assertFalse(self.session.game_quiet)
+        self.setUp()
+        self.round = None
+        self.idle(6.0, 3.0 + quiet - 0.5)
+        self.assertFalse(self.session.game_quiet)
+        self.idle(3.0 + quiet, 3.0 + quiet + 1.0)
+        self.assertTrue(self.session.game_quiet)
+
+    def test_left_game_seen_by_full_read(self):
+        """隔 occluded_full_s 的完整读不再看见标记、也读不到轮次：照常认选角界面（看见标记以后第一次读不到，不先不判）；认出
+        选角界面时离开了对局，看见标记的时刻、被挡住的那一小块都清掉，马上开始找加载画面。"""
+        self.mark = True
+        self.idle(6.0, 6.0)
+        self.mark, self.round = False, None
+        with mock.patch.object(pipeline, "is_select_screen",
+                               side_effect=lambda img, db, info=None: self.log.append("pick") or True):
+            got = self.idle(12.0, 12.0)
+        self.assertEqual(self.names(got)[:2], ["hud", "pick"])
+        self.assertEqual(self.proc._mark_seen_at, float("-inf"))
+        self.assertIsNone(self.proc._occluded)
+        self.assertIn("pregame", self.names(got))
+
+
+class OccludedSelectTest(_Occluded):
+    """三选一上轮次被挡住：完整读一直看见标记的，手上的轮次只是因为被挡住才旧的，三选一出来照样先给推荐；读左上角（核对、先读完）
+    只在那一小块认字、连同进度条；认不出时隔 occluded_s 再看那一小块，不重读进度条，最多再看 HUD_RETRIES 次；认出跳了不止一轮的
+    数时不交给记账，隔 retry_s 完整读，同样最多 HUD_RETRIES 次；数字露出来时照读到轮次重算推荐。识别函数换成假的（_Occluded）。"""
+
+    def test_fresh_while_mark_seen(self):
+        self.mark = True
+        self.idle(6.0, 40.0)  # 完整读在 6、12、…、36 秒都看见标记
+        self.assertGreaterEqual(40.1 - 3.0, self.proc.after_game_s)  # 最近一次读到数字是第 3 秒
+        self.seen = offer(OFFER_A)
+        events, log = self.frame(40.1)
+        self.assertEqual(log, ["select", "stars"])
+        self.assertEqual(self.advice(events), [(5, 9)])
+        self.peek = 5
+        events, log = self.frame(40.25)
+        self.assertEqual(log[:2], ["peek", "progress"])  # 核对：只在那一小块认字
+        self.assertNotIn("hud", log)
+        self.assertEqual(self.advice(events), [])
+        got = self.frames(40.4, 45.0)
+        self.assertEqual(self.when(got, "peek") + self.when(got, "hud"), [])  # 核对过了：只盯绿框
+
+    def test_stale_without_mark_reads_first(self):
+        """对照：同样过了 after_game_ms、期间一直没看见标记（战斗等挡住了左上角）：先读完再给推荐。"""
+        self.round = None
+        self.idle(6.0, 40.0)
+        self.round = 5
+        self.seen = offer(OFFER_A)
+        self.assertEqual(self.frame(40.1)[1][:3], ["select", "hud", "progress"])
+
+    def test_read_first_peeks(self):
+        """手动模式（先读完再给推荐）、轮次被挡住：先读完的那一次也只在那一小块认字，连同进度条；认不出时隔 occluded_s 再看，
+        只看那一小块、不重读进度条，最多再看 HUD_RETRIES 次。"""
+        self.mark = True
+        self.idle(6.0, 6.0)
+        self.proc.set_manual(True)
+        self.seen = offer(OFFER_A)
+        events, log = self.frame(7.0)
+        self.assertEqual(log[:3], ["select", "peek", "progress"])
+        self.assertEqual(self.advice(events), [(5, 9)])
+        got = self.frames(7.15, 12.0)
+        peeks = self.when(got, "peek")
+        self.assertEqual(len(peeks), pipeline.HUD_RETRIES)
+        self.assert_gaps([7.0, *peeks], self.proc.occluded_s)
+        self.assertEqual(self.when(got, "progress") + self.when(got, "hud"), [])
+
+    def test_check_retry_peek_then_read(self):
+        """核对那一帧那一小块认不出：隔 occluded_s 再看（不重读进度条），数字露出来时读到第 6 轮，按它重算推荐。"""
+        self.mark = True
+        self.idle(6.0, 6.0)
+        self.seen = offer(OFFER_A)
+        self.assertEqual(self.frame(7.0)[1], ["select", "stars"])
+        self.assertEqual(self.frame(7.15)[1][:2], ["peek", "progress"])
+        self.peek = 6
+        got = self.frames(7.3, 12.0)
+        self.assertEqual(self.when(got, "peek"), [7.75])
+        self.assertEqual(self.when(got, "progress"), [])
+        self.assertEqual(self.advice(self.events_of(got, "advice")), [(6, 9)])
+
+
+    def test_check_jump_rereads_full(self):
+        """核对那一帧那一小块认出跳了不止一轮的数：不交给记账，隔 retry_s 完整读（第一遍和那一小块互相核对）；完整读读到了
+        才走连读两次的规矩，下一帧补读一次，按新的轮次重算推荐。"""
+        self.mark = True
+        self.idle(6.0, 6.0)
+        self.seen = offer(OFFER_A)
+        self.frame(7.0)
+        self.peek = 8
+        self.assertEqual(self.frame(7.15)[1][:2], ["peek", "progress"])
+        self.assertEqual(self.session.settings.round, 5)
+        self.assertIsNone(self.proc._occluded)
+        self.mark, self.round = False, 8
+        got = self.frames(7.3, 9.0)
+        reads = self.when(got, "hud")
+        self.assertEqual(len(reads), 2)
+        self.assertGreaterEqual(reads[0], 7.15 + self.proc.retry_s)
+        self.assertLess(reads[0], 7.15 + self.proc.retry_s + self.STEP)
+        self.assertEqual(self.when(got, "peek"), [])
+        self.assertEqual(self.session.settings.round, 8)
+        self.assertEqual(self.advice(self.events_of(got, "advice")), [(8, 9)])
+
+    def test_check_jump_stays_wrong_not_adopted(self):
+        """那一小块一直读成跳了不止一轮的数、完整读一直按读不出处理（第一遍和那一小块对不上）：这次三选一里最多再读 HUD_RETRIES
+        次，手上的轮次不变。"""
+        self.mark = True
+        self.idle(6.0, 6.0)
+        self.seen = offer(OFFER_A)
+        self.frame(7.0)
+        self.peek = 8
+        self.frame(7.15)
+        got = self.frames(7.3, 14.0)
+        self.assertEqual(len(self.when(got, "hud") + self.when(got, "peek")), pipeline.HUD_RETRIES)
+        self.assertEqual(self.session.settings.round, 5)
+        self.assertEqual(self.events_of(got, "advice"), [])
+
+
+@unittest.skipUnless(samples.samples_ok(OCCLUDED_ANTENNA), samples.samples_reason(OCCLUDED_ANTENNA))
+class OccludedRealTest(unittest.TestCase):
+    """真的 read_hud、read_round_crop 走一遍被挡住的读法：带上下黑边的截图，头像的天线挡住了「04」。三选一、认角色、读星数
+    换成假的。完整读看见标记、数字读不出；交回的那一小块是去掉黑边后的画面上的像素；之后隔 occluded_s 在同一幅画面上认字，
+    隔 occluded_full_s 才再完整读；不认选角界面、不做整幅识别；窗口大小变了照常完整读，那一小块重新定。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.db = load_db()
+        cls.img = cv2.imdecode(np.fromfile(str(SAMPLES / OCCLUDED_ANTENNA), dtype=np.uint8), cv2.IMREAD_COLOR)
+
+    def setUp(self):
+        self.log = []
+        real_hud, real_crop = pipeline.read_hud, pipeline.read_round_crop
+
+        def hud(img, db, full=False, **kw):
+            self.log.append("hud")
+            return real_hud(img, db, full=full)
+
+        def crop(img, box):
+            self.log.append(("peek", img.shape[:2], tuple(box)))
+            return real_crop(img, box)
+
+        def forbid(name):
+            def call(*args, **kwargs):
+                self.log.append(name)
+                return Pregame() if name == "pregame" else False
+            return call
+
+        patches = [
+            mock.patch.object(pipeline, "read_hud", side_effect=hud),
+            mock.patch.object(pipeline, "read_round_crop", side_effect=crop),
+            mock.patch.object(pipeline, "looks_like_overlay_screen", return_value=False),
+            mock.patch.object(pipeline, "is_select_screen", side_effect=forbid("pick")),
+            mock.patch.object(pipeline, "read_pregame", side_effect=forbid("pregame")),
+            mock.patch.object(pipeline, "read_hero", side_effect=lambda img, db: SimpleNamespace(hero="凛")),
+            mock.patch.object(pipeline, "read_own_stars", side_effect=lambda img, who, **kw: None),
+            mock.patch.object(pipeline, "read_players", return_value=None),
+            mock.patch.object(pipeline, "read_chip_panel", None),
+            mock.patch.object(pipeline, "mutator_catalog", return_value=()),
+            mock.patch("advisor.vision.capture.exclusive_fullscreen", return_value=False),
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        self.clock = [0.0]
+        self.session = Session(self.db, Settings(hero="凛", map="异变图书馆", map_source="tasks", map_confidence="high"))
+        self.session._clock = lambda: self.clock[0]
+        self.proc = pipeline.FrameProcessor(self.db, self.session)
+
+    def run_frames(self, img, start, end):
+        for i in range(10000):
+            t = round(start + 0.5 * i, 2)
+            if t > end:
+                break
+            for n in range(13):
+                at = round(t + 0.01 * n, 2)
+                self.clock[0] = at
+                self.proc.process(img, at)
+                self.assertEqual(self.proc.errors, [])
+                if not self.proc.pending:
+                    break
+
+    def test_occluded_reads(self):
+        self.run_frames(self.img, 0.0, 6.5)
+        peeks = [item for item in self.log if isinstance(item, tuple)]
+        self.assertEqual(self.log.count("hud"), 2)  # 第 0、6 秒
+        self.assertGreaterEqual(len(peeks), 9)
+        self.assertNotIn("pick", self.log)
+        self.assertNotIn("pregame", self.log)
+        self.assertEqual({shape for _, shape, _ in peeks}, {(1440, 2560)})  # 去掉黑边后的那一幅
+        x0, y0, x1, y1 = peeks[0][2]
+        self.assertTrue(0 <= x0 < x1 <= 2560 and 0 <= y0 < y1 <= 1440)
+        self.assertIsNone(self.session.settings.round)  # 这张图上数字读不出：什么都不交
+        self.assertEqual(self.proc._occluded[1], (1440, 2560))
+        self.assertGreater(self.proc._mark_seen_at, float("-inf"))
+
+    def test_resized(self):
+        self.run_frames(self.img, 0.0, 0.0)
+        before = self.proc._occluded[0]
+        self.log.clear()
+        small = cv2.resize(self.img, (1920, 1200), interpolation=cv2.INTER_AREA)
+        self.run_frames(small, 6.0, 6.5)
+        self.assertEqual(self.log[0], "hud")
+        self.assertEqual(self.proc._occluded[1], (1080, 1920))
+        self.assertNotEqual(self.proc._occluded[0], before)
+        self.assertEqual({item[1] for item in self.log if isinstance(item, tuple)}, {(1080, 1920)})
+
+
+class MapBlockTest(_FakeReads):
+    """地图未知时读轮次连带读画面上方整块（read_hud 的 full）：任务栏开着（task_panel_visible）时每次都连带读，没开时隔
+    block_s（[watch] map_block_ms）才连带读一次，其余几次只读轮次；连带读到了任务（按颜色认不出来的任务列表开着）以后，
+    读到没有为止每次都连带读。识别函数换成假的（_FakeReads）。"""
+
+    def setUp(self):
+        super().setUp()
+        self.fulls, self.tasks, self.listed = [], False, False
+
+        def hud(img, db, full=False, **kw):
+            self.log.append("hud")
+            self.fulls.append((self.clock[0], full))
+            # listed：按颜色认不出来的任务列表开着，连带读整块时读得到任务
+            return Hud(round=self.round, tasks_seen=["任务"] if full and self.listed else [])
+
+        for patch in (mock.patch.object(pipeline, "read_hud", side_effect=hud),
+                      mock.patch.object(pipeline, "task_panel_visible", side_effect=lambda img: self.tasks)):
+            patch.start()
+            self.addCleanup(patch.stop)
+        self.session.set_map(None)
+
+    def test_closed_panel_every_block_s(self):
+        self.assertEqual(self.proc.block_s, 2 * self.proc.hud_s)
+        for t in (0.0, 3.0, 6.0, 9.0, 12.0, 15.0):
+            self.settle(t)
+        self.assertEqual(self.fulls, [(0.0, True), (3.0, False), (6.0, True), (9.0, False), (12.0, True), (15.0, False)])
+
+    def test_open_panel_every_read(self):
+        self.tasks = True
+        for t in (0.0, 3.0, 6.0):
+            self.settle(t)
+        self.assertEqual(self.fulls, [(0.0, True), (3.0, True), (6.0, True)])
+
+    def test_tasks_seen_keeps_reading(self):
+        # 任务列表在 0 秒那次之后打开：6 秒那次（隔够了 block_s）读到任务，之后每次都连带读；12 秒前关掉，12 秒那次读到没有，
+        # 回到隔 block_s 一次
+        self.settle(0.0)
+        self.settle(3.0)
+        self.listed = True
+        for t in (6.0, 9.0):
+            self.settle(t)
+        self.listed = False
+        for t in (12.0, 15.0, 18.0):
+            self.settle(t)
+        self.assertEqual(self.fulls, [(0.0, True), (3.0, False), (6.0, True), (9.0, True), (12.0, True), (15.0, False),
+                                      (18.0, True)])
+
+
+class SelectBoardTest(unittest.TestCase):
+    """两个客户端同时识别时两路共用的「谁的三选一正显示着」（SelectBoard）：自己的不算，记号超过 BOARD_STALE_S 没更新不算，
+    没显示时擦掉。"""
+
+    def test_note_and_others(self):
+        board = pipeline.SelectBoard()
+        a, b = object(), object()
+        self.assertFalse(board.others(a, 0.0))
+        board.note(b, True, 10.0)
+        self.assertTrue(board.others(a, 10.0 + pipeline.BOARD_STALE_S - 0.01))
+        self.assertFalse(board.others(b, 11.0))
+        self.assertFalse(board.others(a, 10.0 + pipeline.BOARD_STALE_S))
+        board.note(b, True, 12.0)
+        board.note(b, False, 12.5)
+        self.assertFalse(board.others(a, 12.5))
+
+
+class DualYieldTest(_FakeReads):
+    """两个客户端同时识别：另一路的三选一显示着（两路共用的 SelectBoard 上记着）时，自己暂停要做文字识别的读数（读轮次、
+    认选角界面、读队友、读进度条、读星币、离开对局后的整幅识别），在对局里时照旧按 hud_ms 认角色、读星数（模板比对），不设
+    pending；看自己有没有三选一照旧，自己的也显示着时各读各的。那边关掉、记号过了 BOARD_STALE_S 没更新、自己暂停
+    （watch_idle）以后不再让路或不再记着。识别函数换成假的（_FakeReads）。"""
+
+    def setUp(self):
+        super().setUp()
+        self.board = pipeline.SelectBoard()
+        self.proc.board = self.board
+        self.other = object()  # 另一路的识别流程（这里只在牌子上记它）
+        self.session.game.seen_hero = "凛"
+        self.settle(0.0)
+        self.settle(3.0)
+
+    def test_yield_then_resume(self):
+        got = []
+        for i in range(20):
+            t = round(6.0 + 0.5 * i, 2)
+            self.board.note(self.other, True, t)
+            got.append((t, self.frame(t)[1]))
+            self.assertFalse(self.proc.pending)
+        names = [name for _, log in got for name in log]
+        for name in ("hud", "pick", "players", "progress", "coins", "pregame"):
+            self.assertNotIn(name, names)
+        self.assertEqual([t for t, log in got if "stars" in log], [6.0, 9.0, 12.0, 15.0])
+        self.board.note(self.other, False, 16.0)
+        self.assertEqual(self.frame(16.0)[1], ["hud"])  # 那边关掉了：马上接着读
+
+    def test_own_select_while_yielding(self):
+        self.board.note(self.other, True, 6.0)
+        self.seen = offer(OFFER_A)
+        events, log = self.frame(6.0)
+        self.assertEqual(log, ["select", "stars"])
+        self.assertEqual(self.advice(events), [(5, 9)])
+        self.assertTrue(self.board.others(self.other, 6.0))  # 自己也记上了：另一路据此让路
+        self.board.note(self.other, True, 6.15)
+        self.assertEqual(self.frame(6.15)[1][:2], ["hud", "progress"])  # 两路都显示着：各读各的，照常核对
+
+    def test_not_yielded_after_advice(self):
+        """自己的推荐给过以后牌子上不再记着：玩家一直不选时，另一路不用一直让路。"""
+        self.seen = offer(OFFER_A)
+        events, _ = self.frame(6.0)
+        self.assertEqual(self.advice(events), [(5, 9)])
+        self.assertTrue(self.board.others(self.other, 6.0))  # 给推荐的这一帧还记着
+        self.frame(6.15)
+        self.assertFalse(self.board.others(self.other, 6.15))
+        self.seen = None
+        self.frame(6.3)
+        self.assertFalse(self.board.others(self.other, 6.3))
+
+    def test_stale_mark_not_yielded(self):
+        self.board.note(self.other, True, 6.0)
+        self.assertNotIn("hud", self.frame(6.0)[1])
+        self.assertEqual(self.frame(6.0 + pipeline.BOARD_STALE_S)[1], ["hud"])  # 那一路停了、卡住了：不再让路
+
+    def test_watch_idle_clears(self):
+        self.seen = offer(OFFER_A)
+        self.frame(6.0)
+        self.assertTrue(self.board.others(self.other, 6.1))
+        self.proc.watch_idle()
+        self.assertFalse(self.board.others(self.other, 6.1))
+
+
+class FullscreenPlatformTest(unittest.TestCase):
+    """查独占全屏时只看这个识别流程跟的端（FrameProcessor 的 platform）：None 时和原来一样按游戏平台设置查。"""
+
+    def test_fullscreen_uses_platform(self):
+        from advisor.vision import capture
+
+        db = load_db()
+        session = Session(db, Settings())
+        img = np.zeros((1080, 1920, 3), np.uint8)
+        for platform in (None, capture.STEAM, capture.TAPTAP):
+            with self.subTest(platform=platform):
+                proc = pipeline.FrameProcessor(db, session, platform=platform)
+                with mock.patch.object(capture, "exclusive_fullscreen", return_value=False) as full:
+                    proc._check_window(img, 0.0, [])
+                full.assert_called_once_with(platform=platform)
+
+
 class WatchRulesTest(unittest.TestCase):
     def test_idle_ms(self):
         """平时看画面的间隔 0.5 秒（三选一画面出来最多晚半秒看到），低配模式乘 2 即 1 秒。"""
@@ -2204,6 +4076,791 @@ class WatchRulesTest(unittest.TestCase):
         db = load_db()
         self.assertEqual(db.rules["watch"]["coins_ms"], pipeline.COINS_MS)
         self.assertEqual(pipeline.FrameProcessor(db, Session(db, Settings())).coins_s, pipeline.COINS_MS / 1000)
+
+    def test_occlusion_and_block_written_out(self):
+        """轮次被挡住时多久看一眼、多久完整读一次，任务栏没开时多久连带读一次整块，写在 rules.toml [watch] 里，取值和代码里的
+        默认值相同；识别流程按它读，改了照改的读。"""
+        db = load_db()
+        watch = db.rules["watch"]
+        self.assertEqual((watch["occluded_recheck_ms"], watch["occluded_full_ms"], watch["map_block_ms"]),
+                         (pipeline.OCCLUDED_RECHECK_MS, pipeline.OCCLUDED_FULL_MS, pipeline.MAP_BLOCK_MS))
+        proc = pipeline.FrameProcessor(db, Session(db, Settings()))
+        self.assertEqual((proc.occluded_s, proc.occluded_full_s, proc.block_s),
+                         (watch["occluded_recheck_ms"] / 1000, watch["occluded_full_ms"] / 1000,
+                          watch["map_block_ms"] / 1000))
+        changed = dataclasses.replace(db, rules={**db.rules, "watch": {
+            **watch, "occluded_recheck_ms": 250, "occluded_full_ms": 9000, "map_block_ms": 3000}})
+        proc = pipeline.FrameProcessor(changed, Session(changed, Settings()))
+        self.assertEqual((proc.occluded_s, proc.occluded_full_s, proc.block_s), (0.25, 9.0, 3.0))
+
+    def test_blank_and_retry_gap_written_out(self):
+        """连标记都没看见时多久完整读一次、这一局近多久内读到过轮次才算「最近」，写在 rules.toml [watch] 里，取值和代码里的
+        默认值相同；识别流程按它读，改了照改的读。blank_full_ms 跟着低配模式乘倍数，round_retry_gap_ms 不乘。"""
+        db = load_db()
+        watch = db.rules["watch"]
+        self.assertEqual((watch["blank_full_ms"], watch["round_retry_gap_ms"]),
+                         (pipeline.BLANK_FULL_MS, pipeline.ROUND_RETRY_GAP_MS))
+        proc = pipeline.FrameProcessor(db, Session(db, Settings()))
+        self.assertEqual((proc.blank_full_s, proc.round_retry_gap_s),
+                         (watch["blank_full_ms"] / 1000, watch["round_retry_gap_ms"] / 1000))
+        proc.set_pace(2)
+        self.assertEqual((proc.blank_full_s, proc.round_retry_gap_s),
+                         (watch["blank_full_ms"] / 1000 * 2, watch["round_retry_gap_ms"] / 1000))
+        changed = dataclasses.replace(db, rules={**db.rules, "watch": {
+            **watch, "blank_full_ms": 9000, "round_retry_gap_ms": 30000}})
+        proc = pipeline.FrameProcessor(changed, Session(changed, Settings()))
+        self.assertEqual((proc.blank_full_s, proc.round_retry_gap_s), (9.0, 30.0))
+
+    def test_select_ms_written_out(self):
+        """不在对局里时多久看一眼下方区域（选角界面、对局外的画面）写在 rules.toml [watch] 里，取值和代码里的默认值相同
+        （1 秒）；识别流程按它读，改了照改的读。"""
+        db = load_db()
+        self.assertEqual((db.rules["watch"]["select_ms"], pipeline.SELECT_MS), (1000, 1000))
+        self.assertEqual(pipeline.FrameProcessor(db, Session(db, Settings())).select_s, 1.0)
+        changed = dataclasses.replace(db, rules={**db.rules, "watch": {**db.rules["watch"], "select_ms": 1500}})
+        self.assertEqual(pipeline.FrameProcessor(changed, Session(changed, Settings())).select_s, 1.5)
+
+    def test_pick_grace_written_out(self):
+        """对局中看见轮次标记以后第二次起读不到时，离那次标记多久以内先不判选角界面，写在 rules.toml [watch] 里，取值和代码里的
+        默认值相同（10 秒）；识别流程按它读，改了照改的读；低配模式乘倍数。"""
+        db = load_db()
+        self.assertEqual((db.rules["watch"]["pick_grace_ms"], pipeline.PICK_GRACE_MS), (10000, 10000))
+        proc = pipeline.FrameProcessor(db, Session(db, Settings()))
+        self.assertEqual(proc.pick_grace_s, 10.0)
+        proc.set_pace(2)
+        self.assertEqual(proc.pick_grace_s, 20.0)
+        changed = dataclasses.replace(db, rules={**db.rules, "watch": {**db.rules["watch"], "pick_grace_ms": 6000}})
+        self.assertEqual(pipeline.FrameProcessor(changed, Session(changed, Settings())).pick_grace_s, 6.0)
+
+    def test_select_fast_written_out(self):
+        """三选一快读的开关写在 rules.toml [watch] 里、默认开；识别流程按它读，改成 false 照改的读；低配模式不动它。"""
+        db = load_db()
+        self.assertIs(db.rules["watch"]["select_fast"], True)
+        proc = pipeline.FrameProcessor(db, Session(db, Settings()))
+        self.assertTrue(proc.select_fast)
+        proc.set_pace(2)
+        self.assertTrue(proc.select_fast)
+        changed = dataclasses.replace(db, rules={**db.rules, "watch": {**db.rules["watch"], "select_fast": False}})
+        self.assertFalse(pipeline.FrameProcessor(changed, Session(changed, Settings())).select_fast)
+
+
+# ---------------------------------------------------------------- 对局中少找字
+
+# 同一窗口大小（2560x1057）的两次三选一：先完整读 A、记下位置，再要认 B（刷新以后，没有刷新按钮、选中了一个）时快读
+FAST_A = "20261002_144845_chipselect_levelup_star1_2560x1057.jpg"
+FAST_B = "20261002_150218_chipselect_selected_after_reroll_no_reroll_button_2560x1057.jpg"
+# 2560x1369、进度条当前格不同的几张（标注的 progress）：第 1、4、8、11、12 格
+PROGRESS_SHOTS = {
+    1: "20261003_124642_hud_round1_skull_cell_2560x1369.jpg",
+    4: "20261003_125650_chips_panel_two_chips_al_2560x1369.jpg",
+    8: "20261003_130926_hud_round8_nameplate_hp_2560x1369.jpg",
+    11: "20261003_132016_chips_panel_eight_chips_2560x1369.jpg",
+    12: "20261003_132306_card_give_al_skill_2560x1369.jpg",
+}
+
+
+def load_native(name: str) -> np.ndarray:
+    """原尺寸读一张样本（load 会缩到 1920 宽）。"""
+    return cv2.imdecode(np.fromfile(str(SAMPLES / name), dtype=np.uint8), cv2.IMREAD_COLOR)
+
+
+@unittest.skipUnless(samples.samples_ok(FAST_A, FAST_B), samples.samples_reason(FAST_A, FAST_B))
+class SelectFastTest(unittest.TestCase):
+    """三选一快读接进识别流程（FrameProcessor._select_read），真的文字识别：完整读认出三选一以后记下位置，下一次要认三张卡时
+    （同样大小的画面）先快读，读成了就不再完整读，识别记录 how 为 fast、读数和完整读一样；快读退回时当场完整读、重记位置，
+    识别记录另有 fast_miss；完整读记不下位置时留着原来那一份；开关关着、按热键的那一帧、补认那一次照旧完整读。
+    读轮次、进度条等换成假的。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.db = load_db()
+        cls.images = {name: load_native(name) for name in (FAST_A, FAST_B)}
+        info: dict = {}
+        cls.full_b = chip_select.read_chip_select(cls.images[FAST_B], cls.db, info=info)
+        cls.layout_b = chip_select.select_layout(cls.images[FAST_B].shape, cls.full_b, info["lines"])
+
+    def setUp(self):
+        self.session = Session(self.db, Settings(hero="凛", round=3, star=1, star_read=True))
+        self.calls: list[str] = []
+        real_full, real_fast = pipeline.read_chip_select, pipeline.read_chip_select_fast
+
+        def full(img, db, **kw):
+            self.calls.append("full")
+            return real_full(img, db, **kw)
+
+        def fast(img, db, layout):
+            self.calls.append("fast")
+            return real_fast(img, db, layout)
+
+        patches = [
+            mock.patch.object(pipeline, "read_chip_select", side_effect=full),
+            mock.patch.object(pipeline, "read_chip_select_fast", side_effect=fast),
+            mock.patch.object(pipeline, "read_hud", return_value=Hud(round=3)),
+            mock.patch.object(pipeline, "read_progress", return_value=Progress()),
+            mock.patch.object(pipeline, "read_hero", return_value=SimpleNamespace(hero="凛")),
+            mock.patch.object(pipeline, "read_own_stars", return_value=None),
+            mock.patch.object(pipeline, "is_select_screen", return_value=False),
+            mock.patch.object(pipeline, "read_pregame", return_value=Pregame()),
+            mock.patch.object(pipeline, "read_players", return_value=None),
+            mock.patch.object(pipeline, "read_chip_panel", None),
+            mock.patch.object(pipeline, "mutator_catalog", return_value=()),
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        self.proc = pipeline.FrameProcessor(self.db, self.session)
+
+    def records(self) -> list[dict]:
+        return [r for r in self.session.recent_events(600) if r["kind"] == "read:select"]
+
+    def test_next_offer_read_fast(self):
+        self.proc.process(self.images[FAST_A], 0.0)
+        self.assertEqual(self.calls, ["full"])
+        self.assertIsNotNone(self.proc._select_layout)
+        self.proc.process(self.images[FAST_B], 0.3)
+        self.assertEqual(self.calls, ["full", "fast"])
+        first, last = self.records()[0], self.records()[-1]
+        self.assertNotIn("how", first)
+        self.assertEqual(last.get("how"), "fast")
+        self.assertNotIn("fast_miss", last)
+        cached = self.proc._select_cache[0]
+        for key in ("names", "raw", "rarity", "rerolls", "probabilities", "selected", "team"):
+            self.assertEqual(getattr(cached, key), getattr(self.full_b, key), key)
+        self.assertEqual(self.session._foreign, 0)
+
+    def test_fallback_reads_full_and_relearns(self):
+        self.proc.process(self.images[FAST_A], 0.0)
+        first = self.proc._select_layout
+
+        def refuse(img, db, layout):
+            self.calls.append("fast")
+            return None, chip_select.FAST_NO_TITLE
+
+        with mock.patch.object(pipeline, "read_chip_select_fast", side_effect=refuse):
+            self.proc.process(self.images[FAST_B], 0.3)
+        self.assertEqual(self.calls, ["full", "fast", "full"])
+        last = self.records()[-1]
+        self.assertEqual(last.get("fast_miss"), chip_select.FAST_NO_TITLE)
+        self.assertNotIn("how", last)
+        self.assertEqual(self.proc._select_layout, self.layout_b or first)
+
+    def test_fast_error_reads_full(self):
+        """快读出错：这一次改用完整读（三选一照样认出），那一份位置丢掉、完整读重记，出错写进错误记录、识别记录的 fast_miss
+        写明出错，不报成认三选一出错。"""
+        self.proc.process(self.images[FAST_A], 0.0)
+        with mock.patch.object(pipeline, "read_chip_select_fast", side_effect=RuntimeError("快读出错")), \
+                mock.patch.object(pipeline, "log_error") as logged:
+            self.proc.process(self.images[FAST_B], 0.3)
+        self.assertEqual(self.calls, ["full", "full"])
+        self.assertEqual(self.proc.errors, [])
+        self.assertEqual(logged.call_count, 1)
+        self.assertEqual(self.records()[-1].get("fast_miss"), "出错：RuntimeError")
+        self.assertEqual(self.proc._select_cache[0].names, self.full_b.names)
+        self.assertEqual(self.proc._select_layout, self.layout_b)
+
+    def test_layout_kept_when_not_learnable(self):
+        """完整读记不下位置（读得不完整、卡片还在滑进来等，select_layout 交回 None）时留着原来那一份。"""
+        self.proc.process(self.images[FAST_A], 0.0)
+        first = self.proc._select_layout
+        with mock.patch.object(pipeline, "read_chip_select_fast", return_value=(None, chip_select.FAST_NAME)), \
+                mock.patch.object(pipeline, "select_layout", return_value=None):
+            self.proc.process(self.images[FAST_B], 0.3)
+        self.assertIs(self.proc._select_layout, first)
+
+    def test_switch_off_reads_full(self):
+        self.proc.select_fast = False
+        self.proc.process(self.images[FAST_A], 0.0)
+        self.proc.process(self.images[FAST_B], 0.3)
+        self.assertEqual(self.calls, ["full", "full"])
+        self.assertFalse([r for r in self.records() if "how" in r or "fast_miss" in r])
+
+    def test_hotkey_reads_full(self):
+        self.proc.process(self.images[FAST_A], 0.0)
+        self.proc.process(self.images[FAST_B], 0.3, True)
+        self.assertEqual(self.calls, ["full", "full"])
+
+    def test_reread_and_other_size_read_full(self):
+        """补认到点的那一次、画面大小和记下位置时不同的，不快读。"""
+        self.proc.process(self.images[FAST_A], 0.0)
+        img = self.images[FAST_B]
+        seen, how = self.proc._select_read(img, False, True, {})
+        self.assertEqual((self.calls, how), (["full", "full"], {}))
+        small = cv2.resize(img, (1920, 793), interpolation=cv2.INTER_AREA)
+        self.proc._select_read(small, False, False, {})
+        self.assertEqual(self.calls, ["full", "full", "full"])
+
+
+class RoundQuickTest(_FakeReads):
+    """读轮次先只认字（FrameProcessor._round_quick）：完整读读到了轮次、也看见了标记（交回标记左边那一小块 CROP）以后，下一次
+    读轮次先在那一小块只认字（read_round_crop，记作「crop」，认出的数是 crop_value）；认出手上的轮次或往前一轮就当作读到了，
+    不再完整读（识别记录 how 为 crop），这一轮其余几项照排；认不出、认出别的数、画面尺寸变了、按热键、要连带读任务栏时照旧
+    完整读；离开对局时清掉。识别函数换成假的（_FakeReads）。"""
+
+    def setUp(self):
+        super().setUp()
+        self.crop_value = None
+
+        def fake_hud(img, db, full=False, **kw):
+            self.log.append("hud")
+            seen = self.round is not None
+            return Hud(round=self.round, round_mark=seen, round_crop=CROP if seen else None)
+
+        def fake_crop(img, crop):
+            self.log.append("crop")
+            return self.crop_value
+
+        for patch in (mock.patch.object(pipeline, "read_hud", side_effect=fake_hud),
+                      mock.patch.object(pipeline, "read_round_crop", side_effect=fake_crop)):
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def reads(self, t: float, img: np.ndarray | None = None) -> list[str]:
+        """t 秒处这一轮读数做完（settle）调了哪些识别函数。"""
+        if img is not None:
+            self.img = img
+        self.log.clear()
+        self.settle(t)
+        return list(self.log)
+
+    def hud_records(self) -> list[dict]:
+        return [r for r in self.session.recent_events(600) if r["kind"] == "read:hud"]
+
+    def test_crop_instead_of_full(self):
+        self.assertIn("hud", self.reads(0.0))
+        self.assertEqual(self.proc._round_memo, (CROP, (1080, 1920)))
+        self.crop_value = 5
+        got = self.reads(3.0)
+        self.assertEqual(got.count("crop"), 1)
+        self.assertNotIn("hud", got)
+        self.assertIn("progress", got)  # 和完整读到轮次时一样，接着排这一轮的其余几项
+        records = self.hud_records()
+        self.assertNotIn("how", records[0])
+        self.assertEqual((records[-1]["round"], records[-1].get("how")), (5, "crop"))
+        self.assertEqual(self.session.settings.round, 5)
+
+    def test_next_round_taken(self):
+        self.reads(0.0)
+        self.crop_value = 6
+        got = self.reads(3.0)
+        self.assertEqual((got.count("crop"), got.count("hud")), (1, 0))
+        self.assertEqual(self.hud_records()[-1]["round"], 6)
+
+    def test_other_value_reads_full(self):
+        """认出别的数（跳了不止一轮、变小）、认不出：照旧完整读，不把别的数直接交给记账。"""
+        self.reads(0.0)
+        for i, value in enumerate((8, 4, None)):
+            self.crop_value = value
+            with self.subTest(value=value):
+                got = self.reads(3.0 * (i + 1))
+                self.assertEqual((got.count("crop"), got.count("hud")), (1, 1))
+                self.assertNotIn("how", self.hud_records()[-1])
+        self.assertEqual(self.session.settings.round, 5)
+
+    def test_resized_reads_full(self):
+        self.reads(0.0)
+        self.crop_value = 5
+        got = self.reads(3.0, np.full((900, 1600, 3), 90, np.uint8))
+        self.assertEqual((got.count("crop"), got.count("hud")), (0, 1))
+        self.assertEqual(self.proc._round_memo, (CROP, (900, 1600)))
+
+    def test_hotkey_reads_full(self):
+        self.reads(0.0)
+        self.crop_value = 5
+        self.log.clear()
+        self.clock[0] = 3.0
+        self.proc.process(self.img, 3.0, True)
+        self.assertEqual((self.log.count("crop"), self.log.count("hud")), (0, 1))
+
+    def test_block_due_reads_full(self):
+        """地图未知、到了连带读整块的时候（full）照旧完整读；不连带读的那几次先只认字。"""
+        self.session.set_map(None)
+        self.reads(0.0)
+        self.crop_value = 5
+        self.assertEqual(self.reads(3.0).count("hud"), 0)
+        got = self.reads(6.0)
+        self.assertEqual((got.count("crop"), got.count("hud")), (0, 1))
+
+    def test_in_select_crop(self):
+        """三选一上读左上角也先只认字，同样的接受规矩。"""
+        self.reads(0.0)
+        self.crop_value = 5
+        self.log.clear()
+        self.clock[0] = 3.0
+        self.assertTrue(self.proc._read_hud(self.img, 3.0, [], in_select=True, progress=False))
+        self.assertEqual(self.log, ["crop"])
+        self.assertEqual(self.proc._hud_round, 5)
+
+    def test_left_game_clears(self):
+        self.reads(0.0)
+        self.assertIsNotNone(self.proc._round_memo)
+        self.proc._left_game()
+        self.assertIsNone(self.proc._round_memo)
+        self.crop_value = 5
+        got = self.reads(3.0)
+        self.assertEqual((got.count("crop"), got.count("hud")), (0, 1))
+
+    def test_full_read_after_game_s(self):
+        """只认字看不见标记：离最近一次完整读看见标记满 after_game_s（30 秒）时这一次完整读，看见了标记从那时重新算。"""
+        self.assertEqual(self.proc.after_game_s, 30.0)
+        self.reads(0.0)
+        self.crop_value = 5
+        for t in range(3, 30, 3):
+            with self.subTest(t=t):
+                got = self.reads(float(t))
+                self.assertEqual((got.count("crop"), got.count("hud")), (1, 0))
+        got = self.reads(30.0)
+        self.assertEqual((got.count("crop"), got.count("hud")), (0, 1))
+        self.assertEqual(self.proc._full_mark_at, 30.0)
+        got = self.reads(33.0)
+        self.assertEqual((got.count("crop"), got.count("hud")), (1, 0))
+
+    def test_no_mark_keeps_full_reads(self):
+        """对局外的画面在那一小块上正好认出手上的轮次：满 after_game_s 的那一次完整读读不到轮次、看不见标记，接着认选角界面和
+        对局外的画面（看见标记以后第一次读不到，不先不判）；之后不再只认字、也不再每 hud_ms 完整读，而是每 blank_full_s（6 秒）
+        完整读一次（连标记都没看见；只认字那一小块认出的也算看见过标记，离那次不到 round_retry_gap_s，这一局还算正打着），
+        直到完整读再看见标记。"""
+        self.reads(0.0)
+        self.crop_value = 5
+        for t in range(3, 30, 3):
+            self.reads(float(t))
+        self.round = None
+        got = self.reads(30.0)
+        self.assertEqual((got.count("crop"), got.count("hud")), (0, 1))
+        self.assertIn("pick", got)
+        for t, want in ((33.0, 0), (36.0, 1), (39.0, 0)):
+            with self.subTest(t=t):
+                got = self.reads(t)
+                self.assertEqual((got.count("crop"), got.count("hud")), (0, want))
+        self.round = 5
+        self.reads(42.0)  # 隔满 blank_full_s：完整读又看见了标记
+        self.assertEqual(self.reads(45.0).count("crop"), 1)
+
+
+class BlankFullTest(_FakeReads):
+    """这一局正打着、刚看见过轮次时（FrameProcessor._mid_game），完整读连标记都没看见以后每 blank_full_s（6 秒）才再完整读
+    一次（BLANK_FULL_MS）：只认字照旧每 hud_ms 一次，回到棋盘时只认字马上认出；按热键、连带读整块、三选一上照旧完整读。
+    新一局还没读到轮次、本局已结束、离上次看见标记已满 round_retry_gap_s 时不等，照旧每 hud_ms 完整读；不等的时候第一遍
+    读不出也照旧换大小重读（read_hud 的 retry，和等不等是同一个条件）。识别函数换成假的（_FakeReads）。"""
+
+    def setUp(self):
+        super().setUp()
+        self.round, self.mark = None, False
+        self.calls: list[float] = []  # 每次完整读的时刻
+        self.retries: list[bool] = []  # 每次完整读交给 read_hud 的 retry（没给为真）
+
+        def hud(img, db, full=False, **kw):
+            self.calls.append(self.clock[0])
+            self.retries.append(kw.get("retry", True))
+            self.log.append("hud")
+            return Hud(round=self.round, round_mark=self.mark, round_crop=CROP if self.mark else None)
+
+        patch = mock.patch.object(pipeline, "read_hud", side_effect=hud)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def reads(self, t: float) -> list[str]:
+        self.log.clear()
+        self.settle(t)
+        return list(self.log)
+
+    def records(self) -> list[dict]:
+        return [r for r in self.session.recent_events(600) if r["kind"] == "read:hud"]
+
+    def playing(self) -> None:
+        """第 0 秒完整读读到第 5 轮（没看见标记，不记那一小块）；之后读不到轮次、也没有标记（对决、过场等）。"""
+        self.round = 5
+        self.assertIn("hud", self.reads(0.0))
+        self.assertEqual(self.session.settings.round, 5)
+        self.round = None
+
+    def test_new_game_no_wait(self):
+        """新一局还没读到轮次（手上没有轮次）时不等：读不到轮次也每 hud_ms 完整读一次，第一遍读不出照旧换大小重读。"""
+        for t in (0.0, 3.0, 6.0, 9.0):
+            with self.subTest(t=t):
+                self.assertIn("hud", self.reads(t))
+        self.assertEqual(self.calls, [0.0, 3.0, 6.0, 9.0])
+        self.assertEqual(self.retries, [True] * 4)
+        self.assertNotIn("wait", [r.get("how") for r in self.records()])
+
+    def test_wait_in_game(self):
+        """对局中读到过轮次以后完整读什么都没读到：3 秒后这一帧不再完整读（识别记录 how 为 wait，数 hud_full_wait），和完整读
+        什么都没读到时一样排后面几项（离看见标记满 pick_grace_s 时照常认选角界面）；满 6 秒才完整读，第一遍读不出不重读。"""
+        self.playing()
+        counted = []
+        with mock.patch.object(pipeline.perfstats, "count", side_effect=counted.append):
+            self.assertIn("hud", self.reads(3.0))  # 什么都没读到
+            got = self.reads(6.0)
+            self.assertNotIn("hud", got)
+            self.assertEqual(self.records()[-1].get("how"), "wait")
+            self.assertEqual(counted.count("hud_full_wait"), 1)
+            self.assertIn("hud", self.reads(9.0))  # 满 blank_full_s：完整读
+            got = self.reads(12.0)  # 又在等；离第 0 秒读到轮次满 pick_grace_s：照常认选角界面
+            self.assertNotIn("hud", got)
+            self.assertIn("pick", got)
+        self.assertEqual(self.calls, [0.0, 3.0, 9.0])
+        self.assertEqual(self.retries, [True, False, False])
+
+    def test_no_wait_after_retry_gap(self):
+        """离上次看见标记满 round_retry_gap_s 以后不再等：照旧每 hud_ms 完整读，第一遍读不出也照旧换大小重读（两样同一个
+        条件，一起变）。"""
+        self.proc.round_retry_gap_s = 12.0
+        self.playing()
+        for t in (3.0, 6.0, 9.0, 12.0, 15.0):
+            self.reads(t)
+        self.assertEqual(self.calls, [0.0, 3.0, 9.0, 12.0, 15.0])
+        self.assertEqual(self.retries, [True, False, False, True, True])
+
+    def test_no_wait_after_game_over(self):
+        """本局已结束（对局外）时不等：照旧每 hud_ms 完整读，第一遍读不出照旧换大小重读。"""
+        self.playing()
+        self.session.game.game_over = True
+        self.proc.hints = None  # 直接改了记账：下一次读提示时重取
+        for t in (3.0, 6.0, 9.0):
+            self.reads(t)
+        self.assertEqual(self.calls, [0.0, 3.0, 6.0, 9.0])
+        self.assertEqual(self.retries, [True] * 4)
+
+    def test_full_read_sees_mark_restores_cadence(self):
+        """完整读看见了标记：不再等。"""
+        self.playing()
+        self.reads(3.0)  # 什么都没读到
+        self.reads(6.0)  # 不完整读
+        self.mark = True
+        self.assertIn("hud", self.reads(9.0))
+        self.assertEqual(self.proc._full_blank_at, float("-inf"))
+        self.mark = False
+        # 看见了标记以后走「轮次被挡住」那一路（_occluded 隔 occluded_s 只看那一小块）：直接读一次轮次验证不再等 6 秒
+        self.clock[0] = 12.0
+        self.log.clear()
+        self.proc._read_hud(self.img, 12.0, [])
+        self.assertIn("hud", self.log)
+
+    def test_full_read_sees_round_restores_cadence(self):
+        """完整读读到了轮次：不再等，之后照旧每 hud_ms（3 秒）完整读一次。"""
+        self.playing()
+        self.reads(3.0)
+        self.reads(6.0)
+        self.round = 5
+        self.assertIn("hud", self.reads(9.0))
+        self.assertEqual(self.proc._full_blank_at, float("-inf"))
+        self.round = None
+        self.assertIn("hud", self.reads(12.0))
+        self.assertEqual(self.calls, [0.0, 3.0, 9.0, 12.0])
+
+    def test_crop_reads_round_during_wait(self):
+        """回到棋盘时只认字就认出：完整读读到过轮次、看见过标记（记下标记左边那一小块）以后，对决画面上完整读什么都没读到；
+        之后先只认字，认不出时才算等的那一次（数 hud_full_wait）；离上次完整读不到 blank_full_s 时回到棋盘，只认字认出手上的
+        轮次就当作读到了，不等、不完整读，也不数 hud_full_wait。"""
+        board = [True]
+
+        def crop(img, box):
+            self.log.append("crop")
+            return 5 if board[0] else None
+
+        counted = []
+        with mock.patch.object(pipeline, "read_round_crop", side_effect=crop), \
+                mock.patch.object(pipeline.perfstats, "count", side_effect=counted.append):
+            self.round, self.mark = 5, True
+            self.reads(0.0)  # 棋盘：完整读读到第 5 轮、看见标记，记下那一小块
+            self.round, self.mark, board[0] = None, False, False
+            self.assertEqual(self.reads(3.0).count("hud"), 1)  # 对决：只认字认不出，完整读什么都没读到
+            got = self.reads(6.0)  # 还在对决：只认字认不出，不到 blank_full_s 不完整读，算等的一次
+            self.assertEqual((got.count("crop"), got.count("hud"), counted.count("hud_full_wait")), (1, 0, 1))
+            self.assertEqual(self.reads(9.0).count("hud"), 1)  # 满 blank_full_s：完整读，还是什么都没读到
+            board[0] = True
+            got = self.reads(12.0)  # 回到棋盘：离上次完整读才 3 秒，只认字认出第 5 轮
+            self.assertEqual((got.count("crop"), got.count("hud"), counted.count("hud_full_wait")), (1, 0, 1))
+        self.assertEqual(self.calls, [0.0, 3.0, 9.0])
+        self.assertEqual(self.proc._full_blank_at, float("-inf"))
+        self.assertEqual((self.records()[-1]["round"], self.records()[-1].get("how")), (5, "crop"))
+        self.assertEqual(self.session.settings.round, 5)
+
+    def test_select_mark_ends_wait(self):
+        """三选一上完整读看见了标记（数字被挡住）：之前那次什么都没读到的不再算数。之后照被挡住的读法隔 occluded_full_s
+        完整读一次，比 blank_full_s 短时也照它读，不因为那次什么都没读到而等。"""
+        self.proc.occluded_full_s = 3.0
+        self.playing()
+        self.reads(3.0)  # 什么都没读到
+        self.mark = True
+        self.clock[0] = 4.0
+        self.proc._read_hud(self.img, 4.0, [], in_select=True, progress=False)
+        self.assertEqual(self.proc._full_blank_at, float("-inf"))
+        self.assertIn("hud", self.reads(7.0))  # 离三选一上那次 3 秒：完整读
+        self.assertEqual(self.calls, [0.0, 3.0, 4.0, 7.0])
+
+    def test_hotkey_reads_full(self):
+        """按热键的那一次照旧完整读，不等 blank_full_s，第一遍读不出照旧重读。"""
+        self.playing()
+        self.reads(3.0)  # 什么都没读到
+        self.clock[0] = 6.0
+        self.log.clear()
+        self.proc.process(self.img, 6.0, True)
+        self.assertIn("hud", self.log)
+        self.assertEqual(self.retries[-1], True)
+
+    def test_block_due_reads_full(self):
+        """地图未知、到了连带读整块（full）时照旧完整读，读轮次那一部分照样不重读。"""
+        self.playing()
+        self.reads(3.0)  # 什么都没读到
+        self.session.set_map(None)
+        self.assertIn("hud", self.reads(6.0))
+        self.assertEqual(self.retries[-1], False)
+
+    def test_select_reads_full(self):
+        """三选一上读左上角照旧完整读（只管不在三选一时的自动读），第一遍读不出照旧重读。"""
+        self.playing()
+        self.reads(3.0)  # 什么都没读到
+        self.clock[0] = 6.0
+        self.log.clear()
+        self.assertTrue(self.proc._read_hud(self.img, 6.0, [], in_select=True, progress=False))
+        self.assertIn("hud", self.log)
+        self.assertEqual(self.retries[-1], True)
+
+
+class HudRetryArgumentTest(unittest.TestCase):
+    """完整读轮次时传不传 retry=False（见 FrameProcessor._read_hud、_mid_game）：这一局近一分钟内看见过轮次标记、手上有轮次、
+    本局没结束、不在三选一、不是按热键时不再换大小多认两遍，其余照旧。"""
+
+    def read(self, *, round_now=3, game_over=False, mark_seen=5.0, now=10.0, in_select=False, force=False):
+        db = load_db()
+        session = Session(db, Settings(hero="凛", round=round_now))
+        session.game.game_over = game_over
+        proc = pipeline.FrameProcessor(db, session)
+        proc._mark_seen_at = mark_seen
+        seen = []
+
+        def hud(img, db, full=False, **kw):
+            seen.append(kw.get("retry", True))
+            return Hud()
+
+        with mock.patch.object(pipeline, "read_hud", side_effect=hud):
+            proc._read_hud(np.full((1080, 1920, 3), 90, np.uint8), now, [],
+                           in_select=in_select, force=force, progress=False)
+        return seen
+
+    def test_no_retry_with_recent_round(self):
+        """手上有轮次、近一分钟内看见过标记：不再多认两遍。"""
+        self.assertEqual(self.read(), [False])
+
+    def test_retry_without_round(self):
+        """手上有没轮次：照旧多认两遍。"""
+        self.assertEqual(self.read(round_now=None), [True])
+
+    def test_retry_after_gap(self):
+        """离最近一次看见标记超过一分钟：照旧多认两遍。"""
+        self.assertEqual(self.read(mark_seen=10.0 - 60.001), [True])
+
+    def test_retry_in_select(self):
+        """三选一上照旧多认两遍（读轮次是给推荐核对用的）。"""
+        self.assertEqual(self.read(in_select=True), [True])
+
+    def test_retry_on_hotkey(self):
+        """按热键照旧多认两遍。"""
+        self.assertEqual(self.read(force=True), [True])
+
+    def test_retry_when_game_over(self):
+        """本局已结束：照旧多认两遍。"""
+        self.assertEqual(self.read(game_over=True), [True])
+
+
+@unittest.skipUnless(samples.samples_ok(*PROGRESS_SHOTS.values()), samples.samples_reason(*PROGRESS_SHOTS.values()))
+class ProgressLookTest(unittest.TestCase):
+    """进度条那一块的样子（hud.progress_look、same_progress_look）够灵敏：进度不同的两张都算变了，蓝色当前格挪一格（合成）也算
+    变了；同一张加录像压缩那种程度的噪声算没变；进度条本体以外露着的场景变了（合成）算没变；看不到蓝色当前格时一律不算一样。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.images = {p: load_native(name) for p, name in PROGRESS_SHOTS.items()}
+
+    def test_different_progress_changed(self):
+        for (p, a), (q, b) in itertools.combinations(self.images.items(), 2):
+            with self.subTest(p=p, q=q):
+                self.assertFalse(same_progress_look(progress_look(a), progress_look(b)))
+
+    def test_noise_same(self):
+        rng = np.random.default_rng(7)
+        for p, img in self.images.items():
+            h, w = img.shape[:2]
+            noisy = np.clip(img + rng.normal(0, 4, img.shape), 0, 255).astype(np.uint8)
+            jpeg = cv2.imdecode(cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 70])[1], cv2.IMREAD_COLOR)
+            scaled = cv2.resize(cv2.resize(img, (w * 3 // 4, h * 3 // 4), interpolation=cv2.INTER_AREA), (w, h),
+                                interpolation=cv2.INTER_LINEAR)
+            for kind, other in (("noise", noisy), ("jpeg", jpeg), ("scaled", scaled)):
+                with self.subTest(p=p, kind=kind):
+                    self.assertTrue(same_progress_look(progress_look(img), progress_look(other)))
+
+    def test_blue_cell_moved_changed(self):
+        """把蓝色当前格和右边一格对调（当前格往前挪一格）：只有这两格变了，也算变了。只用画面上只有一块蓝色的几张。"""
+        for p in (1, 4, 8):
+            img = self.images[p]
+            h, w = img.shape[:2]
+            unit = chip_select.ui_scale(w, h)
+            (x, y), = hud_mod._blue_cells(img, hud_mod.progress_box(w, h))
+            x0, y0 = round(x - 35 * unit), round(y - 19 * unit)
+            x1, y1, d = round(x + 35 * unit), round(y + 19 * unit), round(73 * unit)
+            moved = img.copy()
+            moved[y0:y1, x0:x1], moved[y0:y1, x0 + d:x1 + d] = img[y0:y1, x0 + d:x1 + d], img[y0:y1, x0:x1]
+            with self.subTest(p=p):
+                self.assertFalse(same_progress_look(progress_look(img), progress_look(moved)))
+                self.assertTrue(same_progress_look(progress_look(img), progress_look(img.copy())))
+
+    def test_scene_around_bar_ignored(self):
+        """progress_box 里进度条本体以外的地方（上下两条、两头圆角外露着场景的地方）换成另一张截图的：进度条没变、只是背后的
+        场景变了，算没变；反过来只把本体换成进度不同的另一张的，算变了。配对的两张进度条两头的样子一样（同在第 10 格以前或
+        以后：第 10 格以后两头的蓝色也可能算成当前格）。"""
+        for p, q in ((1, 4), (8, 1), (11, 12)):
+            img, other = self.images[p], self.images[q]
+            h, w = img.shape[:2]
+            unit = chip_select.ui_scale(w, h)
+            box = hud_mod.progress_box(w, h)
+            x0, y0, x1, y1 = (int(round(v)) for v in box)
+            body = np.zeros((h, w), bool)
+            body[int(round(box[1] + hud_mod.PROGRESS_LOOK_TOP * unit)):int(round(box[1] + hud_mod.PROGRESS_LOOK_BOTTOM * unit)),
+                 int(round(box[0] + hud_mod.PROGRESS_LOOK_INSET * unit)):int(round(box[2] - hud_mod.PROGRESS_LOOK_INSET * unit))] = True
+            around = np.zeros((h, w), bool)
+            around[max(0, y0):y1, max(0, x0):x1] = True
+            around &= ~body
+            scene, swapped = img.copy(), img.copy()
+            scene[around], swapped[body] = other[around], other[body]
+            with self.subTest(p=p, q=q):
+                # 换上的那一圈和原来的差得很多，不然这一条没有意义
+                changed = int((np.abs(img.astype(np.int16) - other)[around].max(axis=-1) > 40).sum())
+                self.assertGreater(changed, int(around.sum()) // 4)
+                self.assertTrue(same_progress_look(progress_look(img), progress_look(scene)))
+                self.assertFalse(same_progress_look(progress_look(img), progress_look(swapped)))
+
+    def test_no_blue_never_same(self):
+        gray = np.full((1080, 1920, 3), 90, np.uint8)
+        self.assertFalse(same_progress_look(progress_look(gray), progress_look(gray)))
+        self.assertFalse(same_progress_look(None, progress_look(self.images[8])))
+
+
+@unittest.skipUnless(samples.samples_ok(PROGRESS_SHOTS[1], PROGRESS_SHOTS[8]),
+                     samples.samples_reason(PROGRESS_SHOTS[1], PROGRESS_SHOTS[8]))
+class ProgressReuseTest(_FakeReads):
+    """进度条没变就不认字（FrameProcessor._read_progress）：真的对局截图（进度条第 8 格），读进度条换成假的（读数 current）。
+    记账采用了这个数以后，那一块和上次认字时一样就不认字、把上次的数原样再交（「最近一次读到进度」的时刻跟着更新，识别记录
+    reused 为 true）；记账在等再读一次、那一块变了、画面尺寸变了、隔了 progress_s 以上、三选一上时照常认字。"""
+
+    def setUp(self):
+        super().setUp()
+        self.img, self.current = load_native(PROGRESS_SHOTS[8]), 8
+
+    def reads(self, t: float, img: np.ndarray | None = None) -> list[str]:
+        if img is not None:
+            self.img = img
+        self.log.clear()
+        self.settle(t)
+        return list(self.log)
+
+    def adopted(self) -> None:
+        """读两轮（第 0、3 秒）：记账连读两次采用第 8 格。"""
+        self.assertIn("progress", self.reads(0.0))
+        self.assertIn("progress", self.reads(3.0))  # 记账在等再读一次：照常认字
+        self.assertEqual(self.session.game.progress, 8)
+
+    def test_unchanged_reused(self):
+        self.adopted()
+        got = self.reads(6.0)
+        self.assertIn("hud", got)
+        self.assertNotIn("progress", got)
+        record = [r for r in self.session.recent_events(600) if r["kind"] == "read:progress"][-1]
+        self.assertEqual((record["current"], record.get("reused")), (8, True))
+        self.assertEqual(self.session.judge._last_progress_read, (8, 6.0))
+        self.assertNotIn("progress", self.reads(9.0))
+        self.assertIn("progress", self.reads(13.5))  # 离上次认字（第 3 秒）满 progress_s（10 秒）：照常认一次
+
+    def test_pending_reads(self):
+        self.adopted()
+        self.session.game._progress_pending = 9  # 读到了和已采用的不同的格，在等再读一次
+        self.assertIn("progress", self.reads(6.0))
+
+    def test_cap_needs_two_reads(self):
+        """红叉（进度上限）也要连读两次才采用：认字读到了红叉、记账还没采用时，那一块没变也不沿用，下一轮照常认字（不会一次认字
+        加一次沿用就凑成「连读两次」）；采用以后照常沿用。"""
+        self.adopted()
+        cap = [12]
+
+        def fake_progress(img):
+            self.log.append("progress")
+            return Progress(self.current, cap[0])
+
+        with mock.patch.object(pipeline, "read_progress", side_effect=fake_progress):
+            # 换一张图（那一块变了）：照常认字，第一次读到红叉，记账先不采用
+            self.assertIn("progress", self.reads(6.0, load_native(PROGRESS_SHOTS[1])))
+            self.assertIsNone(self.session.game.progress_cap)
+            self.assertIn("progress", self.reads(9.0))  # 那一块没变，但读到过红叉、记账还没采用：照常认字
+            self.assertEqual(self.session.game.progress_cap, 12)
+            self.assertNotIn("progress", self.reads(12.0))  # 采用以后照常沿用
+
+    def test_changed_or_resized_reads(self):
+        self.adopted()
+        self.assertIn("progress", self.reads(6.0, load_native(PROGRESS_SHOTS[1])))
+        self.assertIn("progress", self.reads(9.0, cv2.resize(load_native(PROGRESS_SHOTS[1]), (1920, 1027))))
+
+    def test_in_select_reads(self):
+        self.adopted()
+        self.log.clear()
+        self.clock[0] = 6.0
+        self.proc._read_progress(self.img, [], in_select=True)
+        self.proc._read_progress(self.img, [])  # 没给时刻（三选一上补读那几处）也照常认字
+        self.assertEqual(self.log, ["progress", "progress"])
+
+    def counted(self, t: float, img: np.ndarray | None = None, in_select: bool = False,
+                now: bool = True) -> list[str]:
+        """读一次进度条，返回 perfstats.count 数了哪些（沿用的、按原因照常认字的各一种）。"""
+        got: list[str] = []
+        with mock.patch.object(pipeline.perfstats, "count", side_effect=got.append):
+            self.proc._read_progress(self.img if img is None else img, [], in_select=in_select,
+                                     now=t if now else None)
+        return got
+
+    def test_counts_reused(self):
+        self.adopted()
+        self.assertEqual(self.counted(6.0), ["progress_reused"])
+
+    def test_counts_look_and_size(self):
+        self.adopted()
+        other = load_native(PROGRESS_SHOTS[1])
+        self.assertEqual(self.counted(6.0, other), ["progress_read_look"])
+        self.assertEqual(self.counted(6.0, cv2.resize(other, (1920, 1027))), ["progress_read_size"])
+
+    def test_counts_age(self):
+        self.adopted()
+        self.assertEqual(self.counted(13.5), ["progress_read_age"])
+
+    def test_counts_pending(self):
+        self.adopted()
+        self.session.game._progress_pending = 9
+        self.proc.hints = None  # 读的提示是上一次进锁时取的：改过记账的状态要重新取一份
+        self.assertEqual(self.counted(6.0), ["progress_read_pending"])
+
+    def test_counts_select_and_no_time(self):
+        self.adopted()
+        self.assertEqual(self.counted(6.0, in_select=True), ["progress_read_select"])
+        self.assertEqual(self.counted(6.0, now=False), ["progress_read_no_time"])
+
+    def test_counts_first(self):
+        self.assertEqual(self.counted(0.0), ["progress_read_first"])
+
+    def test_counts_no_current(self):
+        other = load_native(PROGRESS_SHOTS[1])
+        self.current = None
+        self.assertEqual(self.counted(0.0, other), ["progress_read_first"])
+        self.assertEqual(self.counted(3.0, other), ["progress_read_no_current"])
+
+    def test_counts_cap(self):
+        self.adopted()
+        with mock.patch.object(pipeline, "read_progress", side_effect=lambda img: Progress(self.current, 12)):
+            other = load_native(PROGRESS_SHOTS[1])
+            self.assertEqual(self.counted(6.0, other), ["progress_read_look"])
+            self.assertIsNone(self.session.game.progress_cap)
+            self.assertEqual(self.counted(9.0, other), ["progress_read_cap"])
+
+    def test_max_age_follows_pace(self):
+        self.assertEqual(self.proc.progress_s, load_db().rules["watch"]["unchanged_max_ms"] / 1000)
+        self.proc.set_pace(2)
+        self.assertEqual(self.proc.progress_s, 2 * load_db().rules["watch"]["unchanged_max_ms"] / 1000)
 
 
 if __name__ == "__main__":

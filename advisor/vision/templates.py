@@ -1,7 +1,9 @@
 """识别用的图片模板和沿用前几帧结果的缓存，收在一个对象里（VisionAssets）。
 
-这些缓存都在识别线程里读写，只有一个实例（templates.assets，由 FrameProcessor 持有），所以不加锁；
-`vision.reset_caches()` / `vision.reset_hints()` 作用在它上面。
+这些缓存只有一个实例（templates.assets，各识别流程共用）。两个客户端同时识别时两个识别线程同时读写：一个线程重建缓存
+（reload，清空各张表）时另一个可能正用到一半，所以用的地方都只取一次、存进去以后用自己建的那一份，不先查有没有再回头按键
+取；stars 的三张表（_photos、_faces、_still）的查和存另拿 VisionAssets.lock。`vision.reset_caches()` /
+`vision.reset_hints()` 作用在它上面。
 
 两类缓存：
   图片缓存（reload）：读进内存的模板图和图标清单。首次运行下载完图片、重试下载后调用 reload() 重新读取；
@@ -13,9 +15,15 @@
 """
 from __future__ import annotations
 
+import threading
+
 
 class VisionAssets:
     def __init__(self) -> None:
+        # 两个识别线程共用这一份：一个线程重建缓存（reload，清空下面几张表）时，另一个线程可能刚把一项存进表里、正要取出来，
+        # 中间被清掉就抛 KeyError（见模块说明）。stars 的三张表的查、存和这里的清空拿这把锁；读图片、缩放模板这些慢的步骤在
+        # 锁外做，另一个线程读缓存不用等它。用可重入的锁：reload 里调 reset_hints，两者都要拿。
+        self.lock = threading.RLock()
         # ---------------------------------------------------------- 图片缓存
         # stars：横条模板（灰度, 掩码）
         self._bar = None
@@ -53,23 +61,26 @@ class VisionAssets:
         """图片有增减（例如首次运行下载完 Q 版头像、筹码图标）后调用：下次识别时重新读取图片。
 
         内容只由图片和缩放决定，和先读过哪些图无关；不重新读取时，下载前读到的空清单会一直沿用到程序重启。
+        清空和另一个识别线程读写缓存互斥：不清到「刚存好、还没取出来」的中间。
         """
-        self._bar = self._hero_index = self._hero_ids = None
-        self._photos.clear()
-        self._faces.clear()
-        self._still.clear()
-        self._templates = None
-        self._coarse_cache.clear()
-        self._icons = self._base_hues = None
-        self._icon_cache.clear()
-        self.reset_hints()
+        with self.lock:
+            self._bar = self._hero_index = self._hero_ids = None
+            self._photos.clear()
+            self._faces.clear()
+            self._still.clear()
+            self._templates = None
+            self._coarse_cache.clear()
+            self._icons = self._base_hues = None
+            self._icon_cache.clear()
+            self.reset_hints()
 
     def reset_hints(self) -> None:
         """清掉沿用前几帧结果的缓存（见 vision.reset_hints）。"""
-        self._last_u = None
-        self._last_skin.clear()
-        self._last_fit = None
-        self._slot_cache.clear()
+        with self.lock:
+            self._last_u = None
+            self._last_skin.clear()
+            self._last_fit = None
+            self._slot_cache.clear()
 
 
 assets = VisionAssets()

@@ -1,6 +1,6 @@
 """设置窗口里几套排法共用的行部件：整行可点的箭头（Chevron）、识别模式的方块（ModeTile）、键帽（KeyCap）、状态标签
-（StatusChip）、开关（Switch）、整行可点的一行（RowButton）、「皮肤」一行的缩略图和控件（SkinThumb、SkinRow），还有排好的一行
-的小容器（RowParts）和按钮小工具（_button）。
+（StatusChip）、开关（Switch）、整行可点的一行（RowButton）、说明下面能点的字（TextLink）、「皮肤」一行的缩略图和控件
+（SkinThumb、SkinRow），还有排好的一行的小容器（RowParts）和按钮小工具（_button）。
 
 颜色、尺寸和样式表都在皮肤里（theme.SettingsLook、theme.settings_style），画控件时按当前皮肤取（L.名字）。界面文字在
 dialog.py，从它导入；系统图标（glyphs.py）和底层部件（ui/widgets.py）照旧用。
@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt
-from PySide6.QtGui import QColor, QPainter, QPen, QPolygonF
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import (
     QAbstractButton,
     QHBoxLayout,
@@ -21,12 +21,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .. import decor, skin_preview, theme
+from .. import decor, lang, skin_preview, theme
 from ..glyphs import ICON_CHEVRON, draw_glyph
 from ..text import tip_paragraphs_html
 from ..theme import SETTINGS as L
 from ..widgets import TextLabel, color
-from .dialog import CHEVRON_TEXT, SKIN_CHANGE, SKIN_CHANGE_TIP
+from .dialog import CHEVRON_TEXT, RELAUNCH_BUTTON, RELAUNCH_HINT, SKIN_CHANGE, SKIN_CHANGE_TIP
 
 
 # ------------------------------------------------------------ 控件
@@ -375,6 +375,65 @@ class RowButton(QAbstractButton):
         p.end()
 
 
+class TextLink(QAbstractButton):
+    """说明下面一行能点的字（SettingItem.link，例如「隐私与数据」一组开关下面的「我的统计」）：当前皮肤的链接颜色
+    （Common.LINK_COLOR，同「关于」窗口里网址链接的字）、带下划线；字号、粗细同这一行的说明（like：说明的标签，按皮肤的
+    样式表，有的皮肤说明是粗体），字从最左边写起，和说明左边对齐。鼠标移上去是手形，点了发 clicked（设置窗口接到悬浮窗）；
+    同窗口里别的按钮，Tab 键走得到、按空格点开，用 Tab 键走到时字外面画一圈点线的焦点框（鼠标点的不画）。"""
+
+    PAD = 2  # 字的上、下、右边留出的地方（焦点框画在这里）；左边不留：字和说明左边对齐
+
+    def __init__(self, text: str, like: QWidget | None = None):
+        super().__init__()
+        self.setText(text)
+        self._like = like
+        self._key_focus = False  # 用 Tab 键走到的：画焦点框
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+
+    def text_font(self) -> QFont:
+        """写字用的字体：说明的字体（like 给了时；样式表套在说明上），加下划线。"""
+        source = self._like if self._like is not None else self
+        source.ensurePolished()
+        font = QFont(source.font())
+        font.setUnderline(True)
+        return font
+
+    def sizeHint(self) -> QSize:
+        fm = QFontMetrics(self.text_font(), self)
+        return QSize(fm.horizontalAdvance(self.text()) + self.PAD, fm.height() + 2 * self.PAD)
+
+    def minimumSizeHint(self) -> QSize:
+        return self.sizeHint()
+
+    def focusInEvent(self, event) -> None:  # noqa: N802  Qt 的虚函数
+        self._key_focus = event.reason() in (Qt.TabFocusReason, Qt.BacktabFocusReason)
+        super().focusInEvent(event)
+
+    def focusOutEvent(self, event) -> None:  # noqa: N802
+        self._key_focus = False
+        super().focusOutEvent(event)
+
+    @property
+    def key_focused(self) -> bool:
+        """用 Tab 键走到了这几个字（画着焦点框）。"""
+        return self._key_focus and self.hasFocus()
+
+    def paintEvent(self, event) -> None:
+        ink = color(theme.COMMON.LINK_COLOR)
+        p = QPainter(self)
+        p.setFont(self.text_font())
+        p.setPen(ink)
+        p.drawText(QRectF(0, self.PAD, self.width(), self.height() - 2 * self.PAD), Qt.AlignLeft | Qt.AlignVCenter,
+                   self.text())
+        if self.key_focused:
+            p.setPen(QPen(ink, 1, Qt.DotLine))
+            p.setBrush(Qt.NoBrush)
+            p.drawRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5))
+        p.end()
+
+
 class SkinThumb(QWidget):
     """「皮肤」一行右边的小缩略图：当前这套皮肤的悬浮窗上面一截（预览图，skin_preview；还没画好时画这套的几块主色），
     外面一圈方块的框线（TILE_BORDER）。只显示，不接鼠标。previews 为预览图（skin_preview.PreviewStore），None 时画主色；
@@ -420,7 +479,7 @@ class SkinRow(QWidget):
         line.setContentsMargins(0, 0, 0, 0)
         line.setSpacing(8)
         self.thumb = SkinThumb(previews)
-        self.name = TextLabel(theme.current().label, "skinName", wrap=False)
+        self.name = TextLabel(lang.t(theme.current().label), "skinName", wrap=False)
         self.button = _button(SKIN_CHANGE, SKIN_CHANGE_TIP)
         line.addWidget(self.thumb, 0, Qt.AlignVCenter)
         line.addWidget(self.name, 0, Qt.AlignVCenter)
@@ -437,16 +496,34 @@ def _button(text: str, tip: str = "") -> QPushButton:
     return button
 
 
+class RelaunchLine(QWidget):
+    """「界面语言」一项下面的一行：换了语言以后要重新打开才生效的提示和「现在重开」按钮（设置窗口放在这一项的说明下面，
+    选回和当前语言相同的整行收起）。按钮点了由设置窗口接到悬浮窗的 restart_app。"""
+
+    def __init__(self):
+        super().__init__()
+        line = QHBoxLayout(self)
+        line.setContentsMargins(0, 0, 0, 0)
+        line.setSpacing(8)
+        self.label = TextLabel(RELAUNCH_HINT, "rowNote", wrap=False)
+        self.button = _button(RELAUNCH_BUTTON)
+        line.addWidget(self.label, 0, Qt.AlignVCenter)
+        line.addWidget(self.button, 0, Qt.AlignVCenter)
+        line.addStretch(1)
+
+
 # ------------------------------------------------------------ 排好的一行
 
 @dataclass
 class RowParts:
     """排好的一行：整行（「关于」那一行是 RowButton）、标题、说明，和说明下面另一段暗色说明（各排法都留着这一格，平时隐藏；
     现在只有「启动时自动检查更新」一行用它写检查的结果，有字时代替说明显示）；icon 是这一行左边的系统
-    图标（画行图标的排法才有，皮肤解锁的调色盘机关用，见 PaletteTrap）。"""
+    图标（画行图标的排法才有，皮肤解锁的调色盘机关用，见 PaletteTrap）；link 是说明下面能点的字（TextLink，这一项写了
+    SettingItem.link 时才有，例如「隐私与数据」一组开关下面的「我的统计」）。"""
 
     row: QWidget
     title: TextLabel
     desc: TextLabel
-    note: TextLabel
+    note: TextLabel | RelaunchLine
     icon: QWidget | None = None
+    link: TextLink | None = None

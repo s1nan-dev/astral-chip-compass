@@ -80,7 +80,8 @@ class DataTest(unittest.TestCase):
         self.assertEqual(set(chips["缓冲盾牌"].pools), {"生存", "辅助"})
 
     def test_class_pools_only_from_table(self):
-        """最左格职业筹码池只用 data/chips.json 的 pools 字段，不按标签补全（英文 wiki：没列出的筹码不会出现在最左格）。"""
+        """最左格职业筹码池只用 data/chips.json 的 pools 字段，不按标签补全（wiki 池表收的地图专属筹码只到前几张图，
+        之后几张图带职业标签的几枚按标签补进了池表；通用筹码仍然不进）。"""
         chips = self.db.chips
         self.assertEqual(chips["手持风扇-大"].pools, ("卡牌",))
         self.assertEqual(set(chips["小猪存钱罐"].pools), {"卡牌", "辅助"})
@@ -88,10 +89,14 @@ class DataTest(unittest.TestCase):
             with self.subTest(chip=name):
                 self.assertTrue(set(chips[name].tags) & set(CLASSES))
                 self.assertEqual(chips[name].pools, ())
-        # 池表一共 12 格（4 个池 × 蓝紫金），列了 61 个位置、50 个不同的筹码（11 个同时在两个池里）
+        for name, pool in (("节日红包", "辅助"), ("孔雀扇", "攻击"), ("运动手环", "攻击"), ("娱乐终端", "攻击"),
+                           ("放大镜", "攻击"), ("汉娜人偶", "辅助")):  # 地图专属，按职业标签进了池表
+            with self.subTest(chip=name):
+                self.assertEqual(chips[name].pools, (pool,))
+        # 池表一共 12 格（4 个池 × 蓝紫金），列了 67 个位置、56 个不同的筹码（11 个同时在两个池里）
         in_pools = [c for c in chips.values() if c.pools]
-        self.assertEqual(len(in_pools), 50)
-        self.assertEqual(sum(len(c.pools) for c in in_pools), 61)
+        self.assertEqual(len(in_pools), 56)
+        self.assertEqual(sum(len(c.pools) for c in in_pools), 67)
 
     def test_heroes(self):
         h = self.db.heroes["邦妮"]
@@ -236,6 +241,17 @@ class DataTest(unittest.TestCase):
         self.assertEqual(info["龙宫游乐园"].chip_tasks, 4)  # 通用 2 + 一条路线 2（收集葫芦直接发放筹码，不算）
         self.assertEqual(info["园林中庭"].chip_tasks, 4)
         self.assertEqual(info["幽魂暗巷"].chip_tasks, 4)  # 首次获得星星只给口香糖
+        # 任务等级（task_levels）：一局各等级占多少，路线不知道时按各条线平均；没写的难度按困难那一列，整张图没写时为 None
+        self.assertEqual(info["森秋幻境"].task_level_shares("困难"), ((1, 0.25), (2, 0.5), (3, 0.25)))
+        self.assertEqual(info["森秋幻境"].task_level_shares(None), ((1, 0.25), (2, 0.5), (3, 0.25)))
+        self.assertEqual(info["水乡古镇"].task_level_shares("普通"), ((1, 1 / 3), (2, 2 / 3)))
+        self.assertEqual(info["水乡古镇"].task_level_shares("噩梦"), ((1, 1 / 3), (2, 1 / 3), (3, 1 / 3)))
+        self.assertEqual(info["御魂庆典"].task_level_shares("极限"), ((1, 1 / 3), (2, 1 / 3), (3, 1 / 3)))  # 极限没写，按困难
+        self.assertEqual(info["魔法学院"].task_level_shares("噩梦"), ((1, 1 / 6), (2, 2 / 3), (3, 1 / 6)))
+        got = info["园林中庭"].task_level_shares("普通")
+        for level, want in ((1, 0.25), (2, 5 / 12), (3, 1 / 3)):
+            self.assertAlmostEqual(dict(got)[level], want)
+        self.assertIsNone(info["海选赛运动场"].task_level_shares("普通"))  # 已结束的运动场没写
         # 限时地图：运动场系列已结束，异变图书馆到 10-14
         for m in ("海选赛运动场", "淘汰赛运动场", "决赛大赛场"):
             self.assertTrue(info[m].ended, m)
@@ -276,7 +292,7 @@ class DataTest(unittest.TestCase):
         with self.assertLogs("advisor.data", level="WARNING"):  # 警告同时写日志
             db = load_db(str(self.copy_data(broken)))
         self.assertEqual(db.problems, [])
-        self.assertIn("角色自动层：缺少角色「邦妮」，该角色只按游戏内置推荐和通用规则计算", db.warnings)
+        self.assertIn("角色自动层：缺少角色「邦妮」，该角色只按通用规则计算", db.warnings)
         self.assertIn("组合规则「x」：筹码「不存在的筹码」不存在", db.warnings)
         self.assertNotIn("邦妮", db.hero_synergy)
         db = load_db(str(self.copy_data("[[trait]\nname = ")))
@@ -359,6 +375,69 @@ class DataTest(unittest.TestCase):
         self.assertEqual(db.resolve_chip("彩羽手环").name, "飞羽手环")
         self.assertEqual(db.match_chip("彩羽手环")[:2], ("飞羽手环", 1.0))
         self.assertEqual(db.chips["大背包"].aliases, ())
+
+    def test_hant_names(self):
+        """游戏繁体中文界面里的名字也认：筹码名、角色名、称号、全名、地图名都用简体名做键返回。"""
+        db = self.db
+        self.assertEqual(db.resolve_chip("拳擊手套-高級").name, "拳击手套-高级")
+        self.assertEqual(db.resolve_chip("銀行卡-餘額多").name, "银行卡-余额多")
+        self.assertEqual(db.resolve_hero("阿蘭娜").name, "阿兰娜")
+        self.assertEqual(db.resolve_hero("垃圾桶").name, "Z3000")
+        self.assertEqual(db.resolve_hero("超天醬").name, "超天酱")
+        self.assertEqual(db.resolve_hero("超絕最可愛天使醬").name, "超天酱")
+        self.assertEqual(db.resolve_map("異變圖書館"), "异变图书馆")
+        self.assertEqual(db.resolve_map("龍宮遊樂園"), "龙宫游乐园")
+        self.assertEqual(db.chips["拳击手套-高级"].hant, "拳擊手套-高級")
+        self.assertIn("异变图书馆", db.maps)
+        self.assertNotIn("異變圖書館", db.maps)  # 程序内部仍用简体名做键
+
+    def test_hant_similar_chips(self):
+        """相近的繁体筹码名按稀有度取舍：名字只差一个字时，给了图标边框颜色就按颜色挑。"""
+        db = self.db
+        self.assertEqual(db.match_chip("銀行卡-餘額", "紫")[0], "银行卡-余额多")
+        self.assertEqual(db.match_chip("銀行卡-餘額", "蓝")[0], "银行卡-余额少")
+        self.assertEqual(db.match_chip("速度輪滑-初", "蓝")[0], "速度轮滑-初级")
+        self.assertEqual(db.match_chip("速度輪滑-中", "紫")[0], "速度轮滑-中级")
+        self.assertEqual(db.match_chip("速度輪滑-高", "金")[0], "速度轮滑-高级")
+        self.assertEqual(db.match_chip("手持風扇", "紫")[0], "手持风扇-大")
+
+    def test_hant_map_tasks(self):
+        """地图的任务文字（map_tasks）只放简体的写法，每条任务一个，和资料里只有简体任务时一模一样；繁体任务按列表里的
+        位置和简体任务配对，归进 map_task_keys 里那条任务的写法（简体在前），任务栏读到的繁体文字也认得出地图。"""
+        db = self.db
+        for name, info in _data("maps.json").items():
+            with self.subTest(map=name):
+                simp = tuple(dict.fromkeys(k for k in (task_key(t) for t in info["tasks"]) if k))
+                self.assertEqual(db.map_tasks[name], simp)
+                groups = db.map_task_keys[name]
+                self.assertEqual(tuple(g[0] for g in groups), simp)
+                for group in groups:
+                    self.assertEqual(len(group), len(set(group)))  # 简繁写法相同的只留一种
+                for task, hant in zip(info["tasks"], info["hant_tasks"]):
+                    if hant is not None:
+                        self.assertIn(task_key(hant), groups[simp.index(task_key(task))])
+        library = dict(zip(db.map_tasks["异变图书馆"], db.map_task_keys["异变图书馆"]))
+        self.assertEqual(library[task_key("击倒 3 只魔法茶壶")], (task_key("击倒魔法茶壶"), task_key("擊敗 3 隻魔法茶壺")))
+        self.assertEqual(library[task_key("击倒 2 个大盗")], (task_key("击倒大盗"), task_key("擊敗 2 個大盜")))
+        self.assertNotIn(task_key("擊敗 3 隻魔法茶壺"), db.map_tasks["异变图书馆"])
+        self.assertIn(task_key("輪次7以前舞獅嘎嗚的生命值低於189"), {k for g in db.map_task_keys["水乡古镇"] for k in g})
+        self.assertEqual(db.map_info["异变图书馆"].hant_tasks,
+                         ("擊敗3隻魔法茶壺", "擊敗2隻罪惡茶壺", "擊敗2個大盜", "擊敗3個看守"))
+        # 只差数量的几条简体任务算一条，它们的繁体写法并进这一条；简繁写法相同的这一条只有一种写法
+        garden = dict(zip(db.map_tasks["园林中庭"], db.map_task_keys["园林中庭"]))
+        self.assertEqual(garden["收集神秘的蛋"], ("收集神秘的蛋",))
+        self.assertEqual(garden[task_key("击倒 1 只铜盏孔雀")], (task_key("击倒铜盏孔雀"), task_key("擊倒1隻銅盞孔雀")))
+
+    def test_task_key_hant_quantifiers(self):
+        """认任务名时简繁量词都去掉：隻、個、張、條、層、顆 等和简体写法一样处理。"""
+        for read, bare in (("擊敗 3 隻魔法茶壺", "擊敗魔法茶壺"),
+                           ("擊倒 2 個大盜", "擊倒大盜"),
+                           ("使用 2 張卡牌", "使用卡牌"),
+                           ("獲得 4 條線索", "獲得線索"),
+                           ("罪證達到 3 層", "罪證達到"),
+                           ("首次獲得 1 顆星星", "首次獲得星星")):
+            with self.subTest(read=read):
+                self.assertEqual(task_key(read), task_key(bare))
 
 
 if __name__ == "__main__":

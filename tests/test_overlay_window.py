@@ -24,8 +24,9 @@ from advisor.session import Event  # noqa: E402
 from advisor.ui.overlay_parts.notices import short_path
 from advisor.ui.overlay import Overlay
 from advisor.ui.overlay_parts.wording import RUNNING_BIT, PAUSED_BIT
-from advisor.ui.overlay_parts.wording import MAP_ASK, OPEN_TASKS, RUNNING_TIP, TITLE_DEV, PAUSED_MIN_TIP, AUTO_SWITCHED, OWNED_EMPTY, HOTKEY_CHANGE_FAILED, TITLE, SETTINGS_TIP, MANUAL_SWITCHED, PAUSED_TIP
+from advisor.ui.overlay_parts.wording import MAP_ASK, OPEN_TASKS, RUNNING_TIP, TITLE_DEV, PAUSED_MIN_TIP, AUTO_SWITCHED, OWNED_EMPTY, HOTKEY_CHANGE_FAILED, TITLE, SETTINGS_TIP, SETTINGS_TIP_HANT, MANUAL_SWITCHED, PAUSED_TIP
 from advisor.ui.settings.dialog import SETTINGS_TITLE, SettingsDialog
+from advisor.ui import lang
 from advisor.ui.hotkey import busy_text
 from advisor.ui.overlay_parts.app import UiSettings, OverlaySession
 from advisor.ui.overlay_parts.factory import WrapTaggedText
@@ -133,6 +134,7 @@ class OverlayWidgetTest(unittest.TestCase):
         names = ["银行卡-用不完", "星币锤", "金色飞星", "紫色飞星"]
         self.session.set_owned(names)
         w._screen_height = lambda: 5000
+        w.setFixedWidth(430)  # 按 430 宽排：「银行卡-用不完」的说明在这个宽度下分成两行，断开处挨着「轮次奖励」
         w.set_expanded(True)
         w.show()
         APP.processEvents()
@@ -965,7 +967,7 @@ class OverlayWidgetTest(unittest.TestCase):
         w.set_expanded(True)
         texts = [w.status.status_text(), w.status.summary_plain, *w.visible_texts(),
                  *(tip_text(x.toolTip()) for x in (w.status_box, w.map_prompt, w.map_box, w.hero_box, w.hero_state,
-                                                   w.settings_btn, w.edit_btn, w.share_btn, w.body, w.add_btn,
+                                                    w.settings_btn, w.edit_btn, w.share_btn, w.hub_btn, w.body, w.add_btn,
                                                    w.summary)),
                  *(card.toggle.toolTip() for card in w.cards.values()),
                  *w.owned.missed_buttons_text(), *w.scheme.map_buttons_text()]
@@ -1371,7 +1373,7 @@ class SettingsTest(unittest.TestCase):
         w = self.window
         w.set_expanded(True)
         btn = button(w.toolbar, "设置")
-        self.assertEqual(tip_text(btn.toolTip()), SETTINGS_TIP)
+        self.assertEqual(tip_text(btn.toolTip()), SETTINGS_TIP_HANT if lang.HANT_ENABLED else SETTINGS_TIP)
         btn.click()
         self.assertIsInstance(w.dialogs.settings, SettingsDialog)
         self.assertTrue(w.dialogs.settings.isVisible())
@@ -1393,17 +1395,17 @@ class SettingsTest(unittest.TestCase):
     def test_dialog_direct_capture(self):
         """直接截取（Windows 11；Windows 10 版本 2004 起也一样，黄框的说明只写在使用说明里）：设置窗口里没有「识别画面」一项
         （只显示、不能改，平时一直是同一个值）；窗口里的按钮只有「更改」「更换」（「皮肤」一行）「导出诊断」「检查更新」
-        （没有「关闭」）。
+        （没有「关闭」），繁体界面打开时（lang.HANT_ENABLED）另有「界面语言」一行的「现在重开」。
         窗口开着时改为截取屏幕：同一个窗口当场加上「识别画面」，排在识别热键和低配模式之间；恢复直接截取时又去掉。"""
         w = self.window
+        buttons = ["更改", "更换", "导出诊断", "检查更新"] + (["现在重开"] if lang.HANT_ENABLED else [])
         for border, build in ((True, 22631), (False, 19045)):
             with self.subTest(border_requested=border):
                 w.on_capture_changed(capture_state("window", border_requested=border, build=build))
                 dialog = self.open_settings()
                 self.assertEqual(dialog.windowTitle(), SETTINGS_TITLE)
                 self.assertEqual(SETTINGS_TITLE, "拾星助手设置")
-                self.assertEqual(sorted(b.text() for b in dialog.findChildren(QPushButton)),
-                                 sorted(["更改", "更换", "导出诊断", "检查更新"]))
+                self.assertEqual(sorted(b.text() for b in dialog.findChildren(QPushButton)), sorted(buttons))
                 self.assertFalse(hasattr(dialog, "close_btn") or hasattr(dialog, "allow_box"))
                 self.assertNotIn("capture", dialog.rows)
                 self.assertIsNone(dialog.capture_chip)

@@ -3,7 +3,9 @@
 读哪些图（每张一条记录，编号见括号）：
   samples/labels.json 的全部样本（文件名）：原图和缩小版各一遍（缩小版即 tests/test_vision_matrix.py 的 shrink）。
     每种画面读哪些模块照 test_vision_matrix.read_sample 的口径（悬浮窗在那种画面上会调用的）；另外每张都读进度条和
-    任务栏是否打开，读了自己星数的同一帧顺带读星币数（悬浮窗也是同一帧读）。
+    任务栏是否打开，读了自己星数的同一帧顺带读星币数（悬浮窗也是同一帧读）；看见了轮次标记时读它左边那一小块；每张都看
+    通关画面、打输横幅的颜色和形状，像了再认字（悬浮窗不在三选一的帧上也这样）。
+  FINISH_FRAMES 的录像帧（pages/文件名；文件不在时不读）：通关画面和两种斜带，不写进 labels.json，读法同样本。
   tests/data/coins 标注里的全部图（coins/文件名，和样本同名的也读）：按标注的角色读自己的星数和星币数；标注有名字的，
     再按名字找自己那一行（read_own_stars_by_name）读一次；玩家列表每一行的星币数也各读一次。
   识别评测工具 tools/eval_hud.py 的 EXTRA（extra/文件名；文件不在时不读）。
@@ -42,6 +44,10 @@ INPUTS_NEEDED = ("识别样本 samples\\labels.json 和其中的截图（不随�
 FILE = "vision.jsonl"
 QUICK_SAMPLES, QUICK_COINS = 8, 2
 REREADS = 3
+# 通关画面的大字、打输的蓝色斜带、通关的斜带：samples/pages 里的录像帧，labels.json 里没有这几种画面
+FINISH_FRAMES = ("20261105_010644_f051294_victory_text_1920x1080.png",
+                 "20261106_235502_f041328_game_over_banner_1920x1080.png",
+                 "20261105_010644_f051195_victory_banner_1920x1080.png")
 
 
 # ------------------------------------------------------------------ 要读哪些图
@@ -67,6 +73,11 @@ def _specs() -> list[dict]:
             if file.exists():
                 item = dict(extra, file=file.name, stars=None, panel=None)
                 specs.append({"id": f"extra/{file.name}", "kind": "sample", "path": str(file), "item": item})
+        for name in FINISH_FRAMES:
+            file = SAMPLES / "pages" / name
+            if file.exists():
+                item = {"file": name, "scene": "finish", "stars": None, "panel": None}
+                specs.append({"id": f"pages/{name}", "kind": "sample", "path": str(file), "item": item})
     return specs
 
 
@@ -171,13 +182,13 @@ def _no_abs_paths(text: str) -> str:
 
 def _read_sample(frame, item: dict) -> dict:
     """一张样本的一个变体。哪些模块读、怎么读照 test_vision_matrix.read_sample（悬浮窗的流程）。"""
-    from advisor.vision import stars
+    from advisor.vision import stars, victory
     from advisor.vision.chip_panel import read_chip_panel
     from advisor.vision.chip_select import looks_like_overlay_screen, read_chip_select
     from advisor.vision.coins import read_own_coins
     from advisor.vision.hero import read_hero
     from advisor.vision.hud import (
-        is_select_screen, mutator_catalog, read_hud, read_pregame, read_progress, task_panel_visible,
+        is_select_screen, mutator_catalog, read_hud, read_pregame, read_progress, read_round_crop, task_panel_visible,
     )
     from tests import test_vision_matrix as vm
 
@@ -207,7 +218,9 @@ def _read_sample(frame, item: dict) -> dict:
     r.run("panel", lambda: read_chip_panel(img, db, hero_key=vm.panel_hero(item)), _panel)
     mode = vm.hud_mode(item)
     if mode is not None:
-        r.run("hud", lambda: read_hud(img, db, full=mode), _hud)
+        reading = r.run("hud", lambda: read_hud(img, db, full=mode), _hud)
+        if reading is not None and reading.round_crop is not None:
+            r.run("round_crop", lambda: read_round_crop(img, reading.round_crop))
     r.run("task_panel", lambda: bool(task_panel_visible(img)))
     r.run("progress", lambda: read_progress(img), lambda p: [p.current, p.cap])
     if vm.hero_rule(item) is not None:
@@ -219,6 +232,11 @@ def _read_sample(frame, item: dict) -> dict:
             r.run("coins", lambda: read_own_coins(img, report.result), _coins)
         if item["stars"].get("players"):
             r.run("players", lambda: stars.read_players(img, hero), lambda p: _players(p, names))
+    seen = r.run("finish", lambda: victory.glance(img), _glance)
+    if seen is not None and seen.text:
+        r.run("victory", lambda: bool(victory.read(img)))
+    if seen is not None and seen.banner:
+        r.run("game_over", lambda: bool(victory.read_game_over(img)))
     return r.got
 
 
@@ -258,6 +276,7 @@ def _hud(hud) -> dict:
     return {
         "round": hud.round, "map": hud.map, "map_scores": dict(hud.map_scores), "tasks_seen": list(hud.tasks_seen),
         "map_candidates": list(hud.map_candidates), "map_confidence": hud.map_confidence,
+        "round_mark": hud.round_mark, "round_crop": hud.round_crop,
     }
 
 
@@ -315,7 +334,12 @@ def _panel(reading) -> dict | None:
 def _screen(screen) -> dict | None:
     if screen is None:
         return None
-    return {"kind": screen.kind, "difficulty": screen.difficulty, "map": screen.map, "rounds": screen.rounds}
+    return {"kind": screen.kind, "difficulty": screen.difficulty, "map": screen.map, "rounds": screen.rounds,
+            "coins": screen.coins}
+
+
+def _glance(seen) -> dict:
+    return {"coral": seen.coral, "white": seen.white, "banner": seen.banner}
 
 
 def _pregame(found) -> dict:

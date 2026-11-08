@@ -3,8 +3,8 @@
 里；发行版根目录的拾星助手.exe（文件名是工具的中文名）是启动程序（packaging/launcher.c），把收到的参数原样转交给它。
 
   ACC.exe              启动悬浮窗（和开发时的 python -m advisor.ui 相同）
-  ACC.exe --selfcheck  不开悬浮窗，检查发行版是否完整（数据、文字识别模型、界面库、界面翻译、窗口截取组件、解锁记录的
-                       密钥加载上没有），结果写到程序目录下的 .tmp\\selfcheck.json，退出码 0 表示通过
+  ACC.exe --selfcheck  不开悬浮窗，检查发行版是否完整（数据、文字识别模型、程序自己画的文字图读不读得出、界面库、界面翻译、
+                       窗口截取组件、解锁记录的密钥加载上没有），结果写到程序目录下的 .tmp\\selfcheck.json，退出码 0 表示通过
   ACC.exe --selfcheck --vision-samples <清单.json>
                        自检时另把清单里的样本截图逐张识别一遍（清单里是每张图的路径和这张图读的时候需要的已知条件），
                        读数写到程序目录下的 .tmp\\selfcheck-vision.json。打包试启动用它把发行版和源码的识别读数

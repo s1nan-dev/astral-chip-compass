@@ -39,7 +39,7 @@ from datetime import datetime
 from pathlib import Path
 from unittest import mock
 
-from advisor import paths, version
+from advisor import paths, update_log, version
 from advisor import update_apply as ua
 from advisor.errors import EXIT_REPORTED
 from tests.support import sandbox
@@ -1268,6 +1268,24 @@ class AfterStartTest(Base):
         text = kept.decode("utf-8")
         self.assertTrue(text.startswith("["))  # 从一行的开头起
         self.assertIn("收尾：删了 app.old", text)  # 新接的在最后
+
+    def test_kept_log_after_check_records(self):
+        """查更新、下载追加过、按上限裁剪过以后，收尾照样接在换版本那一段后面，合起来不超过上限。"""
+        patch(self, ua, "KEPT_LOG_MAX", 4096)
+        patch(self, update_log, "KEPT_LOG_MAX", 4096)
+        layout = self.swapped()
+        old_lines = "".join(f"[old] 第 {i} 行\n" for i in range(300))
+        write_files(layout.app, {f"logs/{ua.KEPT_LOG}": old_lines.encode("utf-8")})
+        with mock.patch.object(update_log.paths, "logs_dir", return_value=layout.app / "logs"):
+            for i in range(3):
+                update_log.note("查更新", f"第 {i} 次自动检查")
+        ua.after_start(layout.root, wait=1)
+        kept = (layout.app / "logs" / ua.KEPT_LOG).read_bytes()
+        self.assertLessEqual(len(kept), 4096)
+        text = kept.decode("utf-8")
+        self.assertTrue(text.startswith("["))
+        self.assertIn("第 2 次自动检查", text)
+        self.assertIn("收尾：删了 app.old", text)
         self.assertNotIn("[old] 第 0 行", text)
 
     def test_failed_keeps_newest(self):

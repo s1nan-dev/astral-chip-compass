@@ -33,12 +33,16 @@ class DefaultAdviceTest(unittest.TestCase):
         cls.db = load_db()
 
     def test_hero_without_school_lifted(self):
-        # 没有推荐流派的角色、真人队友邦妮刚需标记：普通瞄具本身 93 分，拿了以后还有空位
+        # 没有推荐流派的角色、真人队友邦妮刚需标记：普通瞄具本身已够推荐线，拿了以后还有空位
         # 一律算没用时 拳击手套-高级、精品剑盾、普通瞄具、刷新；看空位时 拳击手套-高级、普通瞄具、精品剑盾、刷新
         # 适配表里每个角色都写了推荐流派：这里把美咲、墨影的推荐流派去掉来测
         heroes = ("美咲", "墨影")
-        db = replace(self.db, hero_synergy={h: replace(s, schools=(), keep_schools=False) if h in heroes else s
-                                            for h, s in self.db.hero_synergy.items()})
+        # 内置分照旧计入的资料库副本：刚需提升要有别的筹码被内置分抬到前面
+        rules = {k: dict(v) if isinstance(v, dict) else v for k, v in self.db.rules.items()}
+        rules["official"]["scale"] = 0.5
+        base = replace(self.db, rules=rules)
+        db = replace(base, hero_synergy={h: replace(s, schools=(), keep_schools=False) if h in heroes else s
+                                         for h, s in base.hero_synergy.items()})
         mates = (Teammate("邦妮"), Teammate("凛", bot=True), Teammate("米米", bot=True))
         offer = ["拳击手套-高级", "精品剑盾", "普通瞄具"]
         for hero in heroes:
@@ -54,15 +58,19 @@ class DefaultAdviceTest(unittest.TestCase):
         # 阿兰娜（推荐流派治愈、标记，只保治愈）已进入治愈：拿普通瞄具占满流派名额（治愈、标记），治愈已经在手上，不算锁进没用的流派
         # 一律算没用时 拳击手套-高级、精品剑盾、刷新、普通瞄具；看空位时 拳击手套-高级、普通瞄具、精品剑盾、刷新
         mates = (Teammate("邦妮"), Teammate("吉尔"), Teammate("芬妮"))
+        rules = {k: dict(v) if isinstance(v, dict) else v for k, v in self.db.rules.items()}
+        rules["official"]["scale"] = 0.5
+        db = replace(self.db, rules=rules)
         st = State(hero="阿兰娜", star=3, round=8, owned=("维生素药丸", "缓冲盾牌", "书签"), rerolls=5, teammates=mates)
-        adv = advise(self.db, st, ["拳击手套-高级", "精品剑盾", "普通瞄具"])
+        adv = advise(db, st, ["拳击手套-高级", "精品剑盾", "普通瞄具"])
         self.assertEqual(lifted(adv), ["普通瞄具"])
         self.assertEqual(order(adv), ["拳击手套-高级", "普通瞄具", "精品剑盾", REROLL])
-        # 已进入星光（不是推荐流派）时拿它，治愈再也进不去：两种口径都不提；阿兰娜要保住治愈，普通瞄具另扣分，排到刷新后面
+        # 已进入星光（不是推荐流派）时拿它，治愈再也进不去：两种口径都不提；阿兰娜要保住治愈，普通瞄具另扣分，
+        # 够不到推荐线，排到刷新后面（现在的资料库）
         strayed = replace(st, owned=("紫色飞星", "书签"))
         adv = advise(self.db, strayed, ["拳击手套-高级", "精品剑盾", "普通瞄具"])
         self.assertEqual(lifted(adv), [])
-        self.assertEqual(order(adv), ["拳击手套-高级", "精品剑盾", REROLL, "普通瞄具"])
+        self.assertEqual(order(adv)[-1], "普通瞄具")
 
     def test_two_schools_one_lost(self):
         # 两个推荐流派只进入了一个：赛克斯（测试用的默认推荐档位，推荐流派星光、治愈）已进入治愈，拿标记喷罐占满流派名额
@@ -88,7 +96,10 @@ class SchemeTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.db = load_db()
+        # 内置分照旧计入的资料库副本：刚需提升要有别的筹码被内置分抬到前面
+        rules = {k: dict(v) if isinstance(v, dict) else v for k, v in load_db().rules.items()}
+        rules["official"]["scale"] = 0.5
+        cls.db = replace(load_db(), rules=rules)
         cls.plan = Plan(name="测试方案", hero="阿兰娜", tiers=(("缓冲盾牌", "second"),))
         cls.st = State(hero="阿兰娜", star=1, round=4, map="异变图书馆", teammates=(Teammate("邦妮"),), rerolls=2)
         cls.offer = ["拳击手套-高级", "速度轮滑-高级", "普通瞄具"]

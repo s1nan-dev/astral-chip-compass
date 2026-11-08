@@ -10,11 +10,12 @@
 - **测试观点**：从这些角度检查（按测试类分）——
   - `SessionTest`：三选一给推荐与去重（同一画面不重复给、刷新后重给）、记下选中的候选筹码、漏记时请用户补录、星数的读取与推算、三选一来源（升星/筹码商店 vs 任务）的判定、地图识别与手动指定不被覆盖、轮次与星数变小或读错时判不判新的一局、角色识别与手动指定角色、角色锁定、跨对局的设置存取。
   - `StartupPanelTest`：启动时不知道已有筹码 → 进入对局后请用户打开「查看筹码」面板，读到自己那一页后写入已有筹码；有认不出的格子时保留原记录、按格子位置放回、整页 10 格都满就不保留。
+  - `LobbyStartupPanelTest`：刚打开时在大厅（还没有对局状态时读到过主菜单、房间、「匹配成功」画面、结算画面、奖励画面），之后进的对局：第一次读到的轮次是第 1、2 轮、没先看到三选一时算从开局看起、不提示；先读到星数时先不提示、等轮次；等的时候先看到三选一、三选一那一帧（`begin_offer` 在轮次之前）、第一次读到第 4 轮、一直读不到轮次等满 `PANEL_WAIT_S` 都照旧提示；没见过这些画面的照旧第一次对局内读数就提示。
   - `PanelFixesPickTest`：思考时间用完时游戏自动拿最左边的筹码，之后读面板与记录不符时以面板为准，并给出改正了哪一次的选择记录。
   - `OwnRowTest`、`HeroNeededTest`、`RevertPickTest`、`UnrecordedGainTest`、`UndoNewGameTest`：自己在玩家列表第几行与本次运行认出的玩家名字；角色待识别时暂停推荐并请用户选择角色、手动指定而立绘认不出时请识别流程存模板；同一组候选在三选一关闭后又出现时撤销刚记下的筹码；星数增加了却没有对应的三选一记录时提示补录；判定新的一局后能撤销，撤销恢复已有筹码、轮次、地图、角色、队友和面板提示。
   - `DirectChipTest`：补录时记为不经三选一获得的筹码：面板核对不改，移出已有筹码时去掉，新的一局清空、撤销恢复，`build_state` 只数其中不是地图直接发放的，诊断里的来源也只把这些写成 direct；待补录的升星走同一条补录但不记。
   - `EndlessPendingTest`：循环往复给的额外那次三选一（`Session.endless_pending` → `State.endless_pending`）：在三选一里看到选中循环往复时记下到期的轮次（升星、筹码商店拿到的再过 2 回合，任务拿到的 3 回合）；到期以后第一次判成任务来源、又不是全队同时三选一的当作给了，这一次本身不再多算；到期那一轮先来的判成升星的不当作它；过了到期那一轮的下一轮不再算；拿到时轮次读不出、用「＋ 补录筹码」手动加的、移出已有筹码时、新的一局都不算，撤销新一局时恢复；同一组候选读对以后改判来源时跟着改。漏记、用户补录时点了循环往复的，按漏记的那次三选一当时的轮次和来源记（那时轮次读不出照旧不记，`test_missed_pick_of_endless`）。额外那次给了以后（`Session.endless_given` → `State.endless_given`）：认出的那一次本身、刷新换了候选以后为 1，那次选中的筹码（漏记补录的也算）还在已有筹码里时为 1，改判来源撤回、筹码移出已有筹码时为 0（`test_given_extra_pick_and_its_chip`、`test_missed_extra_pick_records_chip`）。到期的轮次另交给引擎（`State.endless_due`，只在还没给时带），到期在进度上限以后时引擎不多算（`test_due_after_cap`）。
-  - `MapReadAndMutatorsTest`、`UnsupportedTest`、`TeammatesTest`、`HistoryTest`：任务栏认出地图时发 `map_read`、选角前公布的畸变组件留到下一局；不支持的情况（独占全屏、窗口过小、游戏语言非简体中文）写进状态行提示、每条写明影响和处理方法；队友角色的确认；`recent_events` 和 `snapshot` 能 JSON 序列化。
+  - `MapReadAndMutatorsTest`、`UnsupportedTest`、`TeammatesTest`、`HistoryTest`：任务栏认出地图时发 `map_read`、选角前公布的畸变组件留到下一局；不支持的情况（独占全屏、窗口过小、游戏语言不是简体中文或繁体中文）写进状态行提示、每条写明影响和处理方法；队友角色的确认；`recent_events` 和 `snapshot` 能 JSON 序列化。
   - `DifficultyTest`、`DifficultyInfoTest`：本局难度按三选一界面上的概率行判定（普通 / 困难及以上），两张表都对不上时沿用；本局具体难度按结算画面 > 「匹配成功」画面 > 房间 > 进度上限推算 > 概率行的先后取，交给引擎的 `difficulty_level`；进度上限只和极限对得上时推算成极限、不记 `cap_mismatch`（`test_extreme_from_cap`）；房间读数和推算矛盾时按读不准处理（困难及以上），两边都在噩梦及以上时（房间疯狂、御魂庆典 17 格只有极限；房间噩梦、幽魂暗巷 16 格只有疯狂）按噩梦及以上、难度名不写，一边是困难的照旧困难及以上（`test_room_against_cap_both_nightmare_plus`）。
   - `GameOverTest`、`RecorderTest`、`ReviewRecordTest`、`RecorderErrorTest`：对局结束（结算画面读到一次；房间、「匹配成功」画面、奖励画面要隔一会儿连续两次）；识别记录的转发、换段、撤销、结束标记、`status` 记下变了哪几项；识别记录器出错不影响记账。
   - `LeftmostRarityTest`、`RefreshHoldTest`、`PartialNameTest`、`FirstStarTest`：最左格稀有度判定三选一来源；刷新时保留刷新前的推荐并标「正在刷新」，给过推荐以后（不是刷新）读不全的当场提示；只读到几个筹码名的共同部分时稍后再读；0 星时按刷新次数判断是不是升到 1 星的那一次。
@@ -35,6 +36,7 @@
   - `RereadRejudgeTest.*` 失败 → 读对以后的重新判（`core.py` 的 `_open_judged`、`_observe_rerolls`、`_ledger_confirm`，`game_state.py` 的 `_open_read`，`selection.py` 的 `first_star`）；`test_reopened_keeps_level_up` 失败 → 同一组候选又出现时没有把刷新记录换回这次三选一之前的（`core.py` 的 `_select_opened`）。
   - `EndlessPendingTest.*` 失败 → 循环往复额外那次的记账（`core.py` 的 `endless_pending`、`endless_given`、`_endless_got`、`_endless_judged`、`_select_closed`、`resolve_missed`、`ENDLESS_GRACE`，`game_state.py` 的 `_endless_due`、`_endless_given`、`_endless_open`、`_endless_chip`、`_missed_at`，等的回合数 `data/rules.toml` 的 `[endless_cycle] delay`、`advisor/engine/parts.py` 的 `endless_wait`）。
   - `StartupPanelTest.*` / `PanelFixesPickTest.*` 失败 → `advisor/session/panel.py` 的 `read_panel`、`panel_order`、`panel_fixes`，或 `Session.on_panel`。
+  - `LobbyStartupPanelTest.*` 失败 → 刚打开时在大厅的那一笔和进对局时提示不提示（`core.py` 的 `_entered_game`、`_from_start`、`begin_offer`、`PANEL_WAIT_S`，`offgame.py` 的 `on_out_of_game` 记 `GameState._outside_seen`）。
   - `DifficultyTest.*` / `DifficultyInfoTest.*` 失败 → `advisor/session/difficulty.py` 的 `resolve_difficulty`、`DifficultyInfo.label`，或 `core.py` 的 `_resolve_difficulty`、`_difficulty_changed`。
   - `GameOverTest.*` / `ReviewRecordTest.*` 失败 → `advisor/session/offgame.py` 的 `on_out_of_game`、`end_game`、`round_after_game`，或 `advisor/session/events.py` 的 `EventLog`。
   - `HudParseTest.*` 失败 → `advisor/vision/hud.py` 的 `_parse_round`、`_guess_map`；如果是有意改了 `data/maps.json` 的任务文字，这里关于任务重叠和匹配度的预期要一起改。
@@ -76,8 +78,9 @@
   - `SaveWhenChangedTest`：只在要存的设置真的变了时才存；存盘函数返回「没写成」时不算存成，内容没变也再试。
   - `RecorderErrorTest`、`EventSeqTest`：识别记录器出错不影响记账、只在第一次出错时记一条警告；每个事件带递增的序号（悬浮窗据此认出晚到的旧推荐）；推荐事件带记账里的第几次三选一（`select_no`），诊断记录里也写上，别的事件没有这一项（`test_select_no_in_record`）。
   - `OutOfGameTwiceTest`：对局状态还在时，房间、「匹配成功」画面、奖励画面要隔一会儿（同一帧上认出两次只算一次）、20 秒内连续两次读到才结束本局；之后开的新一局：结算画面结束的不能撤销、其余的能撤销，撤销时连同「已结束」一起撤回并把收起的提示放回。
+  - `MainMenuTest`：对局中途回到主菜单（中途退出、断线）：同房间，隔一会儿连续两次读到才结束本局，依据「检测到主菜单」，只读到一次就回到对局画面的不算；读到主菜单时之前「匹配成功」画面留下的读数作废。之后连续两次读到不比离开时小的轮次（中间没读到别的对局外画面、离开不到 `REJOIN_MAX_S`）：不开新的一局，撤回那次结束接着记（`status` 的 `cause` 为 `rejoined`、识别记录 `read:rejoined`），筹码、星数、进度上限都在；第 1 轮离开又读到第 1 轮也接着记（已知代价，有意如此）；接回以后认出别的角色照常判新的一局、刚接回来时不拿轮次否决，认回这一局的角色以后照旧否决。读到了组队房间（结束以后读到的，或结束本局的两次里先认出的是房间、随后认出主菜单）、轮次比离开时小（从开局看起、不提示面板）、离开太久、后来又读到结算画面的照常开新的一局。
   - `ChipMapConflictTest`：加载画面读到的地图和地图专属筹码推出的地图冲突时，要专属筹码拿到了手、或两次不同的三选一都指向同一张地图才改；同一组候选在画面上停多少帧只算一次。
-  - `ConsecutiveSelectFlowTest`、`RoomRecheckFlowTest`：识别流程里交给记账的两处——接连两次三选一时读星数；认出对局外画面以后再认一次。
+  - `ConsecutiveSelectFlowTest`、`RoomRecheckFlowTest`：识别流程里交给记账的两处——接连两次三选一时读星数；认出对局外画面以后再认一次（看见轮次标记以后第二次起读不到、离那次标记不到 `pick_grace_ms` 时先不认，时刻按默认 10 秒排）。
 - **检证对象**：`advisor/session/core.py` 的 `Session`（`new_game`、`undo_new_game`、`on_frame`、`on_out_of_game`、`_chip_map_confirmed`、`_select_opened`、`_select_closed`、`remove_chip`、`can_restore_chip`、`restore_chip`）、`advisor/session/newgame.py` 的 `NewGameJudge`（`pending_votes`、`note_low`、`regressed`）、`advisor/session/selection.py` 的 `SelectTracker`（`first_star`、`just_refreshed`、`hold_frame`、`starts_another`、`fresh_offer`）、`advisor/session/offgame.py` 的 `on_out_of_game`/`end_game`、`advisor/session/events.py` 的 `Event.seq`、`Event.select_no`、`_event_record`；识别流程侧是 `advisor/vision/pipeline.py` 的 `FrameProcessor`（识别函数全部换成假的）。
 - **什么时候要跑**：改了 `advisor/session/` 下判新的一局的规则、撤销、三选一的去重键与刷新保持、对局结束、事件序号，或 `advisor/vision/pipeline.py` 里读星数 / 复查对局外画面的时机以后。
 - **怎么单独跑**：`python -B tools/run_tests.py --only test_session_regressions`（上次约 10 秒）
@@ -85,6 +88,7 @@
 - **输出怎么看**：同总则。多数用例逐句断言事件种类和状态，失败时会指出期望的事件与实际的事件。
 - **出错时一般是哪里不对**：
   - `OutOfGameTwiceTest.*` 失败 → `advisor/session/offgame.py` 的对局结束与接下来的新一局判定（`end_game`、`round_after_game`、`confirmed`）。
+  - `MainMenuTest.*` 失败 → 主菜单那一行规则（`offgame.py` 的 `SCREEN_RULES`、`ScreenRule.rejoin`）、连回同一局的条件和撤回（`rejoinable`、`rejoin`、`REJOIN_MAX_S`，`core.py` 的 `_revoke_end`），离开以后读到别的画面记的那一笔（`GameState._left`，结束本局的两次里先认出的是别的画面时由 `offgame.end_game` 记），或换角色的否决（`core.py` 的 `on_hero`、`GameState._rejoined`）。
   - `ChipMapConflictTest.*` 失败 → `advisor/session/core.py` 的 `_chip_map_confirmed`、`_map_from_chips`（「两次不同的三选一」那一票）。
   - `OfferKeyTest.*` / `RefreshAgainTest.*` / `ConsecutiveSelectStarTest.*` 失败 → `advisor/session/selection.py` 的 `SelectTracker`（`_unchanged`、`just_refreshed`、`first_star`、`table_row`、`starts_another`）。
   - `SameRowSelectsTest.*` 失败 → 「紧接着的另一次还是刷新」的判据（`selection.py` 的 `starts_another`、`fresh_offer`，上一组确实读到过的最多的刷新次数 `_offer_most`；`test_new_select_after_refresh`、`test_fix_keeps_count_read` 失败多半是 `frame` 里换了一组候选时没清掉它、或改正候选时清掉了它；`test_zero_*` 失败多半是换上来的一组读成 0 时记不记它的条件改了：`frame` 里的 `_zero_unread`，上一组算不算同一次连着的界面、同一局），或认作另一次以后的结算和计数（`frame` 里的 `close`、`core.py` 的 `_select_closed`、`_select_opened`、`_open_judged`，事件的 `select_no`）。`test_unsure_stays_refresh` 的哪一个子用例失败，就是那一种拿不准的情形被认成了另一次。
@@ -94,6 +98,21 @@
   - `RemoveChipTest.test_restore_*`、`test_no_restore_*`、`test_only_latest_removal` 失败 → `advisor/session/core.py` 的 `remove_chip`（移出时记下的 `ChipRemoval`）、`_removal_mark`、`can_restore_chip`、`restore_chip`：放回的不是移出前的样子，或者之后已有变化时还放回了；`set_owned` 多改了别的状态时，这里也会先失败。
   - `RecorderErrorTest.*` 失败 → `advisor/session/events.py` 的 `to_recorder`、`core.py` 的 `_to_recorder`（出错只记一条警告）。
   - 用例里写死的说明文字（「检测到组队房间」这类）是有意改的，就一起改预期。
+
+## test_scheme_map_switch.py：对局里按地图自动换筹码方案（记账这一层）
+
+- **测试观点**：从三个测试类检查——① `SessionMapSchemeTest`：这一局实际用哪套每次现算（`Session.scheme_choice`）——保存的是通用方案、这个角色有两套标了这张地图时用方案下拉框里靠前的那一套；保存的标了这张地图就照用；保存的只标了别的地图时到这张地图换成标了它的、改判到谁都没标的用保存的；没有编号、不能标在方案上的地图（运动场）不换；别的角色标了这张地图的方案不算进来，换了角色按那个角色自己的方案算。`stop_map_scheme` 之后这一局都用保存的方案（局面版本加一），还没有这一局的对局状态时不打；新的一局清掉，撤销新的一局时连同告诉过的那一次回来、不重复告诉。本局结束回到保存的方案，新的一局认出地图以后照常再换。地图改判时每换上一套告诉一次（`take_map_switch`），回到保存的不告诉，之后再换过去照样再告诉。保存的是默认推荐时同样换成标了这张地图的方案。推荐按这一局实际用的那套算（`scheme_plan`），三选一开着时认出、改判地图立即重算；地图从三选一里的地图专属筹码认出来的那一帧就按换成的方案算。没有接上方案存储、只接了 `scheme_for`、角色资料库未收录时都是默认推荐、不换。② `OverlayMapSchemeTest`、`SchemeMapNoticeTest`（悬浮窗这一层：重算与一次性提示、「筹码方案」卡片那一行和「换回原来的」、方案下拉框的「适用地图」悬停说明）见[悬浮窗](overlay.md)的同名一节。
+- **检证对象**：`advisor/session/core.py`（`SchemeChoice`、`scheme_choice`、`scheme_plan`、`_scheme_map`、`stop_map_scheme`、`take_map_switch`）、`advisor/session/game_state.py`（`map_scheme_off`、`_map_switch_told`）、`advisor/schemes.py`（`Scheme.maps`、`taggable_maps`、`SchemeStore.current`、`SchemeStore.schemes`）；悬浮窗那一层见[悬浮窗](overlay.md)的同名一节。
+- **什么时候要跑**：改了 `Session.scheme_choice` 的取舍规则、`stop_map_scheme` 与 `take_map_switch`、`GameState` 里按地图换方案的状态，或方案存储给这一局的方案以后。
+- **怎么单独跑**：`python -B tools/run_tests.py --only test_scheme_map_switch`（上次约 3 秒）。
+- **需要什么**：不开窗口的几组只读资料库；悬浮窗那一层用 Qt 离屏平台；方案文件写在测试沙箱的临时文件夹里。
+- **输出怎么看**：同总则。
+- **出错时一般是哪里不对**：
+  - `test_generic_saved_switches_to_first_tagged`、`test_saved_tagged_kept`、`test_saved_tagged_other_map`、`test_default_saved_switches` 失败 → `scheme_choice` 的取舍规则变了（保存的方案、标了这张地图的第一套、方案下拉框的先后）。
+  - `test_stop_map_scheme`、`test_undo_keeps_told` 失败 → 「这一局不再按地图换」的打标记、新的一局清掉、撤销时跟着回来改了。
+  - `test_game_over_and_new_game`、`test_map_rejudged` 失败 → 本局结束回到保存的方案，或 `take_map_switch` 告诉一次的去重改了。
+  - `test_advice_follows_used_scheme` 失败 → 推荐按这一局实际用的那套算、认出或改判地图时重算的时机改了。
+  - `test_untaggable_map`、`test_without_store` 失败 → 能标在方案上的地图、没有方案存储时的退路改了。
 
 ## test_session_split.py：记账包的结构保证
 
@@ -118,6 +137,20 @@
   - `EventKindsTest` 失败 → 新加的事件种类没写进事件种类表，或写的种类拼错了。
   - `AdvisePatchTest.test_old_targets_fail_loudly` 失败 → 记账包的顶层又出现了推荐引擎那个名字，测试里的替换点会悄悄失效。
   - `UndoAfterReadingsTest.*` 失败 → 新的一局和旧的一局共用了同一个列表、字典或集合（新的一局该用新对象里的新容器）。
+
+## test_game_outcome.py：一局的胜负（通关还是失败）在记账里怎么定
+
+- **测试观点**（按测试类分）：
+  - `DecisionTableTest`：`offgame.outcome` 的判定表，直接摆这一局的几项依据：结束前 60 秒之内读到通关画面算通关、依据写 `victory`（正好 60 秒也算，早于 60 秒的不算）；只看到打输的横幅算失败、依据写 `game_over`，星币是 0（和电脑打的局输赢都不给星币）、10、20、读不到都一样，星币 ≥ 25 时两边矛盾；通关画面和横幅都看到也算矛盾；没看到这两种时按奖励画面上的星币数，≥ 25 通关、正好 10 失败，依据写 `reward`；别的数都不知道——0、读漏一位的 +3（+30）、+5（+35）、+1（+10）、15、24；通关画面加星币 10 是矛盾，两项都不知道；什么都没有不算失败；还没结束时不知道。阈值本身（25、10、60 秒）和三种依据的叫法另核对一遍。
+  - `OutcomeFlowTest`：真实的 Session（打到第 12 轮，假时钟）：通关画面、打输的横幅都不发事件，各记一条 `read:victory`、`read:game_over_banner`；结算画面结束本局时就按看到的画面记通关或失败，`game_over_info` 带 `outcome`、`how`；横幅那一局奖励画面星币是 0 也照样是失败，奖励画面星币 ≥ 25 时改成矛盾；结束以后第一次读到奖励画面算定了（`result_settled`），胜负没变也发一个 `status`、再读到不再发；胜负变了改掉、发 `status`、记一条 `read:game_result`；只有奖励画面时按星币数定（30、25 通关，10 失败，0、3、20、读不出不知道）；星币数取读到过的最大的（+3 之后读到 +30 改成通关，之后读到 10 不再改回去；+1 之后读到 +10 才算失败）；星币数不是非负整数的不算；对局中途认错的一次（结束前一分钟以上，通关画面和横幅都一样）不算；没有对局状态、本局已结束以后读到通关画面、横幅都不记；对局里只读到一次奖励画面不算结束、也不算定了；奖励画面隔一会儿读到两次结束本局时当场用上星币数；房间画面误认的结束、又读到了奖励画面，之后的新一局撤销了，胜负的依据一起作废；新的一局从头算（两种画面的时刻都不带）。
+- **检证对象**：`advisor/session/offgame.py` 的 `outcome`、`reward_read`、`refresh_outcome`、`end_info`、`end_game`（记结束的时刻）、`on_out_of_game` 里奖励画面那一段，以及 `REWARD_WIN_COINS`、`REWARD_LOSS_COINS`、`VICTORY_BEFORE_END_S`、`BY_VICTORY`、`BY_GAME_OVER`、`BY_REWARD`；`advisor/session/core.py` 的 `on_victory`、`on_game_over_banner`、`game_over_info`、`result_settled`、`undo_new_game`（胜负的依据一起撤回）；`advisor/session/game_state.py` 的 `_victory_at`、`_game_over_at`、`_ended_at`、`_reward_seen`、`_reward_coins`。
+- **什么时候要跑**：改了胜负的判定（阈值、通关画面和横幅的时效、依据的叫法）、奖励画面怎么记、结束和撤销的记账以后；推荐日志和对局报告那一头另跑 test_overlay_event_branches、test_reporting、test_game_report。
+- **怎么单独跑**：`python -B tools/run_tests.py --only test_game_outcome`（上次约 2 秒）
+- **需要什么**：不需要识别样本截图、不需要显卡；时钟用假的。
+- **输出怎么看**：同总则；判定表按情形分 subTest，失败时写明是哪一种。
+- **出错时一般是哪里不对**：
+  - `DecisionTableTest` 失败 → 判定表改了：阈值、只认正好 10 的失败、矛盾时两项都不知道、通关画面和横幅的时效；有意改的话把表里的期望一起改（读漏一位、和电脑打的局不能记成失败，只看到横幅要记成失败）。
+  - `OutcomeFlowTest` 失败 → 胜负什么时候记、什么时候改、什么时候算定了改了；悬浮窗靠第一次读到奖励画面的 `status` 拼报告，这一条丢了报告要等满几分钟才拼。
 
 ## test_session_tape.py：记账的读数磁带回放——一盘真实对局的读数按顺序交给记账，每一步的结果和存下来的期望逐字相同
 
@@ -153,11 +186,12 @@
 - **测试观点**（按测试类分）：
   - `WriteTest`：段头带版本号；不到 60 秒、不到 500 行时不写盘，到时写；记下筹码、新的一局这些要紧的节点马上写；记录的时刻由调用方给；标记马上写且不换段；多个线程同时记不丢。
   - `SegmentTest`：换段产生新文件，导出只取上一段和当前段，按时间有序、各段以段头开始；中途重启时上一段是上次运行留下的最后一段；撤销换段后只剩一个文件（原段 + 撤销那一行 + 新段的记录）；同一秒重名时文件名加 `-2`、`-3` 且始终排在已有的段之后；单段超过体积上限自动换段。
+  - `CollectStatsTest`：只留统计类的记录（对局里逐帧的读数、推荐不带）；只留最近 12 小时以内的、`time` 读不出来的不要，系统时间被调回以后比现在还晚的照样留；哪一段有留下的记录就带上那一段的段头（段头早于 12 小时也带），只有逐帧读数、段头又早于 12 小时的那一段整段跳过；窗口层次记录去掉盖住悬浮窗的那个窗口的类名、其余各项照带，导出本局和上一局时照旧带着它；当前段还没写盘的行也在；写盘出过错时内存里的当前段也在；同一个文件不读两遍；读坏的文件跳过、原因记进 `errors`。
   - `PruneTest`：只保留最新 10 段；总量超过上限时从最旧的删；当前段和之前的两段受保护。
   - `MaskTest`：写入前脱敏——玩家列表读数里的名字、任何位置的玩家名字、以及「X正在选择强化筹码」里的 X 都换成代号（同名同码、跨运行不同），电脑玩家的标记保留，不改原记录；已经是代号的不再变。
   - `FailureTest`：文件夹不可写时不抛异常、只报一次错，内存里照常记录、导出不受影响；撤销换段在内存里也成立；程序崩溃时写到一半的行读回时跳过，下一次运行照样能导出上一段；常量（保留段数、写盘间隔、文件名格式、识别记录的位置）。
   - `test_stamp_format`：时刻的写法（毫秒，和 `recent_events` 的 `time` 相同）。
-- **检证对象**：`advisor/gamelog.py` 的 `GameRecorder`（`open`、`new_segment`、`undo_segment`、`add`、`mark`、`flush`、`collect`、`prune`）、`read_segment`、`mask_record`、`player_code`、`stamp` 与各常量；位置来自 `advisor/paths.py` 的 `games_dir`（`logs_dir/games`）。
+- **检证对象**：`advisor/gamelog.py` 的 `GameRecorder`（`open`、`new_segment`、`undo_segment`、`add`、`mark`、`flush`、`collect`、`collect_stats`、`prune`）、`read_segment`、`mask_record`、`player_code`、`stamp`、`STATS_KINDS` 与各常量；位置来自 `advisor/paths.py` 的 `games_dir`（`logs_dir/games`）。
 - **什么时候要跑**：改了 `advisor/gamelog.py`、`advisor/paths.py` 里识别记录的位置、`advisor/fileio.py` 的 `append_lines`（写盘时补换行）、版本号（段头里写着它）以后。
 - **怎么单独跑**：`python -B tools/run_tests.py --only test_gamelog`（上次约 0.4 秒）
 - **需要什么**：不需要识别样本截图、不需要显卡；临时文件写在测试沙箱里。
@@ -212,6 +246,7 @@
 - **测试观点**：同一局有两处结束（房间等画面结束的局，之后开的新一局被撤销，那次结束是误认的；这一局真正结束时再记一条），要以后一条为准、不把一局算成两局：
   - `test_resume_follows_later_record`：重启时接局号——真正结束之前接回这一局；记了真正的结束以后不再接。
   - `test_counts_one_game`：局数和校准计数按三选一的记录算（对局结束不计入），两条结束也只是一局；诊断包取推荐日志时两条都在、后一条是真正结束的。
+  - `test_rejoined_game`：主菜单结束的局又连回同一局（悬浮窗不换局，不调 `new_game`、`undo_new_game`）：之后的三选一记在同一局，真正结束之前重启接回这一局，两条结束只算一局，记了真正的结束以后不再接。
 - **检证对象**：`advisor/logbook.py` 的 `record_game_over`、`new_game`、`undo_new_game`、`resumable`、重启时接局号、`stats`、`game_count_since_calibration`、`records_between`；下游读推荐日志的还有校准工具 `tools/calibrate.py`（汇总开头写「局数 1；」，在 `tests/test_dev_tools.py` 的 `CalibrateGameOverTest` 里核对，借这里的 `setUp`、`play_undone_end`、`later`）。
 - **什么时候要跑**：改了 `advisor/logbook.py` 里局号、对局结束、重启接局、局数统计的部分以后；改了这里的 `play_undone_end`、`later` 时连 `test_dev_tools` 一起跑。
 - **怎么单独跑**：`python -B tools/run_tests.py --only test_logbook_game_over_again`（上次约 0.07 秒）
@@ -239,6 +274,30 @@
   - `TailUnreadableMidFileTest.test_partial_results_from_a_failing_file_are_dropped` 失败 → 读某个文件中途出错时的作废规则变了（不作废会留下这个文件里已经读到的值）。
   - `TailSensitivityTest.test_corpus_distinguishes_broken_variants` 失败 → 这一批随机文件夹不再能抓住「按块解码」「只认最后一条记录」这类改坏；先看清是哪一边变了。
   - 口径是有意改动时，要连参照实现一起改（它是测试里另写的一份整份读法），并在提交说明里写明这是有意的。
+
+## test_logbook_lanes.py：推荐日志分线——一张悬浮窗一条线，各记各的当前这一局
+
+- **测试观点**（按测试类分）：
+  - `DefaultLaneTest`：模块级函数（默认的那条线）写出的记录不带 `lane`、三选一编号原样，字段和没有分线时逐项相同；`record_offer` 给了 `client`（`cn`、`int`、`taptap`）才写进三选一记录，没给、给的不认识时不写，分线的记录同样带上。
+  - `InterleavedLanesTest`：两条线交替记三选一，各是一个局号、日志里不多出 newgame，局数算两局；`_scan_log()` 看不见别的线，`_scan_log("taptap")` 只看得见自己的，末尾一大段别的线的记录时照样往前找到（读块临时改小）。
+  - `LaneScanEquivalenceTest`：固定种子造 60 个日志文件夹，几条线的记录随机交错、分在几个月份文件里、有的没有 `time` 键，`_scan_log(线名)` 和整份按顺序读（`iter_records`）再按这条线挑出来逐位比，块大小用默认、7、64 三种；另核对这批数据里按线挑和不按线挑的结果确实常常不同（不是白比）。
+  - `LaneRecordTest`：别的线的每条记录带 `lane`、编号带「线名-」前缀，选择和反馈能和它的三选一对上；两条线给的是同一串编号（两张悬浮窗各自从 1 起编号）时，`tools/calibrate.py` 的 `collect()` 照样把两条线的三选一、选择、反馈各配各的、互不串，`stats()` 的三选一次数、选择数也不少算。
+  - `LaneIndependenceTest`：一条线开新局、撤销、记对局结束后，另一条的当前局号不变。
+  - `RestartTest`：模拟重启（只清内存里的状态、日志留着）后两条线各接各的局号；一条线最后一条是对局结束时不接、另一条照样接；最后一条是新一局时离现在超过 `GAME_GAP` 不接（撤销新一局写的那条同样），不到就照旧接；重启的时刻按各自的最后一条记录算。
+  - `LaneApiTest`：同一个名字返回同一个对象、空名字报 `ValueError`；线上有第二张悬浮窗用到的常量和方法，没有校准计数那几个；线上的 `records_between` 和模块级的取法相同（按时刻取，两条线的记录都在里面，第二张悬浮窗存诊断包用）；同一秒两条线各开一局局号不同；塞进 `Services` 后 `call`、`has` 照常可用。
+- **检证对象**：`advisor/logbook.py` 的 `Lane`、`lane()`、模块级那几个转给默认线的函数、`_scan_log`/`_scan_file` 的按线筛选、`_issued`；下游的 `tools/calibrate.py` 的 `collect()`、`advisor/ui/services.py` 的 `Services`。
+- **什么时候要跑**：改了 `advisor/logbook.py` 里线的状态、局号、重启接局、倒着读最后一段的部分，或改了 `tools/calibrate.py` 按 `offer_id` 配对的方式以后。
+- **怎么单独跑**：`python -B tools/run_tests.py --only test_logbook_lanes`（上次约 1 秒）
+- **需要什么**：不需要识别样本截图、不需要显卡；推荐日志写进测试沙箱里的临时文件夹，时钟用假的，随机造数据用固定种子。
+- **输出怎么看**：同总则。失败时看断言里的记录（`lane`、`offer_id`、局号）和两条线各自的局号。
+- **出错时一般是哪里不对**：
+  - `DefaultLaneTest.test_default_records_unchanged` 失败 → 默认线的记录多了 `lane`、编号被加了前缀或字段顺序变了（只开一个客户端时，记录都不带 `lane`、编号不加前缀，字段和顺序不变）。
+  - `InterleavedLanesTest.*` 失败 → `_scan_log` 没按线筛，或推断新局时用了别的线的记录（一局会被拆成几个局号）。
+  - `LaneScanEquivalenceTest.*` 失败 → 倒着读按线筛的结果和整份读不一致（别的线的记录没跳过、最后一条记录的时刻取了别的线的、这条线的记录在更早的文件里时没往前读，其中之一）；子测试名里有文件夹编号、线名和块大小。
+  - `LaneRecordTest.test_calibrate_pairs_each_lane` 失败 → 三选一编号的前缀没加，或选择、反馈的编号没跟着加，两条线同一个编号的三选一、选择混在一起。
+  - `RestartTest.*` 失败 → 重启接局时读的不是这条线自己的记录（最后一条是不是对局结束、新一局隔了多久、重启的时刻按哪条记录算）。
+  - `LaneApiTest.test_lane_has_what_the_second_overlay_uses` 失败 → 线上多了校准计数的函数，或少了第二张悬浮窗要用的方法、常量。
+  - `LaneApiTest.test_records_between_reads_both_lanes` 失败 → 线上的 `records_between` 和模块级的取法不同了（只取了这条线的、或时刻的范围不一样），第二张悬浮窗存的诊断包会缺另一条线的推荐日志。
 
 ## test_resume.py：离开很久再回来时的新一局判定（假时钟按真实节奏喂读数）
 
@@ -345,14 +404,14 @@
   - `OfferRerollsTest`：同一组候选时刷新按钮突然找不到（被表情气泡挡住等），沿用刚才读到的次数。
   - `ProgressCapTest`：进度条上红叉所在的格是进度上限，连续两次读到同一个值才采用、按局记住；开新的一局时重置、撤销时恢复；引擎按它算；地图待识别时的附注写法；样本上读出 18。
   - `ProgressCurrentTest`：进度条的当前格（真人对局里第 9 轮已到第 14 格，剩余轮数按它算）；当前格蓝底碎块只在合起来不超过一格宽时才合并、扁蓝条先去掉；会话连读两次才采用；「读到与已采用的不同的格、还在等再读一次」的状态；引擎按进度算剩余轮数；进度条能否决误判的新一局。
-  - `RoundSanityTest`：轮次读数的两道防线（只按位置读到的两位数要两次一致才用；远超进度条当前格的轮次按读错处理）；实机两处修正（怪物名牌下方的血量不当成轮次；数字检测漏掉时在「轮」字左边补读）；只做识别时要还原识别引擎的开关。
+  - `RoundSanityTest`：轮次读数的两道防线（只按位置读到的两位数要两次一致才用；远超进度条当前格的轮次按读错处理）；实机两处修正（怪物名牌下方的血量不当成轮次；数字检测漏掉时在「轮」字左边补读）；只做识别时要还原识别引擎的开关；头像挡住数字的实机截图（繁体兔耳朵和「Round」连成一段时读出 3，简体天线插进数字时读不出可以、不能读错，大厅不当成轮次，都只做一遍带找字的识别）；贴白块挡住数字下沿时先裁小块、不换大小重读而读错；第一遍靠标记读错时（第一遍的文字识别换成读成「10」，挡住「04」下沿一成半时实测读成过），标记左边那一块用真的识别读出 4，两边对不上，按读不出处理；标记左边那一块读成「109」时去掉菜单按钮边缘的前缀，交回的那一块交给 `read_round_crop` 也读得出。
   - `NewGameVetoTest`：对局中途的新一局判定要互相印证——另一项读数在 20 秒内还说这一局在继续，就按读错处理。
   - `NewGameCauseTest`：新一局判定要带上依据的种类（悬浮窗据此区分「对局中途」和「选角界面」）。
   - `RealGameRecognitionTest`：用一场实战局的识别读数复现两次刷新时闪出的「无法识别」「匹配度低」，核对：刷新后没读全时保留推荐、标「正在刷新」；只对得上一个筹码时不提示；只读到共同部分时等读全。
-- **检证对象**：`advisor/session/` 的 `Session`（`judge_source`、`on_frame`、`on_stars`、`on_hud`、`on_progress`、`on_progress_cap`、`on_select_screen`、`on_hero`、`undo_new_game`，以及 `newgame.py` 的判定）；`advisor/vision/chip_select.py`（`read_chip_select`、`_team_banner`、`_probabilities`、`_match_chip`、`check_names`、`recognize_only`、`_engine`）；`advisor/vision/hud.py`（`read_progress_cap`、`read_progress`、`read_round`、`_parse_round`、`_parse_round_ex`、`_blue_cells`）；`advisor/vision/io.py` 的 `ocr`；`advisor/engine/` 的 `Scorer`、`advise`；`advisor/pool.py` 的 `State`。
+- **检证对象**：`advisor/session/` 的 `Session`（`judge_source`、`on_frame`、`on_stars`、`on_hud`、`on_progress`、`on_progress_cap`、`on_select_screen`、`on_hero`、`undo_new_game`，以及 `newgame.py` 的判定）；`advisor/vision/chip_select.py`（`read_chip_select`、`_team_banner`、`_probabilities`、`_match_chip`、`check_names`、`recognize_only`、`_engine`）；`advisor/vision/hud.py`（`read_progress_cap`、`read_progress`、`read_round`、`read_round_info`、`read_round_crop`、`_parse_round`、`_parse_round_ex`、`_blue_cells`）；`advisor/vision/io.py` 的 `ocr`；`advisor/engine/` 的 `Scorer`、`advise`；`advisor/pool.py` 的 `State`。
 - **什么时候要跑**：改了三选一来源判定、进度条读数、轮次读数、新一局互相印证，或引擎里进度上限／剩余轮数的算法之后。
 - **怎么单独跑**：`python -B tools/run_tests.py --only test_real_games`（上次约 2.9 秒；慢测试）。
-- **需要什么**：一部分用例要识别样本和标注。要 `samples/labels.json`，以及它列出的、或按文件名找的若干三选一与对局画面截图（例如标题上方有那一行的任务三选一样本、2026 开头的对局画面和进度条样本）。`TeamSelectTest`、`OfferRerollsTest`、`NewGameVetoTest`、`NewGameCauseTest`、`RealGameRecognitionTest` 不需要样本。用到的标注字段：`labels.json` 每条的 `file`、`scene`、`team`。`stars_labels.json`、`panel_labels.json`、`tests/data/coins/labels.json` 这一组用不到。
+- **需要什么**：一部分用例要识别样本和标注。要 `samples/labels.json`，以及它列出的、或按文件名找的若干三选一与对局画面截图（例如标题上方有那一行的任务三选一样本、2026 开头的对局画面和进度条样本、头像挡住轮次数字的两张和大厅一张 2560×1600 截图）。`TeamSelectTest`、`OfferRerollsTest`、`NewGameVetoTest`、`NewGameCauseTest`、`RealGameRecognitionTest` 不需要样本。用到的标注字段：`labels.json` 每条的 `file`、`scene`、`team`。`stars_labels.json`、`panel_labels.json`、`tests/data/coins/labels.json` 这一组用不到。
 - **输出怎么看**：没样本时只跳过真用到样本的那几条用例（按文件名找截图的 `sample(pattern)`，`TeamBannerVisionTest.selects` 和用到 `labels.json` 的几条用 `samples.require_samples("labels.json")`），跳过原因写明缺哪个文件；同一类里不用样本的用例照常跑，`TeamSelectTest`、`OfferRerollsTest`、`NewGameVetoTest`、`NewGameCauseTest`、`RealGameRecognitionTest` 整个类都不需要样本。没有别的特有输出。其余同总则。
 - **出错时一般是哪里不对**：
   - `TeamSelectTest` 失败 → 全队任务三选一的来源判定（`judge_source`、`chip_select._team_banner`），或「同一次三选一」的辨认（比对概率行，概率行一样时比候选和刷新次数：`selection.py` 的 `starts_another`、`fresh_offer`）改了。
@@ -361,7 +420,7 @@
   - `OfferRerollsTest` 失败 → 「刷新次数突然读不到时沿用上一次」的规则改了。
   - `ProgressCapTest` 失败 → 进度上限的连读两次才采用、按局记住、开新一局重置／撤销恢复、或地图待识别时的附注写法改了；也可能 `read_progress_cap` 的识别坏了。
   - `ProgressCurrentTest` 失败 → `read_progress` 的当前格／红叉读数、蓝底碎块合并规则、会话的「连读两次才采用」、或引擎按进度算剩余轮数改了。
-  - `RoundSanityTest` 失败 → `_parse_round`/`_parse_round_ex`/`read_round` 的轮次修正规则改了；识别的读数是有意改的就同步改断言。
+  - `RoundSanityTest` 失败 → `_parse_round`/`_parse_round_ex`/`read_round` 的轮次修正规则改了，或 `read_round_info` 看见标记却读不出时的做法（裁小块只认字、不换大小重读）、靠标记读到的数用裁小块核对的规矩、`_round_mark`/`_mark_left` 认连成一段的标记、`_crop_digits` 去前缀改了；识别的读数是有意改的就同步改断言。
   - `NewGameVetoTest` 失败 → 新一局判定的互相印证（20 秒窗口、否决的判据）改了。
   - `NewGameCauseTest` 失败 → 新一局事件带上依据种类的写法改了。
   - `RealGameRecognitionTest` 失败 → 「刷新后没读全时保留推荐并标正在刷新」「只对得上一个筹码不提示」「只读到共同部分时等读全」的规则改了。
@@ -392,3 +451,25 @@
   - `HintsTest` 失败 → 一帧多次为读提示进锁，或提示和当时现读的不一样（`advisor/vision/pipeline.py` 的 `_hint`、`advisor/session/core.py` 的 `WatchHints`）
   - `MemoTest`／`MemoScopeTest` 失败 → 照搬算过的推荐的命中、清空或耗时统计改坏（`advisor/session/selection.py` 的 `AdviceMemo`、`advisor/perfstats.py`）
   - `OverlayTest`／`UiEventsTest` 失败 → 界面上刷新／切方案／改正的当场重算，或界面上放的事件没当场交给悬浮窗（`advisor/ui/overlay.py`、`advisor/session/core.py`）；`test_same_row_back_to_back_logged_apart` 失败 → 推荐日志没按记账的结论分开两次（`advisor/ui/overlay_parts/records.py` 的 `OfferLog.on_advice`、事件的 `select_no`），或记账没认出紧接着的另一次（`selection.py` 的 `starts_another`）
+
+## test_game_report.py：对局报告——从推荐日志拼、存进推荐日志文件夹下的 upload、启动时补拼、发送和清理
+
+- **测试观点**（按测试类分）：
+  - `BuildTest`：同一个 `offer_id` 的 offer、选择、反馈各取最后一条（同一次三选一分在两局时只算在最后一条 offer 的那一局，前一局不带）；旧日志里的「重选」写成「刷新」；`via` 只认 `panel`、`supplement`；反馈只带原因、不带补充说明；`evals` 的筹码只写名字，另带稀有度和流派，整份筹码资料和给人看的整句都不带；白名单外的字段不带；职业倾向照抄 `[职业, 分值]`；`unrecorded` 是整数下标组成的数组（含非空的）；`reroll`、`picks` 的各项只收数和布尔值，`top` 只收整数，写成文字、小数的写 null；按方案推荐的那份方案（推荐日志里记的 `Plan.record`）写回分享码，和拿原来那套方案直接写的一样、同一档里的先后也对得上，写不出来时这一条为 null；`client` 取最后一个非空的；`started` 换成 UTC 只到分钟；`end` 取紧跟在这份报告最后一次三选一后面（不早于它、不超过 `GAME_GAP`）的最后一条 gameover，在它之前、隔得太久、时刻读不出的都不算；`result`（第 2 版报告）和 `end` 出自同一条 gameover：没有 `end` 时为 null，那一条没记胜负（旧日志、胜负还没定）时两项都是 null，胜负结束以后才定、后记的那一条带着的取得到，`outcome`、`how` 只认 `win`/`loss`、`victory`/`reward`/`game_over`（大小写一字不差），别的值（大小写不对、数字、布尔、数组、对象、空文字）那一项写 null；`since` 以前的三选一不带、一条都不剩时为 None；截断（文字、`evals`、`parts`、队友、数组）和 NaN、Infinity、要数处的布尔值写 null；版本号认不出时用当前的版本。
+  - `StoreTest`：报告紧凑写（没缩进、UTF-8 不带 BOM，`schema` 是 2）、先写临时文件再改名、同一局覆盖同一份且编号不变、关着开关时不写；报告编号是本机另存的随机值、换行、局号拼起来的 MD5（同收数据的服务那一头的算法；本机编号照旧写进报告，但不参与算编号，换了它编号不变），`index.json` 丢了重拼还是同一个编号、同一份文件；同时识别两个客户端时两张各自的一局各拼一份，互不覆盖、不串选择。
+  - `PruneClearTest`：删掉 30 天以上的、超过 50 份时删最旧的，不是报告的文件不碰；`clear` 删报告和 `index.json`；待发份数只数报告文件。
+  - `BackfillTest`：离现在不到 `GAME_GAP` 的不拼、拼过的不拼、`since` 以前的不拼；有没有 gameover 都拼，记了结束的也等到隔够 `GAME_GAP`（误认的结束以后撤销了新一局、接着打的，不拼这半局）；隔了很久才认到的结束（离最后一次三选一超过 `GAME_GAP`）不带进 `end`，`index.json` 里这一局 `ended` 为 false；同一次三选一的前一条在别的局、后一条在这一局时，只补拼后一局（前一局没有别的三选一就不拼）；索引里记的界线让下次从「界线 − GAME_GAP」起读；`index.json` 丢了再补拼，编号不变、还是同一份。
+  - `TargetTest`：设了环境变量就发到它；开发版、复刻的版本只存不发；发行版加官方源代码才发到正式地址。
+  - `SendTest`：gzip 压缩、头和两个超时照传；200 删掉；400、413、415 删掉并记一行（带状态码和回话里的 error，不带报告内容）；429、503、411、连不上都留着并停、同一次运行只记一行；一次最多发 `SEND_MAX` 份；中途关掉开关就停。
+  - `InstallTest`：本机编号、随机值都是随机的 32 位小写十六进制；报告编号（`report_id_for`）同一随机值、同一局总是同一个，换了随机值或局号就不同。
+  - `IntakeTest`：本机起作业站的收数据服务，发一份、核对收下并存在数据文件夹、本机那份删掉。
+- **检证对象**：`advisor/game_report.py` 的 `build`、`assemble`、`backfill`、`prune`、`clear`、`pending_count`、`send_pending`、`target`、`new_install`、`new_secret`、`report_id_for`、`folder`、`report_path`，以及它用到的 `advisor/logbook.py` 的 `records_between`、`advisor/fileio.py` 的整份写入、`advisor/winhttp.py` 的 `Session.post`。
+- **什么时候要跑**：改了 `advisor/game_report.py`、报告格式（字段、上限、状态码怎么处理），或改了 `advisor/logbook.py` 记 offer 的字段（`client`）、`advisor/winhttp.py` 的 POST。
+- **怎么单独跑**：`python -B tools/run_tests.py --only test_game_report`（上次约 1 秒）。
+- **需要什么**：报告格式的检查函数（`report_format.clean_report`）和收数据服务（`intake.py`）在收数据服务那一头，这个仓库里没有：环境变量 `ACC_REPORT_CHECK` 指向放它们的文件夹时，核格式和端到端那几条才跑；没设时自动跳过，其余照跑。发送用假的联网会话，端到端只连本机 `127.0.0.1`。
+- **输出怎么看**：同总则；拼出来的报告都过一遍格式检查，失败时 `ReportError.code` 是哪个字段不对（例如 `bad_field:offers[0].state.star`）。
+- **出错时一般是哪里不对**：
+  - `BuildTest` 失败 → 报告里的字段、类型、上限或拼法（取哪一条、`since` 怎么比、分享码怎么写）改了；先看断言里的字段路径，再看 `REPORT_FORMAT.md`。`test_result_*` 失败 → `result` 取的不是 `end` 那一条，或 `OUTCOMES`、`HOWS` 的认法放宽了（收数据的服务认到别的值会整份回 400，这一份就删了）。
+  - `StoreTest`、`PruneClearTest`、`BackfillTest` 失败 → 存的位置、`index.json` 的写法、界线或清理的规矩改了；`test_recent_game_over_waits`、`test_going_on_after_false_end` 失败 → 补拼不再对所有局都等 `GAME_GAP`（`backfill`、`_games`）。
+  - `SendTest` 失败 → 状态码怎么处理（删、留）、请求头或 gzip 改了；400/413/415 和其余状态码的分法见 `REPORT_FORMAT.md` 的「服务怎么回」。
+  - `IntakeTest` 失败 → 报告过不了格式检查（收数据服务回 400），或发送、删除、`index.json` 的先后不对。

@@ -11,6 +11,7 @@ import threading
 import unittest
 from datetime import datetime
 from pathlib import Path
+from unittest import mock
 
 from advisor import gamelog, paths, version
 from advisor.gamelog import GameRecorder, mask_record, player_code, read_segment, stamp
@@ -285,6 +286,152 @@ class SegmentTest(RecorderCase):
             self.assertLess(f.stat().st_size, 2048 + 200)
         records, _ = rec.collect()
         self.assertEqual(records[0]["kind"], "segment")
+
+
+class CollectStatsTest(RecorderCase):
+    """collect_stats：识别记录还留着的各段里、最近 12 小时的统计类记录。"""
+
+    def test_only_stats_kinds(self):
+        """只留 STATS_KINDS 里的记录和 mark: 标记，对局里逐帧的读数、推荐等不带。"""
+        rec = self.recorder().open()
+        for kind in ("read:hud", "advice", "read:players", "status", "picked", "newgame",
+                     "recog_stats", "grab_stats", "pause", "resume", "capture", "layer",
+                     "download_stats", "ocr_check", "read:menu_idle", "read:quiet", "read:finish_look",
+                     "mark:game_over", "mark:newgame_hint"):
+            rec.add(self.clock.tick(1), {"kind": kind})
+        rec.flush()
+        records, meta = rec.collect_stats()
+        self.assertEqual([r["kind"] for r in records],
+                         ["segment", "recog_stats", "grab_stats", "pause", "resume", "capture", "layer",
+                          "download_stats", "ocr_check", "read:menu_idle", "read:quiet", "read:finish_look",
+                          "mark:game_over", "mark:newgame_hint"])
+        self.assertEqual(meta["hours"], 12.0)
+        self.assertEqual(meta["segments"], 1)
+        self.assertEqual(meta["lines"], len(records))
+        self.assertEqual(meta["since"], records[0]["time"])
+        self.assertNotIn("errors", meta)
+
+    def test_layer_without_cover_class(self):
+        """窗口层次记录去掉盖住悬浮窗的那个窗口的类名（STATS_DROP），其余各项照带；识别记录本身不动。"""
+        rec = self.recorder().open()
+        rec.add(self.clock.tick(1), {"kind": "layer", "state": "other", "layer": "below", "cover_class": "SomeAppWindow",
+                                     "game_class": "UnityWndClass", "game_title": "AstralParty_CN"})
+        rec.add(self.clock.tick(1), {"kind": "layer", "state": "game", "layer": "top"})
+        rec.flush()
+        records, _ = rec.collect_stats()
+        layers = [r for r in records if r["kind"] == "layer"]
+        self.assertEqual(len(layers), 2)
+        self.assertNotIn("cover_class", layers[0])
+        self.assertEqual((layers[0]["layer"], layers[0]["game_class"], layers[0]["game_title"]),
+                         ("below", "UnityWndClass", "AstralParty_CN"))
+        self.assertEqual(layers[1]["layer"], "top")
+        kept, _ = rec.collect()  # 导出本局和上一局时照旧带着
+        self.assertIn("SomeAppWindow", [r.get("cover_class") for r in kept])
+
+    def test_only_recent_hours(self):
+        """只留 self._clock() 往前 12 小时以内的；time 读不出来的不要。"""
+        rec = self.recorder().open()
+        rec.add(self.clock.now - 13 * 3600, {"kind": "recog_stats", "period_s": 60.0})
+        rec.add(self.clock.now - 11 * 3600, {"kind": "recog_stats", "period_s": 60.0})
+        rec.add(self.clock.now, {"kind": "grab_stats"})
+        rec._lines.append(json.dumps({"time": "读不出来的时刻", "kind": "recog_stats"}, ensure_ascii=False))
+        records, meta = rec.collect_stats()
+        self.assertEqual([r["kind"] for r in records], ["segment", "recog_stats", "grab_stats"])
+        self.assertEqual(meta["hours"], 12.0)
+        self.assertEqual(records[0]["kind"], "segment")  # 段头在 12 小时以内，照带
+
+    def test_clock_set_back_keeps_latest(self):
+        """系统时间被调回以后：调回以前记的（时刻比现在还晚）照样带上，最近的记录不会丢。"""
+        rec = self.recorder().open()
+        rec.add(self.clock.tick(60), {"kind": "recog_stats", "n": 1})
+        self.clock.tick(-3600)  # 系统时间调回一小时
+        rec.add(self.clock.tick(60), {"kind": "recog_stats", "n": 2})
+        records, meta = rec.collect_stats()
+        self.assertEqual([(r["kind"], r.get("n")) for r in records],
+                         [("segment", None), ("recog_stats", 1), ("recog_stats", 2)])
+        self.assertEqual(meta["lines"], 3)
+
+    def test_old_segment_header_kept(self):
+        """段头早于 12 小时，这一段的统计有留下的就带上段头。"""
+        rec = self.recorder().open()
+        head_time = rec._lines and json.loads(rec._lines[0])["time"]
+        self.clock.tick(13 * 3600)
+        rec.add(self.clock.now, {"kind": "recog_stats"})
+        records, _ = rec.collect_stats()
+        self.assertEqual([r["kind"] for r in records], ["segment", "recog_stats"])
+        self.assertEqual(records[0]["time"], head_time)
+
+    def test_segments_without_stats_skipped(self):
+        """一段里只有逐帧读数、段头又早于 12 小时时，这一段的段头也不用带。"""
+        rec = self.recorder().open()
+        self.hud(rec, 1)
+        self.clock.tick(13 * 3600)
+        rec.new_segment("newgame", cause="select")
+        rec.add(self.clock.tick(1), {"kind": "recog_stats"})
+        records, meta = rec.collect_stats()
+        self.assertEqual([r["kind"] for r in records], ["segment", "recog_stats"])
+        self.assertEqual(records[0]["reason"], "newgame")
+        self.assertEqual(meta["segments"], 1)
+
+    def test_memory_lines_without_flush(self):
+        """当前段还没写盘的行也在。"""
+        rec = self.recorder().open()
+        rec.add(self.clock.tick(1), {"kind": "recog_stats", "period_s": 60.0})
+        self.assertEqual(len(lines(rec.path)), 1)  # 只有段头写盘，统计还在内存
+        records, meta = rec.collect_stats()
+        self.assertEqual([r["kind"] for r in records], ["segment", "recog_stats"])
+        self.assertEqual(meta["lines"], 2)
+
+    def test_memory_segment_when_unwritable(self):
+        """写盘出过错时当前段的文件不在 segments() 里，内存里的当前段也要带上。"""
+        self.folder.parent.mkdir(parents=True, exist_ok=True)
+        self.folder.write_text("不是文件夹", encoding="utf-8")
+        rec = self.recorder().open()
+        rec.add(self.clock.tick(1), {"kind": "recog_stats"})
+        self.assertTrue(rec.error)
+        self.assertEqual(rec.segments(), [])
+        records, meta = rec.collect_stats()
+        self.assertEqual([r["kind"] for r in records], ["segment", "recog_stats"])
+        self.assertEqual(meta["segments"], 1)
+
+    def test_each_file_read_once(self):
+        """同一个文件不读两遍。"""
+        rec = self.recorder().open()
+        self.hud(rec, 1)
+        rec.new_segment("newgame", cause="select")
+        rec.add(self.clock.tick(1), {"kind": "recog_stats"})
+        rec.close()
+        calls = []
+        original = gamelog._read_lines_or_raise
+
+        def counting(path):
+            calls.append(path)
+            return original(path)
+
+        with mock.patch.object(gamelog, "_read_lines_or_raise", side_effect=counting):
+            records, meta = self.recorder().collect_stats()
+        self.assertEqual(len(calls), len(set(calls)))
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(meta["segments"], 2)
+        self.assertEqual([r["kind"] for r in records].count("segment"), 2)
+
+    def test_bad_file_skipped_and_error_recorded(self):
+        """读文件出错的那一段跳过，说明里另记 errors。"""
+        rec = self.recorder().open()
+        rec.add(self.clock.tick(1), {"kind": "recog_stats"})
+        rec.close()
+        name = rec.path.name
+
+        def broken(path):
+            raise OSError("读不了")
+
+        with mock.patch.object(gamelog, "_read_lines_or_raise", side_effect=broken):
+            records, meta = self.recorder().collect_stats()
+        self.assertEqual(records, [])
+        self.assertEqual(meta["segments"], 0)
+        self.assertEqual(meta["lines"], 0)
+        self.assertIsNone(meta["since"])
+        self.assertIn("读不了", meta["errors"][name])
 
 
 class PruneTest(RecorderCase):

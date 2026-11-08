@@ -9,6 +9,9 @@
   几行（machine_lines）；电源计划只写名字（系统自带的四个，别的写 other），不写原始 GUID，计划不是「平衡」时电源模式
   写「不适用」；displays 读屏幕时本线程临时切到按每块屏幕的缩放、读完切回，切不成时标明没按实际缩放读；不是 Windows
   时模块照样导入得了。
+- 设置窗口「只用大核」一项用的两个：cpu_label（处理器名称去掉 (R)、(TM)、®、™ 这类记号，空白并成一个，读不到、去掉以后
+  什么都不剩时为 None；测试沙箱把它换成读不到，原函数在 sandbox.real_cpu_label）；on_small_cores（性能自检比出来的收益到了
+  BIG_CORE_GAIN_MIN 才算排在小核上，没比过、不是数时说不准）。
 
 系统调用换成假的（模块级的 _kernel32、_user32、_shcore、_powrprof），只在 Windows 上真调一次（只影响跑测试的这个进程）。
 错误记录写进测试自己的临时文件，不写真的错误记录。
@@ -27,6 +30,7 @@ from ctypes import wintypes
 from unittest import mock
 
 from advisor import sysinfo
+from tests.support import sandbox
 from tests.support.errors import capture_errors
 
 
@@ -225,6 +229,58 @@ class ParseCpuSetsTest(unittest.TestCase):
         self.assertEqual(classes, [{"efficiency": 0, "cores": 64, "logical": 128, "processors": "组0：0-63；组1：0-63"}])
 
 
+class CpuLabelTest(unittest.TestCase):
+    """设置窗口「只用大核」一项写的处理器名称（cpu_label）：注册表里的名称（_cpu_name，这里换成假的）去掉商标记号。"""
+
+    def label(self, raw):
+        with mock.patch.object(sysinfo, "_cpu_name", return_value=raw):
+            return sandbox.real_cpu_label()
+
+    def test_marks_removed(self):
+        """(R)、(TM) 不分大小写，®、™ 单个字符：去掉，紧挨着的两个词中间留一个空格；连续的空白（含注册表名称末尾常有的
+        一串空格、制表符）并成一个，头尾不留。"""
+        cases = {
+            "13th Gen Intel(R) Core(TM) i9-13980HX": "13th Gen Intel Core i9-13980HX",
+            "14th Gen Intel(R) Core(TM) i9-14900HX": "14th Gen Intel Core i9-14900HX",
+            "Intel(R) Core(TM) Ultra 9 285H": "Intel Core Ultra 9 285H",
+            "AMD Ryzen AI 9 HX 370 w/ Radeon 890M            ": "AMD Ryzen AI 9 HX 370 w/ Radeon 890M",
+            "  Intel(r) Core(tm)\ti7-12700H  ": "Intel Core i7-12700H",
+            "AMD Ryzen™ 7 7840HS w/ Radeon® 780M": "AMD Ryzen 7 7840HS w/ Radeon 780M",
+            "Intel(R)Core(TM)i5-12400": "Intel Core i5-12400",
+        }
+        for raw, label in cases.items():
+            with self.subTest(raw=raw):
+                self.assertEqual(self.label(raw), label)
+
+    def test_unknown(self):
+        """读不到、空串、去掉记号以后什么都不剩：None。"""
+        for raw in (None, "", "   ", "(R)(TM) ®"):
+            with self.subTest(raw=raw):
+                self.assertIsNone(self.label(raw))
+
+    def test_sandbox_reads_nothing(self):
+        """测试里一律按读不到（不读跑测试的这台电脑的注册表）。"""
+        self.assertIsNone(sysinfo.cpu_label())
+
+
+class OnSmallCoresTest(unittest.TestCase):
+    """性能自检比出来的收益（只用大核快几倍）算不算排在小核上（on_small_cores）。"""
+
+    def test_threshold(self):
+        """到了 BIG_CORE_GAIN_MIN（1.3 倍，正好到也算）为 True；比过、不到为 False（本来就在大核上）。"""
+        self.assertEqual(sysinfo.BIG_CORE_GAIN_MIN, 1.3)
+        for gain, small in ((2.0, True), (1.3, True), (3, True), (1.29, False), (1.0, False), (1, False),
+                            (0.7, False)):
+            with self.subTest(gain=gain):
+                self.assertIs(sysinfo.on_small_cores(gain), small)
+
+    def test_unknown(self):
+        """没比过（None）、不是数（文字、true / false）、不是有限的数：None（说不准）。"""
+        for gain in (None, "2.0", True, False, float("nan"), float("inf"), [2.0]):
+            with self.subTest(gain=gain):
+                self.assertIsNone(sysinfo.on_small_cores(gain))
+
+
 class MachineLinesTest(unittest.TestCase):
     """把 machine_info() 的结果写成中文几行（machine_lines）：大小核、只有一种核心、多于两组、用电池加节电、读不到。"""
 
@@ -328,6 +384,13 @@ class MachineLinesTest(unittest.TestCase):
             {"width": 2560, "height": 1440, "scale": None, "primary": True, "virtualized": True},
             {"width": 1920, "height": 1080, "scale": None, "primary": False}]})
         self.assertIn("显示器：2560×1440（缩放读不到，分辨率可能是按缩放换算后的，主屏）；1920×1080（缩放读不到）", lines)
+
+    def test_display_refresh(self):
+        """有刷新率时接在最后写「144 Hz」；读不到时不写这一项。"""
+        lines = sysinfo.machine_lines({"displays": [
+            {"width": 2560, "height": 1440, "scale": 100, "refresh": 144, "primary": True},
+            {"width": 1920, "height": 1080, "scale": 100, "refresh": None, "primary": False}]})
+        self.assertIn("显示器：2560×1440（100%，主屏，144 Hz）；1920×1080（100%）", lines)
 
 
 def guid(text: str) -> sysinfo.GUID:
@@ -474,6 +537,7 @@ class FakeScreens:
         info = pointer._obj
         info.rcMonitor.left, info.rcMonitor.top, info.rcMonitor.right, info.rcMonitor.bottom = 0, 0, width, height
         info.dwFlags = sysinfo.MONITORINFOF_PRIMARY if primary else 0
+        info.szDevice = f"\\\\.\\DISPLAY{handle}"
         return 1
 
     def GetDpiForMonitor(self, handle, kind, dpi_x, dpi_y):
@@ -487,8 +551,8 @@ class DisplaysTest(unittest.TestCase):
     照旧读，不写缩放，标明 virtualized。系统调用换成假的（FakeScreens）。"""
 
     MONITORS = [(1, 1920, 1080, False, 96), (2, 3840, 2160, True, 144)]
-    EXACT = [{"width": 3840, "height": 2160, "scale": 150, "primary": True},
-             {"width": 1920, "height": 1080, "scale": 100, "primary": False}]
+    EXACT = [{"width": 3840, "height": 2160, "scale": 150, "refresh": None, "primary": True},
+             {"width": 1920, "height": 1080, "scale": 100, "refresh": None, "primary": False}]
 
     def use(self, fake: FakeScreens) -> FakeScreens:
         for name in ("_user32", "_shcore"):
@@ -516,8 +580,10 @@ class DisplaysTest(unittest.TestCase):
     def test_cannot_switch(self):
         """切不成（返回 NULL）、老系统没有切换的函数（连查 DPI 感知的两个函数也没有）：照旧读，宽高是换算后的值，不写缩放
         （不问 GetDpiForMonitor），每块都标 virtualized；没切成时不调切回。"""
-        virtualized = [{"width": 2560, "height": 1440, "scale": None, "primary": True, "virtualized": True},
-                       {"width": 1920, "height": 1080, "scale": None, "primary": False, "virtualized": True}]
+        virtualized = [{"width": 2560, "height": 1440, "scale": None, "refresh": None, "primary": True,
+                        "virtualized": True},
+                       {"width": 1920, "height": 1080, "scale": None, "refresh": None, "primary": False,
+                        "virtualized": True}]
         for kwargs, switches in (({"switch": "fail"}, [sysinfo.DPI_CONTEXT_PER_MONITOR_V2]),
                                  ({"switch": None}, []), ({"switch": None, "query": False}, [])):
             with self.subTest(**kwargs):
@@ -537,6 +603,42 @@ class DisplaysTest(unittest.TestCase):
         self.use(FakeScreens(self.MONITORS))
         with mock.patch.object(sysinfo, "_shcore", None):
             self.assertEqual(sysinfo.displays(), [dict(item, scale=None) for item in self.EXACT])
+
+    def refresh_fake(self, fake: FakeScreens, values: dict, error: Exception | None = None):
+        """给假的 user32 接上 EnumDisplaySettingsW：设备名 → dmDisplayFrequency；error 时抛出它。"""
+        def enum(device, mode_num, pointer):
+            if error is not None:
+                raise error
+            self.assertEqual(mode_num, sysinfo.ENUM_CURRENT_SETTINGS)
+            pointer._obj.dmDisplayFrequency = values[device]
+            return 1
+
+        fake.EnumDisplaySettingsW = enum
+        return fake
+
+    def test_refresh_read(self):
+        """每块屏幕的刷新率（EnumDisplaySettingsW 的 dmDisplayFrequency）读得到，主屏排第一。"""
+        fake = self.use(FakeScreens(self.MONITORS))
+        self.refresh_fake(fake, {"\\\\.\\DISPLAY1": 60, "\\\\.\\DISPLAY2": 144})
+        self.assertEqual([item["refresh"] for item in sysinfo.displays()], [144, 60])
+
+    def test_refresh_default_modes_are_none(self):
+        """系统报 0、1（硬件默认）时算读不到：refresh 为 None，其余照旧。"""
+        for value in (0, 1):
+            with self.subTest(value=value):
+                fake = self.use(FakeScreens(self.MONITORS))
+                self.refresh_fake(fake, {"\\\\.\\DISPLAY1": value, "\\\\.\\DISPLAY2": value})
+                self.assertEqual([item["refresh"] for item in sysinfo.displays()], [None, None])
+
+    def test_refresh_missing_or_error(self):
+        """假的 user32 里没有这个函数、或调用抛出：refresh 为 None，不抛错，其余照旧。"""
+        fake = self.use(FakeScreens(self.MONITORS))
+        self.assertFalse(hasattr(fake, "EnumDisplaySettingsW"))
+        self.assertEqual([item["refresh"] for item in sysinfo.displays()], [None, None])
+        self.refresh_fake(fake, {}, error=OSError("读不了"))
+        self.assertEqual([item["refresh"] for item in sysinfo.displays()], [None, None])
+        fake.EnumDisplaySettingsW = lambda *args: 0
+        self.assertEqual([item["refresh"] for item in sysinfo.displays()], [None, None])
 
 
 @unittest.skipUnless(sys.platform == "win32", "只在 Windows 上真调一次")
@@ -639,6 +741,8 @@ class RealDisplaysTest(unittest.TestCase):
             with self.subTest(item=item):
                 self.assertAlmostEqual(item["scale"], row[3], delta=1)
                 self.assertNotIn("virtualized", item)
+        for item in got:  # 刷新率：真读得到时是一个正常的整数，读不到时为 None
+            self.assertTrue(item["refresh"] is None or item["refresh"] >= 20, item)
 
 
 class NotWindowsImportTest(unittest.TestCase):

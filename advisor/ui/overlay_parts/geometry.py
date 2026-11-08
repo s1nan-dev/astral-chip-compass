@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from PySide6.QtCore import QPoint, QRect, QSize
 from PySide6.QtGui import QGuiApplication
 
+from .. import lang
 from .wording import CORNERS, COVER_POLLS
 
 
@@ -102,19 +103,64 @@ def fit_on_any_screen(pos: QPoint, size: tuple[int, int], screens: list[QRect]) 
 
 
 def overlay_position(game: QRect, size: tuple[int, int], rel, default_rel, screens: list[QRect],
-                     live: bool = False) -> QPoint:
+                     live: bool = False, avoid=()) -> QPoint:
     """有游戏窗口、按相对位置 rel 放悬浮窗时的位置：整个挪进重叠最多的屏幕。
 
     rel 算出的位置和所有屏幕都不重叠时（例如拖到游戏窗口外侧之后，游戏换到另一块屏幕并最大化，外侧已经没有屏幕），
     这次改放默认位置 default_rel（三选一显示期间按 live_placement 挑挡得最少的）。保存的 rel 不改，游戏窗口回到
-    原来的布局时照旧使用。
+    原来的布局时照旧使用。avoid 是同时识别时另一张悬浮窗的外框（live_placement 的 avoid）。
     """
     fitted = fit_rect(rel_point(game, rel, size), size, screens)
     if fitted is not None:
         return fitted
     if live:
-        return live_placement(game, size, default_rel, screens)
+        return live_placement(game, size, default_rel, screens, avoid)
     return fit_on_any_screen(rel_point(game, default_rel, size), size, screens)
+
+
+def beside(other: QRect, size: tuple[int, int], screens: list[QRect], prefer: str = "left") -> QPoint | None:
+    """紧挨着 other（另一张悬浮窗的外框）放一个 size 大的窗口：依次试 prefer 那一侧、另一侧、下边、上边，取第一个
+    整个落在某块屏幕的可用区域里、又不和 other 相交的位置；都不行时返回 None。
+
+    默认先试左边：悬浮窗的默认位置在游戏画面右边缘（DEFAULT_REL），右边多半已经出了屏幕。prefer="right" 时先试
+    右边（「重置悬浮窗」时 Steam 那张放在正中，TapTap 那张排在它右边）。"""
+    w, h = size
+    left = QPoint(other.x() - PLACE_GAP - w, other.y())
+    right = QPoint(other.x() + other.width() + PLACE_GAP, other.y())
+    sides = (right, left) if prefer == "right" else (left, right)
+    candidates = [
+        *sides,
+        QPoint(other.x(), other.y() + other.height() + PLACE_GAP),
+        QPoint(other.x(), other.y() - PLACE_GAP - h),
+    ]
+    for pos in candidates:
+        rect = QRect(pos, QSize(w, h))
+        if any(area.contains(rect) for area in screens) and not rect.intersects(other):
+            return pos
+    return None
+
+
+def pair_position(first: QRect, size: tuple[int, int], area: QRect, screens: list[QRect]) -> QPoint:
+    """「重置悬浮窗」时第二张的位置：第一张已经放在主显示器可用区域 area 的正中，第二张紧挨着它放。
+
+    依次试：
+    1. 只在主显示器 area 里紧挨着第一张的位置（右边优先）；
+    2. 放到第一张右边、上沿对齐，再整个挪进 area。挪完不和第一张相交就用它：第二张比第一张高、下边出了屏幕时
+       往上挪，仍贴着第一张的右边；
+    3. 到别的屏幕上紧挨着第一张找（右边优先）；
+    4. 都不行时用第 2 步挪进 area 的位置：屏幕太小，只好叠着放；放得进 area 时整张都在 area 里，比 area 还大时
+       左上角对齐 area（clamp_into）。
+    """
+    found = beside(first, size, [area], prefer="right")
+    if found is not None:
+        return found
+    snug = clamp_into(QPoint(first.x() + first.width() + PLACE_GAP, first.y()), size, area)
+    if not QRect(snug, QSize(*size)).intersects(first):
+        return snug
+    found = beside(first, size, screens, prefer="right")
+    if found is not None:
+        return found
+    return snug
 
 
 # 三选一界面上不该被悬浮窗挡住的区域，以「界面单位」（1080p 窗口里的 1 像素）计，量自 3840x2054 和 1920x1027 的截图：
@@ -123,6 +169,8 @@ def overlay_position(game: QRect, size: tuple[int, int], rel, default_rel, scree
 PICK_HALF_W, PICK_TOP, PICK_BOTTOM = 700, 140, 810
 REFRESH_W, REFRESH_Y = 160, (400, 560)
 PLACE_GAP = 6  # 放在游戏窗口外侧时和窗口边缘的间隔（逻辑像素）
+# 三选一自动让开时挡住另一张悬浮窗的权重：那一张整个看不见，比挡住候选筹码的说明更不好，比挡住「刷新」按钮轻
+AVOID_WEIGHT = 2
 
 
 def pick_zones(game: QRect) -> list[tuple[QRect, int]]:
@@ -137,13 +185,14 @@ def pick_zones(game: QRect) -> list[tuple[QRect, int]]:
     return [(chips, 1), (refresh, 3)]
 
 
-def live_placement(game: QRect, size: tuple[int, int], rel, screens: list[QRect]) -> QPoint:
+def live_placement(game: QRect, size: tuple[int, int], rel, screens: list[QRect], avoid=()) -> QPoint:
     """三选一界面显示着、用户没有拖动过悬浮窗时的位置：在几个候选位置里挑挡住三选一最少的。
 
     候选位置：默认位置（rel，右侧「刷新」按钮下方）、游戏窗口右侧外面、左侧外面、游戏画面右下角和左下角（盖住三选一
     期间不可用的出牌区、右下角按钮或左下角的「查看筹码」按钮）。窗口小（例如 1920x1080、100% 缩放）时默认位置会挡住
     第 3 个候选筹码的说明文字，窗口化且屏幕上有空间时改放到游戏窗口外侧；全屏时放到右下角，只挡住说明文字的末尾。
-    「刷新」按钮被挡住的代价按 3 倍算。都挡住同样多时按上面的顺序取。
+    「刷新」按钮被挡住的代价按 3 倍算，avoid（同时识别时另一张悬浮窗的外框）按 AVOID_WEIGHT 算。都挡住同样多时按
+    上面的顺序取。
     """
     w, h = size
     default = rel_point(game, rel, size)
@@ -155,7 +204,7 @@ def live_placement(game: QRect, size: tuple[int, int], rel, screens: list[QRect]
         QPoint(game.x() + round(0.985 * game.width()) - w, bottom),
         QPoint(game.x() + round(0.015 * game.width()), bottom),
     ]
-    zones = pick_zones(game)
+    zones = pick_zones(game) + [(rect, AVOID_WEIGHT) for rect in avoid]
     scored = []
     for pos in candidates:
         pos = fit_rect(pos, size, screens)
@@ -195,24 +244,43 @@ class WindowPlan:
     tip: str
 
 
-def window_plan(state: str, method: str, manual: bool, live: bool, covered: int = 0) -> WindowPlan:
+def window_plan(state: str, method: str, manual: bool, live: bool, covered: int = 0,
+                companion: str | None = None) -> WindowPlan:
     """六种前台状态下识别是否暂停、窗口层次、热键是否登记、胶囊和悬停说明。不碰 Win32。
 
     state：game 游戏窗口在前台 / own 拾星助手自己的窗口在前台 / background 其他程序在前台 / minimized 游戏窗口最小化 /
     nogame 找不到游戏窗口；method：window 直接截取游戏窗口 / screen 截取屏幕；manual：手动模式；live：筹码三选一界面
-    显示着；covered：其他程序在前台时，别的窗口已经连续几次盖住悬浮窗（满 COVER_POLLS 次才退到它后面）。
+    显示着；covered：其他程序在前台时，别的窗口已经连续几次盖住悬浮窗（满 COVER_POLLS 次才退到它后面）；companion：
+    同时识别时另一张悬浮窗的前台状态（只有一张时为 None，见下面一条）。
 
     直接截取：游戏窗口不在前台照常识别、照常置顶（标「识别 照常进行」；手动模式平时不截图，只在跟随三选一时标），
     被盖住时退到盖住它的窗口后面，三选一出现时回到最前面；只有最小化、找不到游戏窗口时暂停、不再置顶。
-    截取屏幕：游戏和悬浮窗都不在前台时暂停、不再置顶。热键只在游戏窗口在前台时登记。"""
+    截取屏幕：游戏和悬浮窗都不在前台时暂停、不再置顶。热键只在游戏窗口在前台时登记。
+
+    找不到游戏窗口时本来不置顶（没开游戏时不浮在别的程序上面），同时识别时另看另一张：它的游戏在前台（game）或者
+    拾星助手自己的窗口在前台（own）时这张也置顶，玩家才看得见这张、知道这个端没开；另一张的游戏切到后台、最小化、
+    也找不到或者没有另一张时照旧不置顶（不浮在别的程序上面，另一张的游戏是玩家自己收起来的也不跟）。识别照旧暂停、
+    热键照旧不登记。别的状态只在下面说的这一种看 companion。
+
+    同时识别、玩家在玩另一个游戏时，这张也要看得见：state 是 background、另一张的游戏或拾星助手自己的窗口在前台
+    （companion 是 game、own）时，不管别的窗口有没有盖住悬浮窗都置顶（三选一显示着时照旧排到最前面）；截取屏幕时
+    照旧暂停识别，但也置顶（同找不到游戏窗口那张）。另一个游戏的窗口盖住这张不算被别的程序盖住：玩家正看着那个游戏，
+    两张悬浮窗都在游戏画面范围里，退到它后面就整个看不见了。"""
     if state == "nogame":
-        return WindowPlan(True, "nogame", "none", False, "", "")
+        layer = "top" if companion in ("game", "own") else "none"
+        return WindowPlan(True, "nogame", layer, False, "", "")
     if state == "minimized":
         return WindowPlan(True, "minimized", "none", False, "paused", "minimized")
     if state == "game":
         return WindowPlan(False, "", "top", True, "", "")
     if state == "own":
         return WindowPlan(False, "", "top", False, "", "")
+    if state == "background" and companion in ("game", "own"):
+        if method != "window":
+            return WindowPlan(True, "screen-background", "top", False, "paused", "screen")
+        running = not manual or live
+        return WindowPlan(False, "", "front" if live else "top", False, "running" if running else "",
+                          "away" if running else "")
     if method != "window":
         return WindowPlan(True, "screen-background", "none", False, "paused", "screen")
     running = not manual or live
@@ -239,8 +307,13 @@ def probe_state(info) -> str:
 
 
 def _window_gone_texts() -> tuple[str, ...]:
-    """后台识别取不到画面时经 status 发来的两句（找不到游戏窗口、游戏窗口已最小化）：直接用 vision/capture.py 抛出时的
-    那两句，那边改了写法也认得出。"""
+    """后台识别取不到画面时经 status 发来的几句（找不到游戏窗口、游戏窗口已最小化、设了游戏平台但开着的是另一个端、
+    指定了端但那个端的窗口没开）：直接用 vision/capture.py 抛出时的那几句，那边改了写法也认得出。"""
     from ...vision import capture
 
-    return capture.NOT_FOUND, capture.MINIMIZED
+    # 一次性提示（Message.text）存的是显示用的写法：后台识别、跟随游戏窗口的部件交给悬浮窗以前已经转好（界面是繁体时
+    # 是繁体），这里按同样的写法列，和它比
+    texts = (capture.NOT_FOUND, capture.MINIMIZED,
+             *(capture.NOT_FOUND_PLATFORM.format(name=name) for name in capture.PLATFORM_NAMES.values()),
+             *(capture.NOT_FOUND_ONE.format(name=name) for name in capture.PLATFORM_NAMES.values()))
+    return tuple(lang.t(text) for text in texts)

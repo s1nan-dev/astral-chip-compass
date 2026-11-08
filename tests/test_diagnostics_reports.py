@@ -1,7 +1,7 @@
 """诊断包的写盘加固和脱敏（advisor/diagnostics.py）：先在 .partial 里写、写完再改名，写一半出错留 .partial 并抛
 ExportError；自动保存的包有标记、按份数只留最近 20 份（手动导出的、没有标记的、链接过去的、名字不对的一个都不删，
-文件被占用的那一份整份留着）；另带的三选一读不全时的那一帧、记下选中项用的那一帧、被临时盖住而没有采用的那一帧（文件名带
-时刻、state.json 记一笔，没有时不多写）；另带换版本的记录 update.log（有才带，读不了的记一笔）；路径脱敏到
+文件被占用的那一份整份留着）；另带的三选一读不全时的那一帧、记下选中项用的那一帧、被临时盖住而没有采用的那一帧、对局中途
+像一局打完的那一帧（文件名带时刻、state.json 记一笔，没有时不多写）；另带更新的记录 update.log（查更新、下载、换版本，有才带，读不了的记一笔）；路径脱敏到
 %USERPROFILE%/%APPDATA%/%LOCALAPPDATA%/%USERNAME%（只换完整的路径段，不碰 JSON 的转义）；自检的必备数据文件；
 「系统」一行不查 WMI，WMI 卡住时导出照常做完。临时文件放在 .tmp 下。
 """
@@ -22,7 +22,7 @@ from unittest import mock
 import cv2
 import numpy as np
 
-from advisor import diagnostics, fileio, paths, sysinfo
+from advisor import diagnostics, errors, fileio, paths, sysinfo
 
 try:
     import _winapi
@@ -95,9 +95,20 @@ class ExportStagingTest(unittest.TestCase):
                 diagnostics.export(None, {}, [], "", extra={name: []})
         self.assertEqual(list(self.reports.iterdir()), [])
 
+    def test_usage_jsonl_written_via_extra(self):
+        """每分钟的占用记录经 extra 写成 usage.jsonl；这个名字不占 RESERVED（它正是经 extra 写的）。"""
+        records = [{"at": "2026-11-07T15:00:00", "s": 60.0, "process": 12.0}, {"at": "2026-11-07T15:01:00", "s": 60.0}]
+        out = diagnostics.export(None, {}, [], "", extra={diagnostics.USAGE: records})
+        lines = (out / diagnostics.USAGE).read_text(encoding="utf-8").splitlines()
+        self.assertEqual([json.loads(line) for line in lines], records)
+        self.assertNotIn(diagnostics.USAGE.lower(), [name.lower() for name in diagnostics.RESERVED])
+        self.assertNotIn(diagnostics.STATS.lower(), [name.lower() for name in diagnostics.RESERVED])
+        with self.assertRaises(ValueError):
+            diagnostics.export(None, {}, [], "", extra={diagnostics.CRASH_LOGS[0]: []})
+
 
 class UpdateLogTest(unittest.TestCase):
-    """诊断包带上换版本的记录（程序目录 logs 里的 update.log，软件内更新换版本以后收尾时写）：写法同设置和方案文件——有才带，
+    """诊断包带上更新的记录（程序目录 logs 里的 update.log，查更新、下载、换版本都写）：写法同设置和方案文件——有才带，
     文字里的用户主目录照样换成 %USERPROFILE%、换行不变；没有时不带、不算问题；读不了、过大时不带，原因记在 state.json 的
     settings_files_error；另带的文件名不能用它。程序目录的 logs 换成临时文件夹。"""
 
@@ -118,9 +129,10 @@ class UpdateLogTest(unittest.TestCase):
         return json.loads((out / diagnostics.STATE).read_text(encoding="utf-8"))
 
     def test_same_file_as_update_apply(self):
-        """收的就是换版本收尾时写的那个文件（advisor/update_apply.py 的 KEPT_LOG，在程序目录的 logs 里）。"""
-        from advisor import update_apply
+        """收的就是查更新、下载、换版本共用的那个文件（advisor/update_log.py 和 update_apply.py 的 KEPT_LOG，在程序目录的 logs 里）。"""
+        from advisor import update_apply, update_log
 
+        self.assertEqual(diagnostics.UPDATE_LOG, update_log.KEPT_LOG)
         self.assertEqual(diagnostics.UPDATE_LOG, update_apply.KEPT_LOG)
         self.assertIn(diagnostics.UPDATE_LOG, diagnostics.RESERVED)
 
@@ -140,7 +152,7 @@ class UpdateLogTest(unittest.TestCase):
         self.assertEqual((out / "update.log").read_bytes(), b"\xff\xfe not utf-8")
 
     def test_missing(self):
-        """没有换版本的记录（从没换过版本、开发版）：不带，不算问题，导出照常。"""
+        """没有更新的记录（从没查过、下过、换过版本，或开发版）：不带，不算问题，导出照常。"""
         out = diagnostics.export(None, {}, [], "")
         self.assertNotIn("update.log", [p.name for p in out.iterdir()])
         self.assertNotIn("settings_files_error", self.state(out))
@@ -179,6 +191,167 @@ class UpdateLogTest(unittest.TestCase):
             with self.subTest(name=name), self.assertRaises(ValueError):
                 diagnostics.export(None, {}, [], "", extra={name: []})
         self.assertEqual(list(self.reports.iterdir()), [])
+
+
+class LogsTest(unittest.TestCase):
+    """手动导出的诊断包带上错误记录和崩溃记录（advisor/diagnostics.py 的 _copy_logs）：有才带，空的不带；不是 UTF-8 的
+    字节不抛错、照样把账户名换掉；超大的只带末尾；自动保存的不带；文件名和 startup 的两个相同。"""
+
+    def setUp(self):
+        dirs = [tmpdir(name) for name in ("reports", "settings", "temp")]
+        for d in dirs:
+            self.addCleanup(d.cleanup)
+        self.reports, self.settings, self.temp = (Path(d.name) for d in dirs)
+        self.err = self.temp / "overlay_err.txt"
+        for patcher in (mock.patch.object(paths, "reports_dir", return_value=self.reports),
+                        mock.patch.object(paths, "state_path", return_value=self.settings / "state.json"),
+                        mock.patch.object(paths, "schemes_path", return_value=self.settings / "schemes.json"),
+                        mock.patch.object(paths, "temp_dir", return_value=self.temp),
+                        mock.patch.object(errors, "ERR_FILE", self.err)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def state(self, out: Path) -> dict:
+        return json.loads((out / diagnostics.STATE).read_text(encoding="utf-8"))
+
+    def test_names_match_startup(self):
+        from advisor.ui import startup
+
+        self.assertEqual(diagnostics.CRASH_LOGS, (startup.CRASH_NAME, startup.CRASH_OLD_NAME))
+        for name in diagnostics.CRASH_LOGS:
+            self.assertIn(name, diagnostics.RESERVED)
+
+    def test_carried_and_scrubbed(self):
+        """四样都带：错误记录、它的旧记录、crash.txt、crash.old.txt；账户名（含崩溃记录里 \\uXXXX 的写法）都换掉。"""
+        user = "C:\\Users\\玩家"
+        escaped = paths._ascii_escaped(user)
+        self.err.write_text(f"[2026-11-07 15:00:00] 错误 {user}\\x.txt\n[2026-11-07 15:01:00] 又一条\n", encoding="utf-8")
+        errors.old_path(self.err).write_text(f"[2026-11-06 10:00:00] 旧错误 C:\\data\\玩家\\y.txt\n", encoding="utf-8")
+        (self.temp / "crash.txt").write_text(f"Windows fatal exception\n  File \"{escaped}\\z.py\", line 1\n",
+                                             encoding="utf-8")
+        (self.temp / "crash.old.txt").write_text(f"旧崩溃 {user}\\w.txt\n", encoding="utf-8")
+        with mock.patch.dict(os.environ, {"USERPROFILE": user, "USERNAME": "玩家"}):
+            out = diagnostics.export(None, {}, [], "")
+        names = {p.name for p in out.iterdir()}
+        for name in ("overlay_err.txt", "overlay_err.old.txt", "crash.txt", "crash.old.txt"):
+            self.assertIn(name, names)
+        for name in ("overlay_err.txt", "overlay_err.old.txt", "crash.txt", "crash.old.txt"):
+            text = (out / name).read_text(encoding="utf-8")
+            self.assertTrue("%USERPROFILE%" in text or "%USERNAME%" in text, text)
+            self.assertNotIn("玩家", text)
+            self.assertNotIn("\\u73a9", text)
+        self.assertIn("%USERNAME%", (out / "overlay_err.old.txt").read_text(encoding="utf-8"))
+        self.assertNotIn("settings_files_error", self.state(out))
+
+    def test_not_utf8_bytes_do_not_fail(self):
+        """不是 UTF-8 的字节不抛错：解成替换符，照样换掉路径里的账户名。"""
+        user = "C:\\Users\\玩家"
+        (self.temp / "crash.old.txt").write_bytes(b"bad \xff\xfe " + user.encode("utf-8") + b"\\a.txt\n")
+        with mock.patch.dict(os.environ, {"USERPROFILE": user, "USERNAME": "玩家"}):
+            out = diagnostics.export(None, {}, [], "")
+        text = (out / "crash.old.txt").read_text(encoding="utf-8")
+        self.assertIn("\ufffd", text)
+        self.assertIn("%USERPROFILE%", text)
+        self.assertNotIn("玩家", text)
+
+    def test_auto_does_not_carry_logs(self):
+        self.err.write_text("错误\n", encoding="utf-8")
+        (self.temp / "crash.txt").write_text("崩溃\n", encoding="utf-8")
+        out = diagnostics.export(None, {}, [], "", auto=True)
+        names = {p.name for p in out.iterdir()}
+        self.assertNotIn("overlay_err.txt", names)
+        self.assertNotIn("crash.txt", names)
+
+    def test_empty_files_are_skipped(self):
+        (self.temp / "crash.txt").write_text("", encoding="utf-8")
+        out = diagnostics.export(None, {}, [], "")
+        self.assertNotIn("crash.txt", {p.name for p in out.iterdir()})
+        self.assertNotIn("settings_files_error", self.state(out))
+
+    def test_too_big_keeps_tail(self):
+        text = "开头" * 30 + "末尾"
+        self.err.write_text(text, encoding="utf-8")
+        with mock.patch.object(diagnostics, "USER_FILE_MAX", 10):
+            out = diagnostics.export(None, {}, [], "")
+        carried = (out / "overlay_err.txt").read_text(encoding="utf-8")
+        self.assertTrue(carried.startswith("（文件过大，只带了末尾的内容）\n"))
+        self.assertTrue(carried.endswith(text.encode("utf-8")[-10:].decode("utf-8", "replace")))
+
+    def test_too_big_drops_partial_line(self):
+        """切开处落在路径中间时那半行不要：前面的 C:\\Users\\ 被切掉以后，scrub_paths 认不出后面的账户名，不能带出去。"""
+        user = "C:\\Users\\玩家"
+        kept = "下一行\n"
+        cut = f"玩家\\AppData\\x.txt\n{kept}".encode("utf-8")  # 只带末尾这么多字节：正好切在账户名前面
+        self.err.write_bytes(f"开头\n{user}\\AppData\\x.txt\n{kept}".encode("utf-8"))
+        with mock.patch.object(diagnostics, "USER_FILE_MAX", len(cut)), \
+                mock.patch.dict(os.environ, {"USERPROFILE": user, "USERNAME": "玩家"}):
+            out = diagnostics.export(None, {}, [], "")
+        self.assertEqual((out / "overlay_err.txt").read_text(encoding="utf-8"),
+                         "（文件过大，只带了末尾的内容）\n" + kept)
+
+    def test_extension_modules_line_dropped(self):
+        """Python 附在崩溃记录末尾的已加载扩展模块那一行不带（诊断包不记进程里加载的模块），各线程停在哪一行照旧。"""
+        (self.temp / "crash.txt").write_text(
+            "Fatal Python error: Segmentation fault\n\n"
+            "Current thread 0x00005e04 (most recent call first):\n"
+            '  File "a.py", line 5 in <module>\n\n'
+            "Extension modules: numpy._core._multiarray_umath, cv2 (total: 2)\n"
+            "Windows fatal exception: access violation\n", encoding="utf-8")
+        out = diagnostics.export(None, {}, [], "")
+        text = (out / "crash.txt").read_text(encoding="utf-8")
+        self.assertNotIn("Extension modules", text)
+        self.assertNotIn("numpy", text)
+        self.assertIn('File "a.py", line 5 in <module>', text)
+        self.assertIn("Windows fatal exception: access violation", text)
+
+    def test_unreadable_recorded(self):
+        self.err.write_text("错误\n", encoding="utf-8")
+        read = Path.read_bytes
+
+        def locked(path: Path) -> bytes:
+            if path.name == "overlay_err.txt":
+                raise PermissionError(13, "拒绝访问")
+            return read(path)
+
+        with mock.patch.object(Path, "read_bytes", locked):
+            out = diagnostics.export(None, {}, [], "")
+        self.assertNotIn("overlay_err.txt", {p.name for p in out.iterdir()})
+        self.assertIn("PermissionError", self.state(out)["settings_files_error"]["overlay_err.txt"])
+
+    def test_self_check_item_not_critical(self):
+        with mock.patch.object(diagnostics, "usage_check", return_value={"threads": 3, "stack_threads": 1}), \
+                mock.patch.object(diagnostics, "_render_text", side_effect=RuntimeError("不画")), \
+                mock.patch.object(diagnostics, "window_capture_check", return_value={}):
+            result = diagnostics.self_check()
+        item = next(c for c in result["checks"] if c["name"] == diagnostics.USAGE_CHECK)
+        self.assertEqual((item["ok"], item["critical"]), (True, False))
+
+
+class UsageCheckTest(unittest.TestCase):
+    """自检「占用采样」（diagnostics.usage_check）：只有一个 Python 线程时也看得出取不取得到调用栈；枚举不到线程、量不了时抛错；
+    取调用栈出错时把原因带进结果。"""
+
+    @unittest.skipUnless(sys.platform == "win32", "只在 Windows 上真量线程")
+    def test_real_probe_sees_companion_stack(self):
+        """自检通常只有调用它的一个 Python 线程：陪量的线程要算进 stack_threads，量完就结束。"""
+        before = threading.active_count()
+        result = diagnostics.usage_check()
+        self.assertGreaterEqual(result["threads"], 1)
+        self.assertGreaterEqual(result["stack_threads"], 1)
+        self.assertNotIn("stacks_error", result)
+        self.assertEqual(threading.active_count(), before)
+
+    def test_no_threads_or_no_result_raises(self):
+        for value in (None, {"thread_count": 0, "stack_threads": 0}):
+            with self.subTest(value=value), mock.patch("advisor.usage.probe", return_value=value):
+                with self.assertRaises(RuntimeError):
+                    diagnostics.usage_check()
+
+    def test_stacks_error_reported(self):
+        got = {"thread_count": 3, "stack_threads": 0, "stacks_error": "RuntimeError: 拿不到"}
+        with mock.patch("advisor.usage.probe", return_value=got):
+            self.assertEqual(diagnostics.usage_check(),
+                             {"threads": 3, "stack_threads": 0, "stacks_error": "RuntimeError: 拿不到"})
 
 
 class ZipReportTest(unittest.TestCase):
@@ -308,6 +481,7 @@ class SelectShotsTest(unittest.TestCase):
     PICKED = {"slot": 1, "chip": "标靶", "watch": True, "region": [10, 20, 32, 24]}
     COVERED = {"slots": [2], "raw": ["会员推荐信", "标靶", "标记"], "names": ["会员推荐信", "标靶", "标记喷罐"],
                "rarity": ["蓝", "蓝", None], "selected": 2}
+    FINISH = {"look": "coral", "coral": 0.9, "white": 0.25, "round": 12, "size": [3840, 2160]}
 
     def setUp(self):
         self._dir = tmpdir("reports")
@@ -350,11 +524,23 @@ class SelectShotsTest(unittest.TestCase):
             self.assertNotIn(f"{key}_error", state)
         self.assertNotIn("select_unreadable", state)
 
+    def test_finish_look_written(self):
+        """对局中途像一局打完的那一帧：另写 finish-look-时分秒.png，state.json 的 finish_look 记下时刻、情况和文件名。"""
+        finish = self.image((10, 120, 200))
+        out = diagnostics.export(None, {}, [], "", finish_look=(self.WHEN, finish, self.FINISH))
+        state = self.state(out)
+        self.assertEqual(state["finish_look"], {"time": "2026-01-02T12:00:01.250", **self.FINISH,
+                                               "file": "finish-look-120001.png"})
+        got = cv2.imdecode(np.fromfile(str(out / "finish-look-120001.png"), dtype=np.uint8), cv2.IMREAD_COLOR)
+        self.assertTrue(np.array_equal(got, finish))  # PNG 无损：就是交来的那一帧
+        self.assertNotIn("finish_look_error", state)
+
     def test_nothing_extra_without_them(self):
         out = diagnostics.export(None, {}, [], "")
         self.assertEqual([p.name for p in out.iterdir() if p.name.startswith(diagnostics.SHOT_PREFIXES)], [])
         state = self.state(out)
-        for key in ("select_picked", "select_covered", "select_picked_error", "select_covered_error"):
+        for key in ("select_picked", "select_covered", "select_picked_error", "select_covered_error",
+                    "finish_look", "finish_look_error"):
             self.assertNotIn(key, state)
 
     def test_one_encode_error(self):
@@ -383,10 +569,145 @@ class SelectShotsTest(unittest.TestCase):
         self.assertFalse((out / "不是文件名.png").exists())
 
     def test_extra_name_cannot_take_them(self):
-        for name in ("select-picked-120001.png", "Select-Covered-x.jsonl", "SELECT-PICKED-1.jsonl"):
+        for name in ("select-picked-120001.png", "Select-Covered-x.jsonl", "SELECT-PICKED-1.jsonl",
+                     "finish-look-120001.png", "Finish-Look-x.jsonl"):
             with self.subTest(name=name), self.assertRaises(ValueError):
                 diagnostics.export(None, {}, [], "", extra={name: []})
         self.assertEqual(list(self.reports.iterdir()), [])
+
+
+class LaneReportTest(unittest.TestCase):
+    """同时识别两个客户端时，诊断包里另带另一张悬浮窗的子文件夹（export 的 lanes）：frame.png 是它最近取到的那一帧，
+    events.jsonl 是它的本局和上一局识别记录（文字照样脱敏），state.json 的 lanes.<端名> 里调用方给的状态照旧，另记
+    没写成画面时的原因 frame_error；端名查不过时抛 ValueError、不建诊断包；不给时和只有一张时一样。"""
+
+    HOME = os.path.expanduser("~")
+
+    def setUp(self):
+        self._dir = tmpdir("reports")
+        self.reports = Path(self._dir.name)
+        self._home = tmpdir("settings")
+        self.settings = Path(self._home.name)
+        for patcher in (mock.patch.object(paths, "reports_dir", return_value=self.reports),
+                        mock.patch.object(paths, "state_path", return_value=self.settings / "state.json"),
+                        mock.patch.object(paths, "schemes_path", return_value=self.settings / "schemes.json")):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.addCleanup(self._dir.cleanup)
+        self.addCleanup(self._home.cleanup)
+
+    @staticmethod
+    def state(out: Path) -> dict:
+        return json.loads((out / diagnostics.STATE).read_text(encoding="utf-8"))
+
+    @staticmethod
+    def image(value) -> np.ndarray:
+        img = np.zeros((24, 32, 3), np.uint8)
+        img[4:8, 5:9] = value
+        return img
+
+    def test_written_with_frame_and_events(self):
+        """另一张的 frame.png 逐像素就是交来的那一帧，events.jsonl 逐行就是交来的记录（路径照样换成 %USERPROFILE%）；
+        调用方给的悬浮窗状态、对局快照都在 state.json 的 lanes.<端名> 下，没有 frame_error；顶层还是第一张的。"""
+        image = self.image((10, 200, 30))
+        events = [
+            {"time": "2026-10-03T14:00:00.000", "kind": "segment", "reason": "startup"},
+            {"time": "2026-10-03T14:00:05.000", "kind": "read:hud", "round": 2},
+            {"time": "2026-10-03T14:00:06.000", "kind": "note", "path": self.HOME + "\\记录.txt"},
+        ]
+        snapshot = {"hero": "凛", "lanes": {"taptap": {"diagnostic_state": {"scale": 100},
+                                                       "session": {"round": 2}}}}
+        out = diagnostics.export(self.image((90, 90, 90)), snapshot, [{"kind": "first"}], "推荐",
+                                 lanes={"taptap": {"frame": image, "events": events}})
+        got = cv2.imdecode(np.fromfile(str(out / "taptap" / diagnostics.FRAME), dtype=np.uint8), cv2.IMREAD_COLOR)
+        self.assertTrue(np.array_equal(got, image))  # PNG 无损：就是交来的那一帧
+        lines = (out / "taptap" / diagnostics.EVENTS).read_text(encoding="utf-8").splitlines()
+        self.assertEqual([json.loads(line) for line in lines[:2]], events[:2])
+        self.assertEqual(json.loads(lines[2]), {**events[2], "path": "%USERPROFILE%\\记录.txt"})
+        self.assertNotIn(self.HOME, lines[2])
+        entry = self.state(out)["lanes"]["taptap"]
+        self.assertEqual(entry["diagnostic_state"], {"scale": 100})
+        self.assertEqual(entry["session"], {"round": 2})
+        self.assertNotIn("frame_error", entry)
+        self.assertTrue((out / diagnostics.FRAME).is_file())  # 顶层是第一张的画面
+        self.assertEqual([json.loads(line) for line in
+                          (out / diagnostics.EVENTS).read_text(encoding="utf-8").splitlines()], [{"kind": "first"}])
+
+    def test_written_with_stats(self):
+        """另一张的 stats 有就给它的子文件夹写 stats.jsonl（逐行就是交来的记录，路径照样脱敏）；不给时不写。"""
+        stats = [{"time": "2026-10-03T14:00:00.000", "kind": "recog_stats", "period_s": 60.0},
+                 {"time": "2026-10-03T14:00:05.000", "kind": "capture", "path": self.HOME + "\\记录.txt"}]
+        out = diagnostics.export(None, {}, [], "",
+                                 lanes={"taptap": {"frame": None, "events": [], "stats": stats}})
+        lines = (out / "taptap" / diagnostics.STATS).read_text(encoding="utf-8").splitlines()
+        self.assertEqual(json.loads(lines[0]), stats[0])
+        self.assertEqual(json.loads(lines[1]), {**stats[1], "path": "%USERPROFILE%\\记录.txt"})
+        self.assertNotIn(self.HOME, lines[1])
+        out = diagnostics.export(None, {}, [], "", lanes={"taptap": {"frame": None, "events": []}})
+        self.assertFalse((out / "taptap" / diagnostics.STATS).exists())
+
+    def test_without_frame_records_reason(self):
+        out = diagnostics.export(None, {}, [], "", lanes={"taptap": {"frame": None, "events": [{"kind": "x"}]}})
+        self.assertFalse((out / "taptap" / diagnostics.FRAME).exists())
+        entry = self.state(out)["lanes"]["taptap"]
+        self.assertEqual(entry["frame_error"], diagnostics.NO_FRAME)
+        self.assertEqual(entry["frame_error"], "导出时没有可用的游戏画面")
+        self.assertTrue((out / "taptap" / diagnostics.EVENTS).is_file())  # 识别记录照写
+
+    def test_encode_error_recorded(self):
+        """画面编码不了：原因带类型名记进 frame_error，识别记录照写，诊断包照常导出。"""
+        with mock.patch.object(diagnostics, "_encode_png", side_effect=ValueError("编不了")):
+            out = diagnostics.export(None, {"hero": "凛"}, [], "",
+                                     lanes={"taptap": {"frame": object(), "events": [{"kind": "x"}]}})
+        entry = self.state(out)["lanes"]["taptap"]
+        self.assertEqual(entry["frame_error"], "ValueError: 编不了")
+        self.assertFalse((out / "taptap" / diagnostics.FRAME).exists())
+        self.assertEqual((out / "taptap" / diagnostics.EVENTS).read_text(encoding="utf-8").splitlines(),
+                         ['{"kind": "x"}'])
+        self.assertEqual(self.state(out)["hero"], "凛")
+        self.assertIsNotNone(diagnostics.REPORT_NAME.match(out.name))
+
+    def test_bad_lane_names_rejected(self):
+        """端名不是小写字母和数字（末尾带换行也不算）、和顶层文件或 extra 的文件名重名、以那几种截图名字开头、是 Windows
+        的设备名：抛 ValueError，不建诊断包。"""
+        for lanes in ({"": {}}, {"..": {}}, {"taptap/x": {}}, {"TapTap": {}}, {"state.json": {}},
+                      {"frame.png": {}}, {"select-picked-x": {}}, {"taptap\n": {}}, {"con": {}}, {"nul": {}},
+                      {"aux": {}}, {"prn": {}}, {"com1": {}}, {"lpt9": {}}):
+            with self.subTest(lanes=lanes), self.assertRaises(ValueError):
+                diagnostics.export(None, {}, [], "", lanes=lanes)
+        with self.assertRaises(ValueError):  # 和 extra 里的文件名一样
+            diagnostics.export(None, {}, [], "", extra={"taptap": []}, lanes={"taptap": {}})
+        self.assertEqual(list(self.reports.iterdir()), [])
+
+    def test_lane_state_kept_when_missing_or_not_dict(self):
+        """snapshot 里没有 lanes、lanes.<端名> 不是字典、lanes 本身不是字典时：照样写好，原来的值放进 state 一项，不丢。"""
+        lanes = {"taptap": {"frame": None, "events": []}}
+        out = diagnostics.export(None, {}, [], "", lanes=lanes)
+        self.assertEqual(self.state(out)["lanes"]["taptap"]["frame_error"], diagnostics.NO_FRAME)
+        out = diagnostics.export(None, {"lanes": {"taptap": "旧内容"}}, [], "", lanes=lanes)
+        entry = self.state(out)["lanes"]["taptap"]
+        self.assertEqual(entry["state"], "旧内容")
+        self.assertEqual(entry["frame_error"], diagnostics.NO_FRAME)
+        out = diagnostics.export(None, {"lanes": "旧内容"}, [], "", lanes=lanes)
+        lanes_state = self.state(out)["lanes"]
+        self.assertEqual(lanes_state["state"], "旧内容")
+        self.assertEqual(lanes_state["taptap"]["frame_error"], diagnostics.NO_FRAME)
+
+    def test_zip_includes_lane_folder(self):
+        import zipfile
+
+        out = diagnostics.export(None, {}, [], "",
+                                 lanes={"taptap": {"frame": self.image((5, 6, 7)), "events": [{"kind": "x"}]}})
+        with zipfile.ZipFile(diagnostics.zip_report(out)) as zf:
+            names = zf.namelist()
+        self.assertIn(f"{out.name}/taptap/frame.png", names)
+        self.assertIn(f"{out.name}/taptap/events.jsonl", names)
+
+    def test_no_lanes_no_subfolder(self):
+        for kwargs in ({}, {"lanes": None}, {"lanes": {}}):
+            with self.subTest(kwargs=kwargs):
+                out = diagnostics.export(None, {}, [], "", **kwargs)
+                self.assertEqual([p.name for p in out.iterdir() if p.is_dir()], [])
 
 
 class PruneTest(unittest.TestCase):
@@ -804,6 +1125,44 @@ class MachineInfoExportTest(unittest.TestCase):
         self.assertNotIn("处理器：", version)
         state = json.loads((out / diagnostics.STATE).read_text(encoding="utf-8"))
         self.assertEqual(state["system"], {"error": "RuntimeError: 读不到"})
+
+
+class HubLoginLineTest(unittest.TestCase):
+    """version.txt 的「作业站登录」一行只写有没有，不写昵称和令牌（令牌只在本机的凭据管理器里）；作业站的入口关着
+    （hub.ENABLED）时不写这一行，也不查凭据管理器。"""
+
+    def setUp(self):
+        dirs = [tmpdir(name) for name in ("hub-login-reports", "hub-login-settings")]
+        for d in dirs:
+            self.addCleanup(d.cleanup)
+        self.reports, self.settings = (Path(d.name) for d in dirs)
+        for patcher in (mock.patch.object(paths, "reports_dir", return_value=self.reports),
+                        mock.patch.object(paths, "state_path", return_value=self.settings / "state.json"),
+                        mock.patch.object(paths, "schemes_path", return_value=self.settings / "schemes.json")):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_line(self):
+        """入口开着：本机有没有登录信息各写「有」「没有」，只查一次凭据管理器。"""
+        for present, state in ((True, "有"), (False, "没有")):
+            with self.subTest(present=present), mock.patch.object(diagnostics.hub, "ENABLED", True), \
+                    mock.patch.object(diagnostics.wincred, "exists", return_value=present) as exists:
+                out = diagnostics.export(None, {}, [], "")
+                text = (out / diagnostics.VERSION_FILE).read_text(encoding="utf-8")
+                self.assertIn(diagnostics.HUB_LOGIN_LINE.format(state=state), text)
+                exists.assert_called_once_with(diagnostics.hub.CRED_TARGET)
+                self.assertNotIn("昵称", text)
+
+    def test_no_line_when_hub_off(self):
+        """入口关着：没有「作业站登录」这一行，也不查凭据管理器（本机存着登录信息也一样）。"""
+        with mock.patch.object(diagnostics.hub, "ENABLED", False), \
+                mock.patch.object(diagnostics.wincred, "exists", return_value=True) as exists:
+            out = diagnostics.export(None, {}, [], "")
+            text = (out / diagnostics.VERSION_FILE).read_text(encoding="utf-8")
+        self.assertNotIn(diagnostics.HUB_LOGIN_LINE.split("：")[0], text)
+        self.assertNotIn("作业站", text)
+        exists.assert_not_called()
+        self.assertIn("设置目录：", text)  # 前后几行照写
 
 
 if __name__ == "__main__":

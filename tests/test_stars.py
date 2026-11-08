@@ -73,6 +73,56 @@ class OwnStarsTest(_FreshCache):
         self.assertIsNone(read_own_stars(load("20261002_021351_battle_scene.png", 1920), "远野汉娜"))
 
 
+@unittest.skipUnless(samples.samples_ok(RIN_SELECT, DREAM_DIM, KNOCKED_OUT),
+                     samples.samples_reason(RIN_SELECT, DREAM_DIM, KNOCKED_OUT))
+class QuickPathTest(_FreshCache):
+    """三选一上读星数只走快的那一路（read_own_stars 的 quick）：头像按平时的几种摇摆认得出时和全试的结果一样；认不出时不再按
+    「轮到自己行动」的伸缩试（伸缩的那组模板一次都不取），这一帧当读不到；全试的照旧按伸缩再试。同一帧上两种分开记。"""
+
+    def wobble_calls(self, read):
+        """调 read()，返回（结果, 取脸部模板时的 wobble 参数，按先后）。"""
+        real = stars_module._face_templates
+        calls = []
+
+        def spy(hero_id, f, wobble=False):
+            calls.append(wobble)
+            return real(hero_id, f, wobble=wobble)
+
+        with mock.patch.object(stars_module, "_face_templates", side_effect=spy):
+            got = read()
+        return got, calls
+
+    def test_same_as_full_when_recognized(self):
+        for name, hero in ((RIN_SELECT, "凛"), (DREAM_DIM, "美咲")):
+            with self.subTest(name):
+                stars_module.reset_cache()
+                full = read_own_stars(load(name), hero)
+                stars_module.reset_cache()
+                quick, calls = self.wobble_calls(lambda: read_own_stars(load(name), hero, quick=True))
+                self.assertIsNotNone(quick)
+                self.assertEqual((quick.stars, quick.row, quick.how, quick.confidence),
+                                 (full.stars, full.row, full.how, full.confidence))
+                self.assertNotIn(True, calls)
+
+    def test_unrecognized_skips_wobble(self):
+        img = load(KNOCKED_OUT)  # 「昏迷」字样盖住了头像
+        got, calls = self.wobble_calls(lambda: read_own_stars(img, "照", quick=True))
+        self.assertIsNone(got)
+        self.assertTrue(calls)
+        self.assertNotIn(True, calls)
+        got, calls = self.wobble_calls(lambda: read_own_stars(img, "照"))
+        self.assertIsNone(got)
+        self.assertIn(True, calls)
+
+    def test_cached_apart(self):
+        frame = Frame(load(KNOCKED_OUT))
+        quick = stars_module.diagnose(frame, "照", quick=True)
+        full = stars_module.diagnose(frame, "照")
+        self.assertIsNot(quick, full)
+        self.assertIs(stars_module.diagnose(frame, "照", quick=True), quick)
+        self.assertIs(stars_module.diagnose(frame, "照"), full)
+
+
 @unittest.skipUnless(samples.samples_ok(DREAM_DIM, GARDEN_SELECT, GARDEN_HUD, KNOCKED_OUT),
                      samples.samples_reason(DREAM_DIM, GARDEN_SELECT, GARDEN_HUD, KNOCKED_OUT))
 class OwnRowFallbackTest(_FreshCache):

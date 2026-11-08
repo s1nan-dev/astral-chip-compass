@@ -154,7 +154,7 @@ LAUNCHER_REPORTED = 0xACC3
 LAUNCHER_MAX_BYTES = 1 << 20  # 根目录的 LAUNCHER_EXE 比这大就不是启动程序（启动程序约 0.1 MB，真正的程序约 46 MB）
 # 发行版里的使用说明：由 docs/使用说明.md 生成（manual_html），只写进发行版文件夹。packaging/ 下不留副本：
 # 截图嵌在网页里，每次生成的文件约 1 MB，留副本会让版本库每次打包都多一份；不打包时用 --manual 生成一份查看。
-# 文件名和托盘菜单「使用说明」打开的是同一个（paths.MANUAL_NAME）
+# 文件名和悬浮窗打开使用说明（Overlay.open_manual）时打开的是同一个（paths.MANUAL_NAME）
 MANUAL_NAME = paths.MANUAL_NAME
 # docs/manual 下的截图按两倍像素画（tools/make_manual_images.py 的 SCALE），网页里按一半的宽度显示。定义在 tools/manual_html.py：
 # GitHub Actions 里生成网页版用的是同一个入口，两边按同一份倍数画
@@ -182,7 +182,9 @@ SELFBUILD_WHEELS = {"opencv-python-headless": "opencv_python_headless-*.whl", "n
 
 # data/ 下随发行版发布的文件（白名单：只带这几样，data 下新加的 json/toml 不会自动进发行版）
 DATA_FILES = ("assets_manifest.json", "chips.json", "chip_codes.json", "heroes.json", "maps.json", "meta.json",
-              "mutators.json", "photo_tilt.json", "rules.toml", "series.toml", "synergy.toml")
+              "mutators.json", "photo_tilt.json", "rules.toml", "series.toml", "synergy.toml",
+              # 繁体界面的简繁对照表和补充词组：界面是繁体时运行时要读
+              "zh_hant.json", "zh_hant_extra.toml")
 # data/ 下只给开发用的工具读、不随发行版的文件：从卡面原画现裁角色照的裁法（生成识别图片清单时已照抄进 assets_manifest.json，
 # 程序运行时不读它）、首次运行不下载的健全版名单（生成识别图片清单时已挑掉，程序运行时也不读）
 DEV_ONLY_DATA = ("card_crops.json", "sfw_skip.json")
@@ -1952,7 +1954,7 @@ def manual_section() -> tuple[list[str], int]:
 
 
 def front_note() -> list[str]:
-    """首页 README.md 第一个「## 」标题之前、整行是粗体的段落（纯视觉声明、仅支持简体中文），每段后面空一行（同
+    """首页 README.md 第一个「## 」标题之前、整行是粗体的段落（纯视觉声明、支持的平台和游戏语言），每段后面空一行（同
     tools/manual_html.py 的 front_note）。发行版里没有首页，使用说明网页的开头（目录前面）照写这几段。"""
     return manual_page.front_note(ROOT)
 
@@ -2295,10 +2297,11 @@ def assemble(built: Path, python: Path, info: BuildInfo | None = None) -> BuildI
 
 def bundled_fonts() -> list[str]:
     """随发行版发布的字体文件（fonts 文件夹里的文件名）：程序登记的各套皮肤要用的字体文件（advisor/ui/theme/ 的
-    Fonts.FILES），按 theme.skins() 的先后、不重复。"""
+    Fonts.FILES），以及界面是繁体时换上的繁体子集（theme.HANT_FILES），按 theme.skins() 的先后、不重复。"""
     from advisor.ui import theme
 
-    return list(dict.fromkeys(name for skin in theme.skins() for name in skin.fonts.FILES))
+    return list(dict.fromkeys([*(name for skin in theme.skins() for name in skin.fonts.FILES),
+                               *theme.HANT_FILES.values()]))
 
 
 def project_sources() -> set[str]:
@@ -3138,17 +3141,18 @@ def _working_set_mb(pid: int) -> float | None:
         ctypes.windll.kernel32.CloseHandle(handle)
 
 
-GAME_TITLES = ("AstralParty_CN", "AstralParty_INT")  # 游戏窗口的标题：国服、国际服（与 advisor/ui/winapi.py 相同）
+GAME_TITLES = ("AstralParty_CN", "AstralParty_INT", "吉星派对")  # 游戏窗口的标题：Steam 版的两个、TapTap 版（与 advisor/vision/capture.py 相同）
+GAME_CLASS = "UnityWndClass"  # 游戏窗口的类名（三个版本相同）：标题和类名都对上才算，同名的文件夹窗口不算
 # 拾星助手正在运行时的提示（带 --smoke、--only-smoke 时，见 overlay_running）
 OVERLAY_RUNNING = ("拾星助手正在运行（开发版或发行版）：已有一个在运行时，试启动的程序会立即退出。"
                    "请先退出拾星助手（在托盘图标的菜单中选择「退出」）后重新运行；本脚本不结束正在运行的程序。")
 
 
 def game_running() -> bool:
-    """游戏窗口（国服、国际服的哪一个都算）是否开着。开着时不试启动悬浮窗：试启动的悬浮窗会截取游戏画面。只查窗口，
-    不截图。"""
+    """游戏窗口（Steam 版、TapTap 版的哪一个都算）是否开着。开着时不试启动悬浮窗：试启动的悬浮窗会截取游戏画面。
+    只查窗口，不截图。"""
     try:
-        return any(ctypes.windll.user32.FindWindowW(None, title) for title in GAME_TITLES)
+        return any(ctypes.windll.user32.FindWindowW(GAME_CLASS, title) for title in GAME_TITLES)
     except (AttributeError, OSError):
         return False
 
@@ -3492,10 +3496,19 @@ VISION_SAMPLES = (
     # 结算页（对局外画面）：结算页的读数
     {"file": "20261002_194121_result_normal_1600x1200.jpg",
      "hints": {"scene": "result"}},
+    # 奖励页（对局外画面）：「星币」那一格的数（定通关还是失败时用）
+    {"file": "20261003_132534_reward_2560x1369.jpg",
+     "hints": {"scene": "reward"}},
+    # 通关画面（录像帧）：珊瑚红底、中间的白色大字
+    {"file": "pages/20261105_010644_f051294_victory_text_1920x1080.png",
+     "hints": {"scene": "finish"}},
+    # 打输时的蓝色斜带（录像帧）：颜色、形状，转正以后认字
+    {"file": "pages/20261106_235502_f041328_game_over_banner_1920x1080.png",
+     "hints": {"scene": "finish"}},
 )
 
 # 每个识别读数由哪张样本读出真东西（打包报告里列出；tests/test_selfcheck_vision.py 核对这项覆盖）。
-# 键是 read_frame 读数里的项，值是 VISION_SAMPLES 里的文件名。
+# 键是 read_frame 读数里的项（reward_coins 是 pregame 里奖励页的星币数，单列一项），值是 VISION_SAMPLES 里的文件名。
 VISION_COVERAGE = {
     "prefilter": "20261002_213051_chipselect_team_task_tier1_real.jpg",
     "select": "20261002_213051_chipselect_team_task_tier1_real.jpg",
@@ -3511,6 +3524,11 @@ VISION_COVERAGE = {
     "stars": "20261002_213811_hud_round7_own_turn_real.jpg",
     "coins": "20261002_213811_hud_round7_own_turn_real.jpg",
     "players": "20261002_213811_hud_round7_own_turn_real.jpg",
+    "round_crop": "20261002_213811_hud_round7_own_turn_real.jpg",
+    "reward_coins": "20261003_132534_reward_2560x1369.jpg",
+    "finish": "pages/20261106_235502_f041328_game_over_banner_1920x1080.png",
+    "victory": "pages/20261105_010644_f051294_victory_text_1920x1080.png",
+    "game_over": "pages/20261106_235502_f041328_game_over_banner_1920x1080.png",
 }
 
 VISION_ARG = "--vision-samples"  # 和 packaging/chip_advisor.py 的 VISION_SAMPLES_ARG 相同
@@ -3612,9 +3630,9 @@ def compare_vision(source: dict, release: dict) -> list[str]:
 
 def vision_coverage(present) -> dict:
     """每一项识别读数由哪张样本覆盖（VISION_COVERAGE，报告里列出来）。present 是这一次读了的样本（文件名）：选好的那张
-    本机没有、这一次没读时写明这一项没覆盖到。"""
+    本机没有、这一次没读时写明这一项没覆盖到。VISION_COVERAGE 里 samples 子文件夹的图带着文件夹名，比的是文件名。"""
     have = set(present)
-    return {key: name if name in have else f"{name}（本机没有这张图，这一项这次没覆盖到）"
+    return {key: name if Path(name).name in have else f"{name}（本机没有这张图，这一项这次没覆盖到）"
             for key, name in VISION_COVERAGE.items()}
 
 
@@ -3655,7 +3673,7 @@ def vision_smoke() -> dict:
         return {"available": False, "skipped": "本机没有 samples\\（样本截图不随发行版），识别读数一项没跑"}
     names = [Path(item["file"]).name for item in items]
     result: dict = {"available": True, "samples": names, "coverage": vision_coverage(names),
-                    "uncovered": sorted(key for key, name in VISION_COVERAGE.items() if name not in names)}
+                    "uncovered": sorted(key for key, name in VISION_COVERAGE.items() if Path(name).name not in names)}
     if result["uncovered"]:
         log(f"识别读数：本机缺了几张选好的样本，这几项这次没覆盖到：{'、'.join(result['uncovered'])}")
     start = time.perf_counter()
@@ -3866,6 +3884,13 @@ def smoke_problems(result: dict) -> list[str]:
         tr = next((c for c in selfcheck["checks"] if isinstance(c, dict) and c.get("name") == TRANSLATION_CHECK), None)
         if tr is not None and not tr.get("ok"):
             problems.append(f"自检「{TRANSLATION_CHECK}」未通过：{tr.get('detail')}")
+        from advisor.diagnostics import OCR_RENDER_CHECK
+
+        # 程序自己画的图读不出来（「识别合成图」：发行版的 OpenCV 精简编译，画字、读字可能被裁掉）：不算关键项，打包时要求
+        # 通过。自检结果里没有这一项（加这项检查以前打的包）时不查
+        render = next((c for c in selfcheck["checks"] if isinstance(c, dict) and c.get("name") == OCR_RENDER_CHECK), None)
+        if render is not None and not render.get("ok"):
+            problems.append(f"自检「{OCR_RENDER_CHECK}」未通过：{render.get('detail')}")
         from advisor.diagnostics import BUILD_STATE
 
         # 打包信息（app 里的 build.json）：发行版自己要读得出，「关于」窗口和诊断包里才看得出是哪一个包。自检结果里没有这一项

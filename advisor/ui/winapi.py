@@ -3,7 +3,8 @@
 查本进程是不是按每块屏幕的缩放运行（dpi_awareness）；用户点「打开文件夹」时在资源管理器里打开（open_folder）。
 
 只查询窗口状态和设置自己窗口的属性，不向游戏发送任何输入，不激活、不移动任何窗口，不改游戏和别的程序的窗口。
-查别的窗口只看位置、大小和样式，不读标题、不截画面（类名只写进本机的识别记录）。
+查别的窗口只看位置、大小和样式，不读标题、不截画面（类名只写进本机的识别记录；游戏窗口记的标题就是找它时对上的那一个，
+不另读，也只写进本机的识别记录）。
 用单独的 WinDLL 实例声明参数类型，不影响其他模块里的 ctypes.windll.user32。
 """
 from __future__ import annotations
@@ -27,8 +28,9 @@ from ..win32 import get_window_long as _get_window_long
 from ..win32 import kernel32 as _kernel32
 from ..win32 import user32 as _user32
 
-# 游戏窗口的标题：国服、国际服，照先后找，找到哪个用哪个（与 advisor/vision/capture.py 的 WINDOW_TITLES 相同，理由写在那里）
-GAME_TITLES = ("AstralParty_CN", "AstralParty_INT")
+# 游戏窗口的标题：Steam 版的两个（国服、国际服）在前、TapTap 版在后，与 advisor/vision/capture.py 的 WINDOW_TITLES 相同
+# （测试核对）。这里照旧单写一份、不导入 capture：界面模块对识别包都是用到时才导入，导入界面时不连带加载识别库
+GAME_TITLES = ("AstralParty_CN", "AstralParty_INT", "吉星派对")
 COVER_MIN = 8  # 别的窗口和悬浮窗相交至少这么多像素（宽、高都要够）才算盖住
 MAX_WINDOWS = 4096  # 按层次往下数顶层窗口时最多数这么多个（数的过程中层次在变时不至于一直数下去）
 
@@ -39,7 +41,10 @@ class GameProbe:
 
     hwnd 是游戏窗口的句柄（找不到时为 None）；covered：别的程序的窗口盖住了悬浮窗（只在查询时给了悬浮窗、游戏和
     拾星助手自己的窗口都不在前台时才查）；cover_below：悬浮窗退后时插在哪个窗口下面（盖住它的窗口里最下面的那个）；
-    cover_class、game_class：盖住悬浮窗的窗口、游戏窗口的类名（只写进本机的识别记录）。"""
+    cover_class、game_class：盖住悬浮窗的窗口、游戏窗口的类名；game_title：这一次找到游戏窗口时对上的标题（capture 的
+    这一份找法交出来的，不读模块里上一次找到的那个，两路识别各拿各的；不另读窗口的标题；三个版本的类名一样，只有标题
+    分得出是哪个客户端）。这三项只写进本机的识别记录。notice：找不到游戏窗口时给玩家看的那一句（capture.missing_notice：
+    设了游戏平台、开着的是另一个端时点明是设置的原因，指定了端时写明没找到哪个端，其余是 NOT_FOUND）；找到时为空。"""
 
     found: bool
     rect: tuple[int, int, int, int] | None
@@ -51,6 +56,8 @@ class GameProbe:
     cover_below: int | None = None
     cover_class: str = ""
     game_class: str = ""
+    game_title: str = ""
+    notice: str = ""
 
 
 @dataclass(frozen=True)
@@ -163,34 +170,43 @@ def covering(windows, overlay: tuple[int, int, int, int], min_side: int = COVER_
     return out
 
 
-def find_game_hwnd(title=GAME_TITLES):
-    """照先后按标题找游戏窗口（title 可以是一个标题，也可以是几个），返回第一个找到的句柄；都找不到时为 None。"""
-    for name in (title,) if isinstance(title, str) else title:
-        game = _user32.FindWindowW(None, name)
-        if game:
-            return game
-    return None
+def find_game_hwnd(title=None, platform=None):
+    """按游戏平台设置找游戏窗口的句柄（找法见 advisor/vision/capture.py 的 _find）；都找不到时为 None。
+
+    给了 title 时照先后找那几个标题。platform 给了 STEAM、TAPTAP 时只找那个端的窗口，不看游戏平台设置（两路识别各找各的
+    端）；不给时按设置。用 capture 的那一份找法：截图、前台判断、悬浮窗查看游戏窗口认的一定是同一个窗口。"""
+    from ..vision import capture
+
+    return capture._find(title, platform) or None
 
 
-def probe_game(title=GAME_TITLES, cover: int | None = None) -> GameProbe:
-    """游戏窗口在哪、是不是最小化、前台是游戏还是拾星助手自己。游戏窗口照 find_game_hwnd 找（国服、国际服都认）。
+def probe_game(title=None, cover: int | None = None, platform=None, ignore=None) -> GameProbe:
+    """游戏窗口在哪、是不是最小化、前台是游戏还是拾星助手自己。游戏窗口照 find_game_hwnd 找（默认按游戏平台设置；
+    platform 给了 STEAM、TAPTAP 时只找那个端）。
 
     cover 是悬浮窗的句柄：给了、游戏窗口没有最小化、游戏和拾星助手自己的窗口都不在前台时，再查悬浮窗有没有被游戏窗口
-    上面的别的窗口盖住（直接截取游戏窗口时用；截取屏幕时不给）。"""
-    game = find_game_hwnd(title)
+    上面的别的窗口盖住（直接截取游戏窗口时用；截取屏幕时不给）。ignore 是同时识别时另一张悬浮窗跟的游戏窗口的句柄：
+    它不算盖住这张悬浮窗的窗口，玩家正看着那个游戏，两张悬浮窗叠在一起也不该让这张退到它后面。game_title 是这一次
+    找到它时对上的标题，notice 按这一次找的端说。"""
+    from ..vision import capture
+
+    located = capture._locate_for(title, platform)
+    game, game_title = located if located is not None else (0, "")
     fg = _user32.GetForegroundWindow()
     own = bool(fg) and _pid(fg) == os.getpid()
     if not game:
-        return GameProbe(False, None, False, False, own)
+        return GameProbe(False, None, False, False, own, notice=capture.missing_notice(platform))
     minimized = bool(_user32.IsIconic(game))
     rect = None if minimized else _client_rect(game)
     root = _user32.GetAncestor(fg, GA_ROOT) if fg else None
     game_fg = bool(fg) and (fg == game or root == game)
     probe = GameProbe(True, rect, minimized, game_fg and not minimized, own, hwnd=int(game),
-                      game_class=window_class(game))
+                      game_class=window_class(game), game_title=game_title)
     if cover and not minimized and not probe.game_foreground and not own:
         overlay = frame_rect(cover)
         found = covering(windows_above(int(game)), overlay) if overlay is not None else []
+        if ignore is not None:
+            found = [w for w in found if w.hwnd != int(ignore)]
         if found:
             lowest = found[-1]
             probe = replace(probe, covered=True, cover_below=lowest.hwnd, cover_class=window_class(lowest.hwnd))
@@ -232,6 +248,19 @@ def set_topmost(hwnd: int, on: bool) -> bool:
 def put_below(hwnd: int, after: int) -> bool:
     """把窗口放在 after 的正下方（after 不是置顶窗口时一并取消置顶），不移动、不改大小、不激活。"""
     return bool(_user32.SetWindowPos(hwnd, after, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE))
+
+
+# 桌面的窗口类名（Progman 是桌面的窗口，WorkerW 是它后面铺壁纸的那一层）
+DESKTOP_CLASSES = ("Progman", "WorkerW")
+
+
+def step_behind_foreground(hwnd: int) -> bool:
+    """把窗口放到前台窗口的正下方（不移动、不改大小、不激活）。前台没有窗口、是拾星助手自己、是置顶窗口（放在它下面又会变成
+    置顶）、是桌面（放在它下面就看不见了）时不动，返回 False。"""
+    fg, own = foreground()
+    if not fg or own or topmost(fg) or window_class(fg) in DESKTOP_CLASSES:
+        return False
+    return put_below(hwnd, fg)
 
 
 def bring_to_front(hwnd: int) -> bool:

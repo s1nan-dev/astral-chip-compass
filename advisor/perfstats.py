@@ -1,7 +1,9 @@
 """识别各步耗时和处理器占用的统计。
 
 程序运行中收集：每帧识别花多久（frame）、每次文字识别花多久（ocr）、各项读数各自花多久（read:名字）、算推荐花多久
-（advice）、界面线程的定时器晚到了多少（ui_lag）。识别线程每分钟取走一段（take_period），把这一段各步的耗时和处理器
+（advice）、界面线程的定时器晚到了多少（ui_lag），以及只数次数、不计耗时的几样（count）：progress_ 一组是每次读进度条
+是按什么原因没沿用上次的读数（沿用和没沿用的各一种），pick_ 一组是读不到轮次时照判、先不判各是哪一条条件（先不判仍是
+pick_grace）。识别线程每分钟取走一段（take_period），把这一段各步的耗时和处理器
 占用写进识别记录（recog_stats，见 overlay_parts/watcher.py 的 Watcher._log_stats），诊断包的 state.json 里也带最近一条。
 
 只加统计、不改识别的行为和读数：记一笔只是取时间、进锁、往列表里追加；出错就丢掉这一笔，绝不往外抛（识别线程、界面
@@ -11,6 +13,9 @@
 不是 Windows、或调用失败时相应的一项不出现。时钟和 Win32 调用是模块级的（_clock、_kernel32），测试可以换掉，
 不依赖真实的处理器负载。主线程的句柄用 OpenThread 打开一次留着（界面线程的占用要一直量它）。
 界面线程的定时器晚到多少按不含电脑睡眠时间的时钟算（unbiased_clock：QueryUnbiasedInterruptTime）。
+
+另外给 advisor/usage.py 两个公开的用法：usage_snapshot 取这一刻的处理器时间（没有 recog，那是调用线程，在这里没有意义），
+usage_percent 把两次快照换算成占用；每分钟一条的占用记录和导出诊断时现量的线程占用都用它们。
 """
 from __future__ import annotations
 
@@ -32,6 +37,7 @@ _TICKS_PER_SECOND = 10_000_000
 
 _lock = threading.Lock()  # 全部操作都在这一把锁里
 _counts: dict[str, "_Kind"] = {}  # 这一段各 kind 的累计
+_tallies: dict[str, int] = {}  # 这一段只数次数、不计耗时的几样（count）：名字 → 次数
 _since: float | None = None  # 这一段从什么时候算起（第一次记一笔时定下）
 _cpu_base: dict | None = None  # 上一次取走时的处理器时间（第一次只记基准，cpu 不出现）
 _ui_handle = None  # 主线程的句柄，第一次用时打开一次留着
@@ -132,6 +138,22 @@ def _system_ticks() -> tuple[int, int] | None:
     return (_ticks(idle), total) if total else None
 
 
+def cpu_ticks() -> tuple[int, int, int] | None:
+    """同一刻的（本进程处理器时间, 整机忙的时间, 整机总时间），单位都是 100 纳秒。两样都用累计值，两次调用相减就是这一段的
+    占用。整机忙的时间 = 总时间 - 空闲时间。不是 Windows、或有一项取不到时为 None。"""
+    if _kernel32 is None:
+        return None
+    try:
+        process = _process_ticks()
+        system = _system_ticks()
+    except Exception:  # noqa: BLE001  取不到时按 None，不往外抛
+        return None
+    if process is None or system is None:
+        return None
+    idle, total = system
+    return process, total - idle, total
+
+
 def _ui_thread_handle():
     """主线程（界面线程）的句柄，第一次用时打开一次留着（THREAD_QUERY_LIMITED_INFORMATION）。打不开时为 None。"""
     global _ui_handle, _ui_handle_tried
@@ -182,6 +204,23 @@ def _percent(base: dict, now: dict, elapsed: float) -> dict:
     return out
 
 
+def usage_snapshot() -> dict | None:
+    """这一刻的处理器时间：{"process": 本进程, "ui": 界面线程, "system": (整机空闲, 整机总时间)}，读法和 _snapshot 相同，
+    但没有 recog（recog 是调用这里的线程，用作占用记录时没有意义）。不是 Windows、或调用出错时为 None；某一项取不到时
+    那一项是 None。"""
+    if _kernel32 is None:
+        return None
+    try:
+        return {"process": _process_ticks(), "ui": _thread_ticks(_ui_thread_handle()), "system": _system_ticks()}
+    except Exception:  # noqa: BLE001  取不到就不出现，绝不往外抛
+        return None
+
+
+def usage_percent(base: dict, now: dict, elapsed: float) -> dict:
+    """两次 usage_snapshot 之间各处的处理器占用，口径同 _percent（process、ui 是一个核的百分比，system 是 0～100）。"""
+    return _percent(base, now, elapsed)
+
+
 def _nearest_rank(ordered: list[float], q: float) -> float:
     """最近秩法：样本从小到大排好，取第 ceil(q × 样本数) 个（第 1 个是最小的）；q 为 0.5、样本数是偶数时取中间两个里
     较小的那一个。"""
@@ -212,11 +251,26 @@ def record(kind: str, ms: float) -> None:
         pass
 
 
+def count(kind: str) -> None:
+    """数一次只数次数、不计耗时的事（例如对局中读不到轮次、刚看见过轮次标记，先不判选角界面的那一次）。识别线程调用；
+    任何情况下不往外抛异常（出错就丢掉这一次）。"""
+    global _since
+    try:
+        name = str(kind)
+        with _lock:
+            if _since is None:
+                _since = _clock()
+            _tallies[name] = _tallies.get(name, 0) + 1
+    except Exception:  # noqa: BLE001  统计本身不能影响识别
+        pass
+
+
 def take_period() -> dict:
     """取走这一段的汇总并清零，返回这一段各步的耗时和处理器占用。
 
     返回：period_s（这一段多长，秒，一位小数）；每种 kind 一项 {"n", "p50", "p95", "max", "sum"}（毫秒，一位小数；
-    分位数按存下的样本用最近秩法算）；kind 带冒号的（read:xxx）归到 reads 下面（{名字: 那一项}）；cpu（这一段的处理器
+    分位数按存下的样本用最近秩法算）；kind 带冒号的（read:xxx）归到 reads 下面（{名字: 那一项}）；counts（只数次数的
+    几样，count 数的，{名字: 次数}，按名字排，一次都没有时不出现）；cpu（这一段的处理器
     占用：process 本进程、recog 调用本函数的那个线程、ui 主线程，都折成「一个核的百分比」，system 整机忙的百分比）。
     第一次调用只记处理器时间的基准，cpu 不出现；不是 Windows、或调用失败时 cpu 不出现或缺那一项。没有样本的 kind 不出现。
     取走后这一段清零，下一次从零开始累加。汇总出错时返回空字典、只丢这一段：照样清零、换基准（取不到时下一次只记基准），
@@ -246,6 +300,8 @@ def take_period() -> dict:
                     out[kind] = entry
             if reads:
                 out["reads"] = reads
+            if _tallies:
+                out["counts"] = {name: _tallies[name] for name in sorted(_tallies)}
             snapshot = _snapshot()
             if _cpu_base is not None and snapshot is not None:
                 cpu = _percent(_cpu_base, snapshot, elapsed)
@@ -257,4 +313,5 @@ def take_period() -> dict:
         finally:
             _cpu_base = snapshot
             _counts.clear()
+            _tallies.clear()
             _since = now

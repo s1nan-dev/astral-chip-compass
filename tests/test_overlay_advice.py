@@ -3,6 +3,7 @@
 
 不建悬浮窗，直接查出这些文字的函数（advisor/ui/text.py）和 Session；推荐用真的资料库和推荐引擎算，个别用例直接构造
 评估结果（chip_eval）。用 Qt 的 offscreen 平台，不会弹出窗口。"""
+import dataclasses
 import html
 import random
 import re
@@ -10,12 +11,12 @@ import unittest
 from types import SimpleNamespace
 from advisor import cli  # noqa: E402
 from advisor.data import load_db, LEVEL_NIGHTMARE  # noqa: E402
-from advisor.engine import NEED_ORIGIN, ChipEval, Part, advise  # noqa: E402
+from advisor.engine import NEED_ORIGIN, ChipEval, Part, TierAhead, advise  # noqa: E402
 from advisor.pool import Teammate, State  # noqa: E402
 from advisor.session import Event  # noqa: E402
 from advisor.ui.text import advice_summary, reason_lines, breakdown_html, advice_text
 from advisor.ui.overlay_parts.app import UiSettings, OverlaySession
-from advisor.ui.text import reroll_conflict, part_pill, CAPTION_COLOR, lookahead_pill, tag_pill, reroll_info, DIM_COLOR, option_views, WARN_COLOR, reroll_reason, reason_pills, breakdown_rows, SUPERSEDED_LAST, reroll_pills, SHORT_LIMIT, ReasonPill, reroll_chance_hidden, rival_word, option_pills, CHAIN_PREMISE, best_chip, OK_COLOR, LOOKAHEAD_MIN, part_label  # noqa: E402
+from advisor.ui.text import reroll_conflict, part_pill, CAPTION_COLOR, lookahead_pill, tag_pill, reroll_info, DIM_COLOR, option_views, WARN_COLOR, reroll_reason, reason_pills, breakdown_rows, SUPERSEDED_LAST, reroll_pills, SHORT_LIMIT, ReasonPill, reroll_chance_hidden, rival_word, option_pills, CHAIN_PREMISE, best_chip, OK_COLOR, LOOKAHEAD_MIN, TIER_AHEAD_MIN, scheme_ahead, part_label  # noqa: E402
 from tests import test_engine as engine_tests  # noqa: E402  10-03 实机局面（AlLiveReviewTest.OFFERS）
 from tests.test_engine import SCORE_WORDING  # noqa: E402  口语字样、计分用语（适配表理由的检查，界面文字同样适用）
 from tests.support.overlay_cases import frame, plain_html, score_marks, unreadable
@@ -93,12 +94,19 @@ class ReasonDisplayTest(unittest.TestCase):
     def setUp(self):
         self.db = load_db()
 
-    def evals(self, hero, offer, **kw):
+    def scaled(self, scale=0.5):
+        """official.scale 改回 scale 的资料库副本：查内置分参与总分、分项和理由时的行为（现在取 0，不列这几项）。"""
+        rules = {k: dict(v) if isinstance(v, dict) else v for k, v in self.db.rules.items()}
+        rules["official"]["scale"] = scale
+        return dataclasses.replace(self.db, rules=rules)
+
+    def evals(self, hero, offer, db=None, **kw):
         st = State(hero=hero, rerolls=2, **kw)
-        return {e.chip.name: e for e in advise(self.db, st, offer).evals}
+        return {e.chip.name: e for e in advise(db or self.db, st, offer).evals}
 
     def test_class_reason_always_visible(self):
-        e = self.evals("芬妮", ["缓冲盾牌", "夹心饼干-一般", "循环往复"], round=1)["缓冲盾牌"]
+        # 内置分照旧计入的资料库副本：「标签：辅助 ✓」属于内置分的标签分
+        e = self.evals("芬妮", ["缓冲盾牌", "夹心饼干-一般", "循环往复"], db=self.scaled(0.5), round=1)["缓冲盾牌"]
         tag = tag_pill(e)
         self.assertEqual(tag.text, "标签：辅助 ✓")  # 不写分值
         self.assertEqual(tag.tone, "plus")
@@ -113,10 +121,14 @@ class ReasonDisplayTest(unittest.TestCase):
         others = [p for p in e.parts if p.reason and p.label != "标签分"]
         part_lines = [r for r in lines if not (e.lookahead_reason and r.startswith(e.lookahead_reason))]
         self.assertEqual(len(part_lines), min(2, len(others)))
+        # 内置分不计入总分时（现在的资料库）没有标签分那一项，不显示这个标签
+        e = self.evals("芬妮", ["缓冲盾牌", "夹心饼干-一般", "循环往复"], round=1)["缓冲盾牌"]
+        self.assertIsNone(tag_pill(e))
+        self.assertFalse(any(p.label == "标签分" for p in e.parts))
 
     def test_lookahead_shown_for_other_options(self):
         e = self.evals("凛", ["标靶", "标记喷罐", "鹰眼瞄具"])["标靶"]
-        self.assertTrue(e.lookahead_reason and abs(e.lookahead) >= 3)
+        self.assertTrue(e.lookahead_reason and abs(e.lookahead) >= LOOKAHEAD_MIN)
         pills = option_pills(e, best=False)
         self.assertEqual(pills, reason_pills(e, 1))  # 非首推：一条理由加前瞻（按分值的绝对值排，前瞻不一定在最后）
         ahead = lookahead_pill(e)
@@ -195,7 +207,7 @@ class ReasonDisplayTest(unittest.TestCase):
         """悬停明细：有说明的分项都列出整句，前瞻和理由标签同一门槛（绝对值不到 LOOKAHEAD_MIN 时不列），
         不写分值和总分，没有说明的基础分不列，最后是推荐度；特性名不出现。"""
         st = State(hero="凛", rerolls=2)
-        adv = advise(self.db, st, ["标靶", "大背包", "缓冲盾牌"])
+        adv = advise(self.scaled(0.5), st, ["标靶", "大背包", "缓冲盾牌"])  # 不含说明的基础分要有内置分才列
         for e in adv.evals:
             best = e.chip.name == adv.best
             tip = breakdown_html(e, best=best)
@@ -225,8 +237,9 @@ class ReasonDisplayTest(unittest.TestCase):
         st = State(hero="凛", rerolls=2)
         ev = Event("advice", advice=advise(self.db, st, ["标靶", "大背包", "缓冲盾牌"]), state=st)
         text = advice_text(self.db, ev)
-        for name in ("标靶", "大背包", "缓冲盾牌", "刷新", "基础分", "前瞻", "刷新 ×2"):
+        for name in ("标靶", "大背包", "缓冲盾牌", "刷新", "前瞻", "刷新 ×2"):
             self.assertIn(name, text)
+        self.assertNotIn("基础分", text)  # 内置分不计入总分，诊断包也不列这几项
         self.assertEqual(advice_summary(ev.advice).count("（"), 1)
         # 诊断包里是整句（短句只用在理由标签上）
         for e in ev.advice.evals:
@@ -303,9 +316,9 @@ class ScoreFreeDisplayTest(unittest.TestCase):
         self.assertEqual([p.text for p in reason_pills(e, 2)],
                          ["推荐流派：标记", "与磨刀石冲突", "标签：攻击 ✓", "前瞻：标记喷罐 19%→31%"])
         self.assertEqual(tag_pill(e), ReasonPill("标签：攻击 ✓", "plus", "筹码标签「攻击」与角色当前职业相符"))
-        # 前瞻的绝对值不到 3 时不出标签（悬停明细里照列，见 test_breakdown_rows）
+        # 前瞻的绝对值不到门槛时不出标签（悬停明细里照列，见 test_breakdown_rows）
         small = chip_eval(self.db, "标靶", [Part("推荐流派", 20.0, "「标记」是该角色的推荐流派", short="推荐流派：标记")],
-                          lookahead=2.9, reason=self.LOOK, short="前瞻：标记喷罐 19%→31%")
+                          lookahead=LOOKAHEAD_MIN - 0.01, reason=self.LOOK, short="前瞻：标记喷罐 19%→31%")
         self.assertIsNone(lookahead_pill(small))
         self.assertEqual([p.text for p in reason_pills(small, 2)], ["推荐流派：标记"])
 
@@ -476,7 +489,7 @@ class ScoreFreeDisplayTest(unittest.TestCase):
 
     def test_breakdown_rows(self):
         """悬停明细的理由：（分项名, 整句, 色调），按分值的绝对值排；没有说明的基础分不列（虽然分值第二大）；
-        前瞻和理由标签同一门槛：绝对值不到 LOOKAHEAD_MIN（3）时不列；分项名不出现特性名；绝对值相同时分项在前瞻前面。"""
+        前瞻和理由标签同一门槛：绝对值不到 LOOKAHEAD_MIN（1.5）时不列；分项名不出现特性名；绝对值相同时分项在前瞻前面。"""
         e = chip_eval(self.db, "标靶", [
             Part("基础分", 30.0),
             Part("推荐流派", 20.0, "「标记」是该角色的推荐流派", short="推荐流派：标记"),
@@ -493,12 +506,12 @@ class ScoreFreeDisplayTest(unittest.TestCase):
             ("角色专属规则", "该角色的主动技能需要标记", "plus"),
             ("职业倾向", "筹码标签「攻击」与角色的职业倾向相符", "info"),
         ])
-        self.assertEqual(LOOKAHEAD_MIN, 3)
+        self.assertEqual(LOOKAHEAD_MIN, 1.5)
         reason_row = ("推荐流派", "「标记」是该角色的推荐流派", "plus")
         for ahead, rows in ((0.3, [reason_row]), (1.0, [reason_row]), (-1.0, [reason_row]),
                             (LOOKAHEAD_MIN - 0.01, [reason_row]),
-                            (3.0, [("前瞻", self.LOOK, "plus"), reason_row]),
-                            (-3.0, [("前瞻", self.LOOK, "minus"), reason_row])):
+                            (LOOKAHEAD_MIN, [reason_row, ("前瞻", self.LOOK, "plus")]),
+                            (-LOOKAHEAD_MIN, [reason_row, ("前瞻", self.LOOK, "minus")])):
             with self.subTest(lookahead=ahead):
                 small = chip_eval(self.db, "标靶", [Part("基础分", 5.0), Part("推荐流派", 2.0, "「标记」是该角色的推荐流派")],
                                   lookahead=ahead, reason=self.LOOK)
@@ -507,6 +520,23 @@ class ScoreFreeDisplayTest(unittest.TestCase):
                 self.assertEqual(lookahead_pill(small) is not None, any(r[0] == "前瞻" for r in rows))
         none = chip_eval(self.db, "标靶", [Part("基础分", 5.0)], lookahead=4.0, reason="")
         self.assertEqual(breakdown_rows(none), [])  # 没有说明的前瞻不列
+
+    def test_scheme_ahead_tier_threshold(self):
+        """档位前瞻不打折（[lookahead] tier_weight），门槛是 3、比前瞻的高：绝对值 2 不做标签，3 做标签。"""
+        self.assertEqual(TIER_AHEAD_MIN, 3)
+
+        def ahead(value):
+            found = TierAhead(value=value, words="必选", before=0.2, after=0.4,
+                              reason="选了以后下一次三选一里至少出现一张必选、推荐的机会 20%→40%",
+                              short="必选、推荐 20%→40%")
+            return scheme_ahead(SimpleNamespace(ranking=SimpleNamespace(aheads=[found])), 0)
+
+        self.assertEqual(ahead(2.0), (None, 0.0))
+        self.assertEqual(ahead(-2.0), (None, 0.0))
+        pill, value = ahead(3.0)
+        self.assertIsNotNone(pill)
+        self.assertEqual(value, 3.0)
+        self.assertIsNotNone(ahead(-3.0)[0])
 
     def test_breakdown_html(self):
         """悬停明细的 HTML：分项名暗色、整句按色调着色，按绝对值排；不写分值、总分和基础分；最后一行推荐度（首推加「（首推）」）。"""
@@ -588,9 +618,14 @@ class SeriesDisplayTest(unittest.TestCase):
     def setUpClass(cls):
         cls.db = load_db()
 
-    def views(self, st, offer):
-        adv = advise(self.db, st, offer)
+    def views(self, st, offer, db=None):
+        adv = advise(db or self.db, st, offer)
         return adv, option_views(adv)
+
+    def scaled(self, scale=0.5):
+        rules = {k: dict(v) if isinstance(v, dict) else v for k, v in self.db.rules.items()}
+        rules["official"]["scale"] = scale
+        return dataclasses.replace(self.db, rules=rules)
 
     def test_three_bank_cards(self):
         adv, views = self.views(State(hero="阿尔", star=2, round=7, rerolls=3),
@@ -636,7 +671,16 @@ class SeriesDisplayTest(unittest.TestCase):
         刷新标签写「预计不如夹心饼干-可口」；被替代的筹码名悬停明细最后一行写「被紫色上位替代，不参与推荐度比较」，
         不写「推荐度 0%」；诊断包写「—」、被哪一张替代、对比行和刷新概率的比较对象。只剩 1 次刷新（用掉的代价高）：
         刷新的估值高过可口时首推刷新，就不是这里要看的情形（璐璐 0 星同一手牌，剩 1 次也首推刷新）。"""
-        adv, views = self.views(State(hero="姬梦朝", star=0, round=1, rerolls=1), ["夹心饼干-一般", "夹心饼干-可口", "标靶"])
+        # 内置分和前瞻都按原来的量：现在去掉内置分、前瞻打五折、刷新代价又降低，刷新会排在可口前面。
+        # 开套预判也关掉（标记筹码、美工刀会另有提前加分，两张夹心饼干的分差跟着变），这里只看同系列的倒挂
+        db = self.scaled(0.5)
+        rules = {k: dict(v) if isinstance(v, dict) else v for k, v in db.rules.items()}
+        rules["lookahead"]["weight"] = 1.0
+        rules["reroll_cost"]["gain"] = 18
+        rules["school_build"]["schools"] = []
+        db = dataclasses.replace(db, rules=rules)
+        adv, views = self.views(State(hero="姬梦朝", star=0, round=1, rerolls=1),
+                                ["夹心饼干-一般", "夹心饼干-可口", "标靶"], db=db)
         low, mid = adv.evals[0], adv.evals[1]
         self.assertGreater(low.total, mid.total)
         self.assertEqual(adv.best, "夹心饼干-可口")
@@ -652,7 +696,7 @@ class SeriesDisplayTest(unittest.TestCase):
         self.assertEqual(SUPERSEDED_LAST.format(x="紫色"), tip.splitlines()[-1])
         self.assertNotIn("推荐度 0%", tip)
         self.assertEqual(plain_html(breakdown_html(mid)).splitlines()[-1], f"推荐度 {mid.percent:.0%}")
-        text = advice_text(self.db, Event("advice", advice=adv, state=adv.state))
+        text = advice_text(db, Event("advice", advice=adv, state=adv.state))
         self.assertIn(f"—  夹心饼干-一般  总分 {low.total:.1f}（被「夹心饼干-可口」上位替代，不参与推荐度比较）", text)
         # 标靶也是蓝色：颜色词后加括注写对方的筹码名
         self.assertIn("    对比：比蓝色（夹心饼干-一般）多最大生命值 +1（夹心饼干-一般最大生命值 +2，夹心饼干-可口最大生命值 +3）",
@@ -718,6 +762,13 @@ class TeammatePillTest(unittest.TestCase):
     队友刚需那一项（engine.NEED_ORIGIN，排在第二位的原因）排在所有标签的第一个、不占名额；没有刚需、前几条里也没有
     为正的「队友」分项时，另加其中分值最大的一条（按绝对值和其余标签一起排）；每个选项最多另加一条。"""
 
+    @staticmethod
+    def scaled(scale=0.5):
+        db = load_db()
+        rules = {k: dict(v) if isinstance(v, dict) else v for k, v in db.rules.items()}
+        rules["official"]["scale"] = scale
+        return dataclasses.replace(db, rules=rules)
+
     NEED = Part("队友", 3.0, "队友「邦妮」刚需标记（……）；该筹码可提供，排在第二位，第一位仍按自身收益",
                 NEED_ORIGIN, "配合队友：邦妮刚需标记")
     MATE = Part("队友", 15.0, "队友「邦妮」「凛」在怪物带有标记时技能收益更高", "teammates", "配合队友：邦妮、凛")
@@ -755,7 +806,9 @@ class TeammatePillTest(unittest.TestCase):
         """实际的三选一：凛（真人队友邦妮）的标记喷罐被提到第二位，第一个标签是刚需；10-03 第 6 次三选一里
         首推银行卡-用不完的标签另有「配合队友：帕露南等 3 名」。"""
         mates = (Teammate("邦妮"), Teammate("茉莉"), Teammate("帕露南"))
-        adv = advise(self.db, State(hero="凛", star=1, round=4, rerolls=3, teammates=mates), ["探天卫星", "魔法秘典", "标记喷罐"])
+        # 内置分照旧计入的副本：现在标记喷罐自身已在最前，不再被提到第二位
+        adv = advise(self.scaled(0.5), State(hero="凛", star=1, round=4, rerolls=3, teammates=mates),
+                     ["探天卫星", "魔法秘典", "标记喷罐"])
         view = next(v for v in option_views(adv) if v.name == "标记喷罐")
         self.assertEqual(view.pills[0].text, "配合队友：邦妮刚需标记")
         self.assertTrue(view.pills[0].tip.startswith("队友「邦妮」刚需标记（"))
@@ -971,11 +1024,11 @@ class RerollConflictTest(unittest.TestCase):
         """10-03 第 5 次三选一（噩梦），刷新改为剩 3 次（对局里剩 4 次，之后约 3 次三选一、再多留 1 次，同样没有多出来的，
         见 test_live_game）：没有多出来的刷新时结论和概率方向矛盾，刷新只显示「预计不如银行卡-余额少」「消耗 1 次刷新」；
         推荐卡片上的其他文字（各选项的标签和悬停说明、筹码名的悬停明细）也不写这个概率；命令行和诊断包照旧写这个概率。
-        概率为 54.9%，显示为 55%，与结论「不如」方向相反。"""
+        概率为 52%，与结论「不如」方向相反。"""
         name = "银行卡-余额少"
         st, offer = live_offer("130849-5", difficulty_level=LEVEL_NIGHTMARE, rerolls=3)
         adv = advise(self.db, st, offer)
-        self.assertEqual((best_chip(adv).chip.name, f"{adv.reroll.p_better:.0%}"), (name, "55%"))
+        self.assertEqual((best_chip(adv).chip.name, f"{adv.reroll.p_better:.0%}"), (name, "52%"))
         views = option_views(adv)
         reroll = next(v for v in views if v.reroll)
         self.assertEqual([(p.text, p.tone) for p in reroll.pills],
@@ -986,15 +1039,16 @@ class RerollConflictTest(unittest.TestCase):
         card += "".join(plain_html(breakdown_html(e, best=e.chip.name == adv.best)) for e in adv.evals)
         for word in ("概率刷出", "出现优于", "概率为"):
             self.assertNotIn(word, card)
-        self.assertNotIn("55%", "".join(p.text + p.tip for p in reroll.pills))
-        want = "刷新后出现总分高于当前候选筹码最高总分的筹码的概率：55%"
+        self.assertNotIn("52%", "".join(p.text + p.tip for p in reroll.pills))
+        want = "刷新后出现总分高于当前候选筹码最高总分的筹码的概率：52%"
         self.assertIn(want, advice_text(self.db, Event("advice", advice=adv, state=st)))
-        self.assertIn("出现总分高于当前候选筹码最高总分的筹码的概率：55%", cli.render(self.db, adv))
+        self.assertIn("出现总分高于当前候选筹码最高总分的筹码的概率：52%", cli.render(self.db, adv))
 
     def test_live_game(self):
-        """10-03 那局 11 次三选一（噩梦）：除第 5 次以外都照常三条。第 5 次剩 4 次刷新、之后约 3 次三选一：每次留 1 次、
-        再多留 1 次以防估少，4 次都留着，没有多出来的，结论不如银行卡-余额少、概率却过半，方向相反，只有结论和代价两条（同
-        test_live_offer_conflict）；连续刷新的第 9～11 次照常三条。"""
+        """10-03 那局 11 次三选一（噩梦）：除第 4、5、8 次以外都照常三条。这三次结论不如首推、概率却过半，方向相反，只有
+        两条。第 5 次剩 4 次刷新、之后约 3 次三选一：每次留 1 次、再多留 1 次以防估少，4 次都留着，没有多出来的，结论不如
+        银行卡-余额少，写结论和代价（同 test_live_offer_conflict）；第 4 次同样没有多出来的；第 8 次多出 2 次，写结论和
+        留几次。连续刷新的第 9～11 次照常三条。"""
         hidden = []
         for key in engine_tests.AlLiveReviewTest.OFFERS:
             st, offer = live_offer(key, difficulty_level=LEVEL_NIGHTMARE)
@@ -1008,7 +1062,7 @@ class RerollConflictTest(unittest.TestCase):
             if key == "130849-5":
                 self.assertEqual([p.text for p in reroll.pills], ["预计不如银行卡-余额少", "消耗 1 次刷新"])
                 self.assertEqual((adv.reroll.kept, adv.reroll.spare), (4, 0))
-        self.assertEqual(hidden, ["130849-5"])
+        self.assertEqual(hidden, ["130412-4", "130849-5", "131934-8"])
 
     def test_map_unknown_average(self):
         """地图待识别时按候选地图取平均（10-03 第 5 次三选一，地图改为待识别，刷新改为剩 3 次）：方向相反同样不显示概率。"""

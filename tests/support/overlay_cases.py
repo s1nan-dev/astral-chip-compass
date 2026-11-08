@@ -197,6 +197,13 @@ class FakeRecorder:
                           {"file": "20261003-133000.jsonl", "reason": "newgame", "start": "2026-10-03T13:30:00.000",
                            "end": "2026-10-03T13:31:10.500", "lines": 2}],
              "since": "2026-10-03T12:40:00.000"}
+    STATS = [
+        {"time": "2026-10-03T12:40:00.000", "kind": "segment", "reason": "startup"},
+        {"time": "2026-10-03T12:41:05.000", "kind": "recog_stats", "period_s": 60.0},
+        {"time": "2026-10-03T13:30:00.000", "kind": "segment", "reason": "newgame"},
+        {"time": "2026-10-03T13:31:10.000", "kind": "grab_stats", "frames": 30},
+    ]
+    STATS_SCOPE = {"hours": 12.0, "since": "2026-10-03T12:40:00.000", "segments": 2, "lines": 4}
 
     def __init__(self):
         self.calls: list[str] = []
@@ -208,6 +215,10 @@ class FakeRecorder:
     def collect(self):
         self.calls.append("collect")
         return [dict(r) for r in self.SEGMENTS], dict(self.SCOPE)
+
+    def collect_stats(self, hours=12.0):
+        self.calls.append("collect_stats")
+        return [dict(r) for r in self.STATS], dict(self.STATS_SCOPE)
 
     def close(self):
         self.calls.append("close")
@@ -225,9 +236,37 @@ class FakeRecorder:
         pass
 
 
-class FakeWatcher:
+class FakeSignal:
+    """测试用的信号：记下接上的槽，emit() 时按先后调用（不排队到界面线程）。"""
+
     def __init__(self):
+        self.slots = []
+
+    def connect(self, fn):
+        self.slots.append(fn)
+
+    def emit(self, *args):
+        for fn in list(self.slots):
+            fn(*args)
+
+
+class FakeWatcher:
+    def __init__(self, platform=None):
         self.paused, self.reloaded = {}, 0
+        self.platform = platform
+        self.requests = 0
+        self.started = False
+        self.stopped = False
+        self.stop_result = True  # stop() 的返回值
+        self.stop_seconds = 0.0  # stop() 等这么久再返回（测试退出等待的上限）
+        self.running = False  # isRunning()
+        self.connected = FakeSignal()
+        # Lanes 接线时接的信号（测试里可直接 emit 或看有没有接上）
+        for name in ("events", "status", "flash_status", "recog_error", "recog_stopped",
+                     "capture_done", "capture_changed", "finished"):
+            setattr(self, name, FakeSignal())
+        self.last_frame = self.unread_shot = self.pick_shot = self.covered_shot = self.finish_shot = None
+        self.recog_stats = None
 
     def set_paused(self, reason, on, why=""):
         self.paused[reason] = on
@@ -236,21 +275,67 @@ class FakeWatcher:
     def reload(self):
         self.reloaded += 1
 
+    def trigger(self):
+        self.requests += 1
+
+    def set_platform(self, platform):
+        self.platform = platform
+
+    def set_manual(self, on):
+        self.manual = on
+
+    def set_lowend(self, on):
+        self.lowend = on
+
+    def start(self, *args, **kwargs):
+        self.started = True
+
+    def stop(self, *args, **kwargs):
+        self.stopped = True
+        wait = args[0] if args else kwargs.get("timeout_ms", 0)
+        delay = min(self.stop_seconds, max(0.0, (wait or 0) / 1000.0))
+        if delay:
+            import time
+            time.sleep(delay)
+        return self.stop_result
+
+    def request_stop(self):
+        self.stopped = True
+
+    def isRunning(self):
+        return self.running
+
+    def current_stack(self):
+        return "假识别线程"
+
 
 class FakeHotkey:
     def __init__(self):
         self.calls = []
+        self.starts = 0
+        self.stops = 0
+        self.pressed = FakeSignal()
 
     def set_enabled(self, on):
         self.calls.append(on)
 
+    def start(self, *args, **kwargs):
+        self.starts += 1
+
+    def stop(self, *args, **kwargs):
+        self.stops += 1
+
+    def request(self, *args, **kwargs):
+        pass
+
 
 def probe(fg="game", rect=(100, 50, 1600, 900), found=True, minimized=False, covered=False, below=0x2002,
-          hwnd=0x1001):
+          hwnd=0x1001, notice=""):
     """前台状态判断的结果（winapi.GameProbe）。fg：game / own / 其他（其他程序在前台）；minimized：游戏窗口最小化；
-    covered：其他程序在前台时别的窗口盖住了悬浮窗（below 是退后时插在哪个窗口下面）。"""
+    covered：其他程序在前台时别的窗口盖住了悬浮窗（below 是退后时插在哪个窗口下面）；notice：找不到游戏窗口时给玩家
+    看的那一句（capture.missing_notice），照真实探针填。"""
     if not found:
-        return GameProbe(False, None, False, False, fg == "own")
+        return GameProbe(False, None, False, False, fg == "own", notice=notice)
     if minimized:
         return GameProbe(True, None, True, False, fg == "own", hwnd=hwnd, game_class="UnityWndClass")
     return GameProbe(True, rect, False, fg == "game", fg == "own", hwnd=hwnd, covered=covered,

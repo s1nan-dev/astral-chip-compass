@@ -2,9 +2,11 @@
 
 - dialog：SettingItem、ITEMS、shown_items 和 capture_shown（有哪些项）、SettingsValues 和各处用到的文字常量，以及窗口类
   SettingsDialog；
-- widgets：几套排法共用的行部件（Chevron、ModeTile、KeyCap、StatusChip、Switch、RowButton、SkinThumb、SkinRow、RowParts）；
+- widgets：几套排法共用的行部件（Chevron、ModeTile、KeyCap、StatusChip、Switch、RowButton、TextLink、SkinThumb、SkinRow、
+  RowParts）；
 - layouts：排法基类 Layout 和七套皮肤用的各排法（LAYOUTS），连同只有某一种排法用的小部件；
-- palette：设置窗口里调色盘图标的交互（PaletteTrap、StarFlight、RowFlash 等）。
+- palette：设置窗口里调色盘图标的交互（PaletteTrap、StarFlight、RowFlash 等）；
+- dual_prompt：游戏平台选了两个客户端同时识别以后弹的性能测试对话框 DualPromptDialog 和它的文字常量。
 
 dialog 先定义文字常量和 SettingItem 等，末尾才导入 widgets、layouts、palette；那三块又从 dialog 取常量，是靠这个先后才
 不成环的（不管先导入哪一块，都会先跑本包的 __init__、先导入 dialog）。尺寸、颜色常量名（WIDTH、CARD_BG、STYLE 等）也
@@ -29,9 +31,9 @@ from PySide6.QtWidgets import (QAbstractButton, QButtonGroup, QDialog, QFrame, Q
 from ... import paths, unlock
 from .. import chrome, decor, skin_preview, theme  # noqa: F401  这几个模块也能从 settings 取到（再导出）
 # ICON_* 常量、图标字体的画法（icon_family、glyph_font、draw_glyph、glyph_icon）在 glyphs.py，这里再导出
-from ..glyphs import (GLYPH_RATIOS, ICON_ABOUT, ICON_CAPTURE, ICON_CHEVRON, ICON_DIAG, ICON_FAMILIES, ICON_HOTKEY,
-                      ICON_LOOK, ICON_LOWEND, ICON_MODE, ICON_SETTINGS, ICON_SKIN, ICON_UPDATE, draw_glyph, glyph_font,
-                      glyph_icon, icon_family)
+from ..glyphs import (GLYPH_RATIOS, ICON_ABOUT, ICON_BIG_CORES, ICON_BOOK, ICON_CAPTURE, ICON_CHEVRON, ICON_DIAG,
+                      ICON_FAMILIES, ICON_HOTKEY, ICON_LANG, ICON_LOOK, ICON_LOWEND, ICON_MODE, ICON_PLATFORM, ICON_SETTINGS, ICON_SKIN,
+                      ICON_UPDATE, draw_glyph, glyph_font, glyph_icon, glyph_width, icon_family)
 from ..hotkey import parse_hotkey  # noqa: F401
 from ..text import DENIED_CODE, capture_detail, tip_paragraphs_html  # noqa: F401
 from ..theme import SETTINGS as L
@@ -39,23 +41,34 @@ from ..theme import SETTINGS as L
 # "rgba(r,g,b,a)"、元组、QColor），color 从 widgets 再导出。这里再导出这几个名字给各窗口和测试
 from ..widgets import GlyphBox, TextLabel, color  # noqa: F401
 from ..window_base import SkinnedWindow  # noqa: F401
-from .dialog import (ABOUT_DESC, ABOUT_TITLE, CAPTURE_TITLE, CHEVRON_TEXT, DIAG_CARD, EXPORT_BUTTON, EXPORT_DESC,
-                     EXPORT_TIP, EXPORT_TITLE, GROUP_DIAG, GROUP_LOOK, GROUP_RECOG, HOTKEY_BAD_KEY, HOTKEY_BUSY_DESC,
-                     HOTKEY_CANCEL, HOTKEY_CHANGE, HOTKEY_CHANGE_TIP, HOTKEY_DESC, HOTKEY_INVALID_DESC, HOTKEY_SAME,
-                     HOTKEY_SAVED, HOTKEY_SETTING, HOTKEY_TITLE, HOTKEY_UNSET, HOTKEY_UNSET_DESC, HOTKEY_WAIT,
-                     HOTKEY_WAIT_KEY, HOTKEY_WAIT_TIP, ITEMS, LOWEND_DESC, LOWEND_TIP, LOWEND_TITLE, MODE_AUTO,
-                     MODE_AUTO_DESC, MODE_DESC, MODE_MANUAL, MODE_MANUAL_DESC, MODE_MANUAL_NO_KEY, MODE_TITLE,
-                     NOTES_CARD, NOTE_SECTIONS, NOTE_TIP, OPAQUE_DESC, OPAQUE_TITLE, PAGE_SUBTITLE, PAGE_TITLE,
-                     PALETTE_TEXT, SETTINGS_CODE, SETTINGS_METHOD, SETTINGS_NO_GAME, SETTINGS_REASON, SETTINGS_RETRY,
+from .dialog import (ABOUT_DESC, ABOUT_TITLE, BIG_CORES_CPU, BIG_CORES_CPU_UNKNOWN, BIG_CORES_EFFECT, BIG_CORES_ON,
+                     BIG_CORES_SMALL, BIG_CORES_TIP, BIG_CORES_TITLE, CAPTURE_TITLE, CHEVRON_TEXT, DIAG_CARD, EXPORT_BUTTON,
+                     EXPORT_DESC, EXPORT_TIP, EXPORT_TITLE, GROUP_DIAG, GROUP_LOOK, GROUP_PRIVACY, GROUP_RECOG,
+                     HOTKEY_BAD_KEY, HOTKEY_BUSY_DESC, HOTKEY_CANCEL, HOTKEY_CHANGE, HOTKEY_CHANGE_TIP, HOTKEY_DESC,
+                     HOTKEY_INVALID_DESC, HOTKEY_SAME, HOTKEY_SAVED, HOTKEY_SETTING, HOTKEY_TITLE, HOTKEY_UNSET,
+                     HOTKEY_UNSET_DESC, HOTKEY_WAIT, HOTKEY_WAIT_KEY, HOTKEY_WAIT_TIP, ITEMS, LANG_CHOICES, LOWEND_DESC,
+                     LOWEND_TIP, LOWEND_TITLE, MODE_AUTO, MODE_AUTO_DESC, MODE_DESC, MODE_MANUAL, MODE_MANUAL_DESC,
+                     MODE_MANUAL_NO_KEY, MODE_TITLE, NOTES_CARD, NOTE_SECTIONS, NOTE_TIP, OPAQUE_DESC, OPAQUE_TITLE,
+                     PAGE_SUBTITLE, PAGE_TITLE, PALETTE_TEXT, PLATFORM_AUTO, PLATFORM_COMBO_ROOM, PLATFORM_DESC,
+                     PLATFORM_TIP, PLATFORM_TITLE, RELAUNCH_BUTTON, RELAUNCH_HINT, REPORT_DESC, REPORT_TITLE,
+                     RESTART_ACTION, SETTINGS_CODE, SETTINGS_METHOD, SETTINGS_NO_GAME, SETTINGS_REASON, SETTINGS_RETRY,
                      SETTINGS_SCREEN_NOTE, SETTINGS_TITLE, SKIN_CHANGE, SKIN_CHANGE_TIP, SKIN_DESC, SKIN_TITLE,
-                     SettingItem, SettingsDialog, SettingsValues, TAB_ABOUT, TAB_LOOK, TAB_RECOG, UPDATE_BUTTON,
-                     UPDATE_BUTTON_TIP, UPDATE_CARD, UPDATE_CHECK_ACTION, UPDATE_DESC, UPDATE_TITLE, capture_shown,
-                     hotkey_texts, manual_desc, settings_texts, shown_items)
+                     STATS_TITLE, SettingItem, SettingsDialog, SettingsValues, TAB_ABOUT,
+                     TAB_LOOK, TAB_PRIVACY, TAB_RECOG, UI_LANG_DESC, UI_LANG_TITLE, UPDATE_BUTTON, UPDATE_BUTTON_TIP,
+                     UPDATE_CARD, UPDATE_CHECK_ACTION, UPDATE_DESC, UPDATE_TITLE, big_cores_desc, big_cores_shown,
+                     capture_shown, fit_platform_combo, hotkey_texts, manual_desc, platform_choices, settings_texts,
+                     shown_items)
 from .layouts import (LAYOUTS, BandTabsLayout, CardsLayout, ChevronBox, CutRowButton, GlyphMark, GridLayout,
                       GroupCardsLayout, Layout, RowArrow, SideTabsLayout, TintIcon, TopTabsLayout, _note_buttons)
 from .palette import (FLASH_MS, PALETTE_PEN, STAR_GOLD, STAR_MS, PaletteFrame, PaletteTrap, RowFlash, StarFlight,
                       _valid, star_path)
-from .widgets import (Chevron, KeyCap, ModeTile, RowButton, RowParts, SkinRow, SkinThumb, StatusChip, Switch, _button)
+from .widgets import (Chevron, KeyCap, ModeTile, RelaunchLine, RowButton, RowParts, SkinRow, SkinThumb, StatusChip,
+                      Switch, TextLink, _button)
+from .dual_prompt import (APPLIED, BUSY, CANCEL, CRITICAL, DANGER, DEFAULT_BUTTON_SHEET, DIRECT_OPEN, DualPromptDialog,
+                          EASY, IGNORE, IGNORE_DEFAULT, LEVEL_MEANING, LEVEL_NAME, LOWEND_RETEST, MISSING_ALL,
+                          MISSING_ONE, NORMAL, NO_SLOWEST, OK, OVERLOAD, OWN, PROMPT_TITLE, REMAIN, RESULT_TITLE, RETEST,
+                          RETEST_DEFAULT, SLOWEST, START, STOPPED_FALLBACK, STOPPED_TITLE, TESTING, WARNING, level_color,
+                          missing_text, remain_seconds, result_texts)
 
 
 def __getattr__(name: str):

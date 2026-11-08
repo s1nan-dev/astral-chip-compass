@@ -14,7 +14,10 @@ Problem），提示文字由界面按种类拼写。名称、作者、说明在�
   新标的、改了档位的排到那一档最后（Tiers.with_tier），调整顺位用 Tiers.moved、Tiers.shifted；
 - id：方案的标识（存进文件后不变，改名也不变）；新建、还没存进文件时为空；
 - stale：资料更新后对不上的筹码（已移除、或本版本资料库里没有），留在文件里、不参与计算，编辑窗口列出并可移除；
-- copied_from_default：复制默认推荐得来时的日期（YYYY-MM-DD），否则为空。
+- copied_from_default：复制默认推荐得来时的日期（YYYY-MM-DD），否则为空；
+- maps：适用地图，标了的地图名（资料里的地图名），按地图编号（data.MapInfo.code）排；一张都没标时为空，算全地图通用。
+  只有有编号的地图能标（taggable_maps）；整理成这个样子用 normalize_maps。对局里认出地图以后，悬浮窗自动换到这个角色
+  标了这张图的方案。
 Scheme 不可修改、可哈希，内容相同即相等（只是顺位不同也算不同）：可以直接用来判断「方案是否变了」。改内容用
 dataclasses.replace。默认推荐不是一套 Scheme：用 None 表示。
 
@@ -25,7 +28,8 @@ dataclasses.replace。默认推荐不是一套 Scheme：用 None 表示。
 方案文件（SchemeStore）：存「我的方案」和每个角色上次用的方案。读写都经 advisor/fileio.py：先写临时文件、刷进硬盘再替换，
 原来的内容留一份 .bak；内容没变不写；读坏了不覆盖：原文件另存为 .broken-时间，有能读的备份时改读备份；格式版本比本程序新时
 （备份也一样）只读、不改它的内容；不认识的内容原样保留（包括筹码行里的）；每个筹码同时记编号和名称（读时先认编号，再认名称和
-改名前的旧名）。每套的筹码按方案的先后写（先按档位，同一档按顺位），读的时候同一档按在列表里的先后定顺位。格式版本比
+改名前的旧名）；每套方案多一个 maps（适用地图），同样同时记编号和名称，读时先认编号、再认名称；认不出的地图行不参与计算，
+改了这套方案再存时原样跟在地图行后面。每套的筹码按方案的先后写（先按档位，同一档按顺位），读的时候同一档按在列表里的先后定顺位。格式版本比
 FILE_VERSION 旧的文件（旧格式没有在发行版里用过，不做迁移）按读坏的文件处理：原文件另存，当作没有方案。方案文件不在、
 只剩 .bak 时不读它（可能是用户自己删的方案文件），第一次保存前把它另存为 .bak.orphan-时间，不覆盖。
 只碰 schemes.json、schemes.json.bak（写入时的临时文件 .tmp、.bak.tmp，读坏时另存的 .broken-时间、.bak.broken-时间，
@@ -40,6 +44,18 @@ schemes.fallback.json（同样带备份）。
   留 3 位），档位按「列表」（个数 7 位 + 按方案的先后每个筹码编号 8 位、档位 2 位）或「逐个」（最大编号 8 位 + 每个编号
   一个五进制位 + 各档顺位的排列序号）两种写法里短的那种，补齐到整字节后加 CRC-16 校验（版本号连同内容一起算，见 _check），
   用 Base58（数字和大小写字母，去掉 0、O、I、l）写出。筹码编号见 data/chip_codes.json：只增不改，改名时编号不变，已移除的筹码保留编号、不再使用。
+- 分享格式第 3 版（「筹码方案 v3」「ACC3-」）带适用地图：
+  - 短字符串在档位段后面接地图段：先写最大的地图编号 6 位（1～63），再从编号 1 到最大编号每张一位，1 表示标了；
+    最大编号那一位必须是 1。地图段编完照样补齐到整字节（补的位为 0），CRC-16 的算法和第 2 版相同，版本号为 3。
+    一张地图都没标时不能用第 3 版，只写第 2 版。档位的两种写法都接上同一个地图段，编完取短的。
+  - 可读文字在档位后面、说明前面加「地图：龙宫游乐园、魔法学院」一段，地图名用资料里的名字、按编号排。
+- 地图编号见 data/maps.json 的 code：和第二版的筹码编号一样只增不改；只有能标在地图上的地图有编号。
+- 导出时标了地图的方案写第 3 版、没标的照写第 2 版（WRITE_MAPS 开着）；导入认第 2、3 版。认不出第 3 版的老版本导入
+  标了地图的方案时导不进（可读文字报来自更新版本，短字符串的开头它不认、识别不到这一套），更新以后就能导；没标地图的
+  照样能导。分享方案的网站也认第 3 版。
+- 短字符串的开头：第 3 版写「ACC」（拾星助手英文名 Astral Chip Compass 的缩写），第 2 版照写「CA」，让只认「CA」的
+  老版本也能导入没标地图的方案。导入时两种开头都认（不分大小写、全角半角），哪个版本都一样；开头不算进校验，同一串
+  编码写成「CA3-」「ACC3-」解出来一样。
 第 1 版（「筹码方案 v1」「CA1-」，带目标流派、不带顺位）不认：导入时报方案文字格式不正确、字符串校验不符，不导入。
 """
 from __future__ import annotations
@@ -60,7 +76,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from . import clock, fileio, paths
-from .data import MATCH_BAND, MATCH_MIN, SCHOOLS, TIERS, _norm, load_db
+from .data import MAP_CODE_MAX, MATCH_BAND, MATCH_MIN, SCHOOLS, TIERS, _norm, load_db
 
 log = logging.getLogger(__name__)
 
@@ -79,9 +95,13 @@ LISTED_TIERS = frozenset(("core", "first", "second"))
 TARGET_TIERS = frozenset(("core", "first"))
 
 FILE_VERSION = 2  # 方案文件的格式版本：读到更大的版本号时只读，更小的（旧格式）按读坏的文件处理
-SHARE_VERSION = 2  # 分享格式的版本：可读文字「筹码方案 v2」、短字符串「CA2-」；别的版本不认
+SHARE_VERSION = 2  # 分享格式的版本：可读文字「筹码方案 v2」、短字符串「CA2-」；没标地图的方案导出照写这个版本
+SHARE_VERSION_MAPS = 3  # 分享格式第 3 版：带适用地图；标了地图的方案导出时写这一版（WRITE_MAPS）
+# 导出时标了地图的方案写不写第 3 版（带地图）：开着。认不出第 3 版的老版本导入这种方案时报来自更新版本（PROBLEM_NEWER），
+# 更新以后就能导；没标地图的照写第 2 版，老版本照样能导。关掉时一律写第 2 版（导出窗口在预览框下面提示不带地图）
+WRITE_MAPS = True
 CODES_FILE = "chip_codes.json"  # data/ 下的筹码编号表
-CODE_MAX = 255  # 短字符串里一个筹码编号占 8 位（第 1、2 版都是）
+CODE_MAX = 255  # 短字符串里一个筹码编号占 8 位（第 1～3 版都是）
 
 # ------------------------------------------------------------ 用户看得到的文字（方案名、分享格式里的固定字样）
 
@@ -90,12 +110,15 @@ DUPLICATE_SUFFIX = "（{n}）"  # 同一角色已有同名方案时，名称后�
 DEFAULT_COPY_NAME = "默认推荐（副本）"  # 复制默认推荐得到的方案
 
 TEXT_HEAD = "【{name}】筹码方案 v2"  # 可读文字的开头（v2 是分享格式的版本 SHARE_VERSION）
+TEXT_HEAD_MAPS = "【{name}】筹码方案 v3"  # 带适用地图的可读文字（分享格式第 3 版 SHARE_VERSION_MAPS）
 TEXT_TIER = "{tier}：{chips}"  # tier 为 TIER_LABEL 里的叫法；chips 按顺位列出
+TEXT_MAPS = "地图：{maps}"  # 适用地图，写在档位段后面、说明前面
 TEXT_NOTE = "说明：{note}"
 TEXT_AUTHOR = "作者：{author}"
 TEXT_SEP = "｜"  # 可读文字各段之间
-TEXT_LIST_SEP = "、"  # 筹码之间
-SHORT_TEXT = "【{name}】CA2-{code}"  # 短字符串（CA2 的 2 是分享格式的版本 SHARE_VERSION）
+TEXT_LIST_SEP = "、"  # 筹码、地图之间
+SHORT_TEXT = "【{name}】CA2-{code}"  # 短字符串（CA2 的 2 是分享格式的版本 SHARE_VERSION；开头照写老版本认得的 CA）
+SHORT_TEXT_MAPS = "【{name}】ACC3-{code}"  # 带适用地图的短字符串（ACC3 的 3 是分享格式第 3 版；导入时 CA3 也认）
 # 说明、作者里写出【】｜时，可读文字分不清各段（会被当成名称、分段标记或另一套的开头）：导出时换成近似的全角字
 # （TEXT_LOOKALIKE），导入时换回来。原文里本来就有的近似字和转义符 TEXT_ESCAPE_MARK 前面另加一个转义符，导入时照原样
 # 留下、不换成【】｜，内容完整还原（_escape_field、_unescape_field）。名称不用换：clean_name 已经把名称里的【】换成〔〕。
@@ -112,19 +135,21 @@ NOTICE_NEWER = "newer_version"  # 文件来自更新版本的拾星助手：只�
 # 导入时的问题（Problem.kind）。FATAL_PROBLEMS 里的几种让这一套无法导入，其余照常导入、只作说明
 PROBLEM_BAD_CODE = "bad_code"  # 短字符串不完整或被改动（校验不符）
 PROBLEM_BAD_TEXT = "bad_text"  # 方案文字格式不正确
-PROBLEM_NEWER = "newer_version"  # 来自更新版本的拾星助手（短字符串 CA3 及以上、方案文字 v3 及以上，或用了本版本没有的标志）
+PROBLEM_NEWER = "newer_version"  # 来自更新版本的拾星助手（短字符串 CA4、ACC4 及以上、方案文字 v4 及以上，或用了本版本没有的标志）
 # 筹码编号表（data/chip_codes.json）读不出来：短字符串里标了档位的筹码一个都认不出，这一套不导入（不当成「来自更新版本」）
 PROBLEM_NO_CODES = "codes_unavailable"
 PROBLEM_UNKNOWN_CODES = "unknown_codes"  # 有 count 个筹码编号本版本资料库里没有（可能来自更新版本），已忽略
 PROBLEM_REMOVED = "removed_chips"  # 资料里已移除的筹码 names，已忽略
 PROBLEM_UNKNOWN_NAMES = "unknown_names"  # 方案文字里未能识别的筹码名 names，已忽略
+PROBLEM_UNKNOWN_MAP_CODES = "unknown_map_codes"  # 有 count 个地图编号本版本资料库里没有（可能来自更新版本），已忽略
+PROBLEM_UNKNOWN_MAP_NAMES = "unknown_map_names"  # 方案文字里未能识别的地图名 names，已忽略
 PROBLEM_HERO_ID = "unknown_hero_id"  # 短字符串里的角色编号 hero_id 资料库未收录，跳过这一套
 PROBLEM_HERO_NAME = "unknown_hero"  # 方案文字里的角色名 hero 资料库未收录，跳过这一套
 PROBLEM_NAME_CUT = "name_truncated"  # 名称超过 NAME_MAX 个字，已截断
 PROBLEM_NOTE_CUT = "note_truncated"  # 说明超过 NOTE_MAX 个字，已截断
 PROBLEM_ORDER = (PROBLEM_BAD_CODE, PROBLEM_BAD_TEXT, PROBLEM_NEWER, PROBLEM_NO_CODES, PROBLEM_UNKNOWN_CODES,
-                 PROBLEM_REMOVED, PROBLEM_UNKNOWN_NAMES, PROBLEM_HERO_ID, PROBLEM_HERO_NAME, PROBLEM_NAME_CUT,
-                 PROBLEM_NOTE_CUT)
+                 PROBLEM_REMOVED, PROBLEM_UNKNOWN_NAMES, PROBLEM_UNKNOWN_MAP_CODES, PROBLEM_UNKNOWN_MAP_NAMES,
+                 PROBLEM_HERO_ID, PROBLEM_HERO_NAME, PROBLEM_NAME_CUT, PROBLEM_NOTE_CUT)
 FATAL_PROBLEMS = frozenset((PROBLEM_BAD_CODE, PROBLEM_BAD_TEXT, PROBLEM_NEWER, PROBLEM_NO_CODES, PROBLEM_HERO_ID,
                             PROBLEM_HERO_NAME))
 
@@ -323,7 +348,8 @@ class StaleChip:
 @dataclass(frozen=True)
 class Scheme:
     """一套筹码方案。字段见模块说明。构造时自动清理名称、作者、说明，tiers 换成 Tiers（传普通 dict 时同一档按 dict 里的
-    先后定顺位）；档位不是 data.TIERS 之一时报 ValueError。目标流派不是字段，由标记推出来（target_schools）。"""
+    先后定顺位）；档位不是 data.TIERS 之一时报 ValueError。maps 存成元组（不整理，要整理用 normalize_maps）；传了一个
+    字符串（不是地图名的序列），或里面有不是字符串的，报 ValueError。目标流派不是字段，由标记推出来（target_schools）。"""
 
     hero: str
     name: str = ""
@@ -333,6 +359,7 @@ class Scheme:
     id: str = ""
     stale: tuple[StaleChip, ...] = ()
     copied_from_default: str = ""
+    maps: tuple[str, ...] = ()
 
     def __post_init__(self):
         set_ = object.__setattr__
@@ -341,6 +368,12 @@ class Scheme:
         set_(self, "author", clean_text(self.author, AUTHOR_MAX)[0])
         set_(self, "note", clean_text(self.note, NOTE_MAX)[0])
         set_(self, "stale", tuple(self.stale))
+        if isinstance(self.maps, (str, bytes)):
+            raise ValueError(f"适用地图应为地图名的序列，不是一个字符串：{self.maps!r}")  # 不然会拆成一个个字
+        maps = tuple(self.maps)
+        if any(not isinstance(m, str) for m in maps):
+            raise ValueError(f"适用地图应为地图名：{maps!r}")
+        set_(self, "maps", maps)
 
     def marked(self, tier: str) -> list[str]:
         """标了这一档的筹码名，按顺位。"""
@@ -352,6 +385,32 @@ class Scheme:
         for t in self.tiers.values():
             out[t] += 1
         return out
+
+
+# ------------------------------------------------------------ 适用地图
+
+
+def map_codes(db) -> dict[str, int]:
+    """能标在方案上的地图 → 地图编号（data.MapInfo.code），按编号排。没有编号的地图（已经结束的运动场）不在里面。
+    资料里编号重复时只认先出现的那张（tools/check_data.py 会报出来）。"""
+    found: dict[int, str] = {}
+    for name, info in db.map_info.items():
+        if info.code is not None and info.code not in found:
+            found[info.code] = name
+    return {name: code for code, name in sorted(found.items())}
+
+
+def taggable_maps(db) -> tuple[str, ...]:
+    """编辑窗口里列出来让用户标的地图，按编号排：有编号、还没结束的。标了以后才结束的地图照旧留在方案里（normalize_maps
+    按 map_codes 认），编辑窗口里另外列出来，可以去掉。"""
+    return tuple(name for name in map_codes(db) if not db.map_info[name].ended)
+
+
+def normalize_maps(db, names: Iterable[str]) -> tuple[str, ...]:
+    """一组地图名整理成 Scheme.maps 的样子：只留有编号的地图（map_codes），去掉重复，按编号排。认不出的名字丢掉。"""
+    codes = map_codes(db)
+    wanted = {name for name in names if isinstance(name, str)}
+    return tuple(name for name in codes if name in wanted)
 
 
 # ------------------------------------------------------------ 列进方案的流派、被锁成不选的流派、目标流派
@@ -510,7 +569,8 @@ _FUZZY_CACHE_MAX = 5000
 
 
 class Catalog:
-    """资料库加编号表：筹码名和编号的对应，按名称找筹码（含改名前的旧名、已移除的筹码），按编号或名称找角色。"""
+    """资料库加编号表：筹码名和编号的对应，按名称找筹码（含改名前的旧名、已移除的筹码），按编号或名称找角色，
+    地图名和地图编号的对应（只有有编号的地图），按名称找地图（含游戏繁体界面里的名字）。"""
 
     def __init__(self, db, codes: ChipCodes):
         self.db = db
@@ -532,6 +592,10 @@ class Catalog:
         exact: dict[str, tuple[str, bool]] = {}
         for n in chips:
             exact.setdefault(_key(n), (n, False))
+        # 游戏繁体界面里的筹码名：导入时认，认出来仍存简体名
+        for c in chips.values():
+            if c.hant:
+                exact.setdefault(_key(c.hant), (c.name, False))
         for e in codes.entries:
             if e.code in self.name_of:
                 for old in e.old_names:
@@ -548,11 +612,22 @@ class Catalog:
         for h in db.heroes.values():
             if not h.id:
                 continue
-            for a in (h.name, h.full_name, h.title, h.en, *h.aliases):
+            # 游戏繁体界面里的名字、称号、全名：导入时认，认出来仍存简体名
+            for a in (h.name, h.full_name, h.title, h.en, h.hant, h.hant_title, h.hant_full_name, *h.aliases):
                 if a and _key(a):
                     aliases.setdefault(_key(a), set()).add(h.name)
         # 同一个叫法对应两个角色时不认这个叫法
         self._hero_alias = {k: next(iter(v)) for k, v in aliases.items() if len(v) == 1}
+        # 地图：只认有编号的（已经结束的运动场没有编号，不能标在方案上）。同一个编号对应两张地图时只认先出现的那张
+        self.map_code_of: dict[str, int] = map_codes(db)
+        self.map_name_of: dict[int, str] = {code: name for name, code in self.map_code_of.items()}
+        map_keys: dict[str, str] = {}
+        for name in self.map_code_of:
+            info = db.map_info.get(name)
+            for alias in (name, info.hant if info is not None else ""):
+                if alias:
+                    map_keys.setdefault(_key(alias), name)
+        self._map_exact = map_keys
 
     def sort_chips(self, names: Iterable[str]) -> list[str]:
         """按编号排（没有编号的排在最后、按资料库的顺序）。"""
@@ -574,6 +649,11 @@ class Catalog:
         """只认名称相同的（全角半角、空格、引号、横线不论）：现役筹码名和改名前的旧名认成现在的筹码，资料里已移除的
         名称认成已移除。返回（名称，是否已移除）；找不到时为 None。"""
         return self._exact.get(_key(text)) if isinstance(text, str) else None
+
+    def find_map(self, text: str) -> str | None:
+        """只认名称相同的（全角半角、空格、引号、横线不论）：资料里的地图名和游戏繁体界面里的名字，只认有编号的地图。
+        不做模糊匹配（「图书馆」这样的半截不算）；找不到时为 None。"""
+        return self._map_exact.get(_key(text)) if isinstance(text, str) else None
 
     def find_chip(self, text: str, fuzzy: bool = True) -> tuple[str, bool] | None:
         """按名称找筹码，返回（名称，是否已移除）；找不到时为 None。
@@ -632,6 +712,7 @@ B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 _B58_INDEX = {c: i for i, c in enumerate(B58)}
 _HERO_BITS, _FLAG_BITS = 10, 4
 _COUNT_BITS, _CODE_BITS, _TIER_BITS, _SPAN_BITS = 7, 8, 2, 8
+_MAP_CODE_BITS = 6  # 第 3 版地图段：最大的地图编号占几位
 _FLAG_FULL, _FLAG_RESERVED = 0b0001, 0b1110
 
 
@@ -645,10 +726,12 @@ class ShareError(ValueError):
 
 @dataclass(frozen=True)
 class ShortPayload:
-    """短字符串里的内容：角色编号，（筹码编号, 档位）按方案的先后排（先按档位，同一档按顺位）。"""
+    """短字符串里的内容：角色编号，（筹码编号, 档位）按方案的先后排（先按档位，同一档按顺位），适用地图的编号
+    （从小到大；空的是全地图通用）。maps 不为空时用分享格式第 3 版，为空时用第 2 版。"""
 
     hero_id: int
     marks: tuple[tuple[int, str], ...] = ()
+    maps: tuple[int, ...] = ()
 
 
 def _crc16(data: bytes) -> int:
@@ -662,10 +745,10 @@ def _crc16(data: bytes) -> int:
     return crc
 
 
-def _check(body: bytes) -> bytes:
+def _check(body: bytes, version: int = SHARE_VERSION) -> bytes:
     """编码部分末尾的两字节校验：分享格式的版本号（一个字节）连同内容一起算 CRC-16。各版本的位的排法不同，把别的版本的
     编码改写成本版本的开头（例如手改「CA1-」为「CA2-」）时校验对不上，报校验不符，不会按本版本的排法读出别的内容。"""
-    return _crc16(bytes((SHARE_VERSION,)) + body).to_bytes(2, "big")
+    return _crc16(bytes((version,)) + body).to_bytes(2, "big")
 
 
 def _b58encode(data: bytes) -> str:
@@ -725,13 +808,26 @@ def _perm_width(sizes: Iterable[int]) -> int:
     return (math.prod(math.factorial(k) for k in sizes) - 1).bit_length()
 
 
+def _put_maps(bits: _Bits, maps: tuple[int, ...]) -> None:
+    """第 3 版的地图段：先写最大的地图编号（6 位），再从编号 1 到最大编号每张一位（标了为 1）。maps 已排好、去重。"""
+    if not maps:
+        return
+    span = max(maps)
+    bits.put(span, _MAP_CODE_BITS)
+    selected = set(maps)
+    for code in range(1, span + 1):
+        bits.put(1 if code in selected else 0, 1)
+
+
 def encode_payload(p: ShortPayload) -> str:
-    """把内容编成短字符串的编码部分（不含「CA2-」）。两种档位写法都编一遍，取短的（一样长时取列表写法）：
+    """把内容编成短字符串的编码部分（不含开头的「CA2-」/「ACC3-」）。有适用地图时编第 3 版（版本号 3），没有时编第 2 版。
+    两种档位写法都编一遍，取短的（一样长时取列表写法）：
     - 列表：个数 7 位，再按方案的先后（先按档位，同一档按顺位）每个筹码写编号 8 位、档位 2 位；
     - 逐个：最大编号 8 位，编号 1～最大编号每个一个五进制位（0 未标记，1～4 为四档）；再写各档顺位的排列序号：
       每一档的筹码按编号从小到大排好，依次写出顺位第 1、2……个是其中剩下的第几个（混合进制，几档合成一个数）。
-    marks 的先后就是顺位（只按档位做稳定排序，同一档保持传入的先后）。角色编号超出 10 位、筹码编号超出 1～CODE_MAX、
-    重复的编号、不认识的档位时报 ValueError。"""
+    第 3 版的两种写法后面都接同一个地图段（见 _put_maps）。marks 的先后就是顺位（只按档位做稳定排序，同一档保持传入的
+    先后）。角色编号超出 10 位、筹码编号超出 1～CODE_MAX、地图编号超出 1～MAP_CODE_MAX、重复的编号、不认识的档位时
+    报 ValueError。"""
     if not 0 < p.hero_id < (1 << _HERO_BITS):
         raise ValueError(f"角色编号超出范围：{p.hero_id}")
     codes = [c for c, _ in p.marks]
@@ -739,6 +835,10 @@ def encode_payload(p: ShortPayload) -> str:
         raise ValueError(f"筹码编号应为 1～{CODE_MAX} 且不重复：{codes}")
     if any(t not in TIERS for _, t in p.marks):
         raise ValueError("档位不认识")
+    maps = tuple(sorted(p.maps))
+    if any(not _is_int(c) or not 1 <= c <= MAP_CODE_MAX for c in maps) or len(set(maps)) != len(maps):
+        raise ValueError(f"地图编号应为 1～{MAP_CODE_MAX} 且不重复：{maps}")
+    version = SHARE_VERSION_MAPS if maps else SHARE_VERSION
     marks = sorted(p.marks, key=lambda m: TIERS.index(m[1]))
 
     def head(flags: int) -> _Bits:
@@ -754,6 +854,7 @@ def encode_payload(p: ShortPayload) -> str:
         for code, tier in marks:
             bits.put(code, _CODE_BITS)
             bits.put(TIERS.index(tier), _TIER_BITS)
+        _put_maps(bits, maps)
         out.append(bits)
     if marks:
         span = max(codes)
@@ -773,23 +874,26 @@ def encode_payload(p: ShortPayload) -> str:
         bits.put(span, _SPAN_BITS)
         bits.put(digits, _full_width(span))
         bits.put(perm, _perm_width(len(g) for g in groups))
+        _put_maps(bits, maps)
         out.append(bits)
     texts = []
     for bits in out:
         body = bits.to_bytes()
-        texts.append(_b58encode(body + _check(body)))
+        texts.append(_b58encode(body + _check(body, version)))
     return min(texts, key=len)
 
 
-def decode_payload(code: str) -> ShortPayload:
-    """解短字符串的编码部分。校验不符、长度或结构不对时报 ShareError(PROBLEM_BAD_CODE)；用了本版本没有的标志时
-    报 ShareError(PROBLEM_NEWER)。只认按 encode_payload 的规矩写出的内容（列表写法按档位排、编号不重复，排列序号不超出
-    范围，补齐的位为 0 等）。"""
+def decode_payload(code: str, version: int = SHARE_VERSION) -> ShortPayload:
+    """解短字符串的编码部分，version 为分享格式的版本（默认第 2 版；第 3 版多解一段地图）。校验不符、长度或结构不对时
+    报 ShareError(PROBLEM_BAD_CODE)；用了本版本没有的标志时报 ShareError(PROBLEM_NEWER)。只认按 encode_payload 的规矩
+    写出的内容（列表写法按档位排、编号不重复，排列序号不超出范围，最大地图编号那一位标了，补齐的位为 0 等）。"""
+    if version not in (SHARE_VERSION, SHARE_VERSION_MAPS):
+        raise ValueError(f"不认的分享格式版本：{version}")
     data = _b58decode(code)
     if len(data) < 3:
         raise ShareError(PROBLEM_BAD_CODE)
     body = data[:-2]
-    if _check(body) != data[-2:]:
+    if _check(body, version) != data[-2:]:
         raise ShareError(PROBLEM_BAD_CODE)
     r = _Reader(body)
     hero_id = r.take(_HERO_BITS)
@@ -841,9 +945,18 @@ def decode_payload(code: str) -> ShortPayload:
             seen.add(code)
             last = index
             marks.append((code, TIERS[index]))
+    maps: tuple[int, ...] = ()
+    if version == SHARE_VERSION_MAPS:
+        span = r.take(_MAP_CODE_BITS)
+        if span == 0:
+            raise ShareError(PROBLEM_BAD_CODE)  # 第 3 版至少要标一张地图（没标地图的只写第 2 版）
+        selected = [code for code in range(1, span + 1) if r.take(1)]
+        if not selected or selected[-1] != span:
+            raise ShareError(PROBLEM_BAD_CODE)  # 最大编号那一位必须标了地图（每一位都是 0 时也一样）
+        maps = tuple(selected)
     if r.left >= 8 or r.take(r.left) != 0:
         raise ShareError(PROBLEM_BAD_CODE)
-    return ShortPayload(hero_id, tuple(marks))
+    return ShortPayload(hero_id, tuple(marks), maps)
 
 
 # ------------------------------------------------------------ 生成分享的文字
@@ -869,15 +982,22 @@ def _unescape_field(text: str) -> str:
     return _TO_UNESCAPE.sub(lambda m: m.group(1) if m.group(1) is not None else _ORIGINAL_OF[m.group(2)], text)
 
 
-def to_text(scheme: Scheme) -> str:
-    """可读文字：【名称】筹码方案 v2｜角色｜必选：……｜推荐：……｜可选：……｜不选：……｜说明：……｜作者：……，没有的项不写。
-    每一档按顺位列出（导入时按列出的先后定顺位）；资料更新后对不上的筹码（stale）不写。说明、作者里的【】｜换成近似字
-    （_escape_field），导入时还原。"""
-    parts = [TEXT_HEAD.format(name=scheme.name), scheme.hero]
+def to_text(scheme: Scheme, *, maps: bool | None = None) -> str:
+    """可读文字：【名称】筹码方案 v2｜角色｜必选：……｜推荐：……｜可选：……｜不选：……｜地图：……｜说明：……｜作者：……，
+    没有的项不写。每一档按顺位列出（导入时按列出的先后定顺位）；资料更新后对不上的筹码（stale）不写。说明、作者里的
+    【】｜换成近似字（_escape_field），导入时还原。
+
+    maps 为真、方案又标了地图时写第 3 版（加「地图」一段，地图按编号排）；否则照写第 2 版。maps 为 None 时按 WRITE_MAPS
+    （开着：标了地图的写第 3 版）。"""
+    write_maps = WRITE_MAPS if maps is None else maps
+    with_maps = bool(write_maps and scheme.maps)
+    parts = [(TEXT_HEAD_MAPS if with_maps else TEXT_HEAD).format(name=scheme.name), scheme.hero]
     for tier in TIERS:
         chips = scheme.tiers.order(tier)
         if chips:
             parts.append(TEXT_TIER.format(tier=TIER_LABEL[tier], chips=TEXT_LIST_SEP.join(chips)))
+    if with_maps:
+        parts.append(TEXT_MAPS.format(maps=TEXT_LIST_SEP.join(scheme.maps)))
     if scheme.note:
         parts.append(TEXT_NOTE.format(note=_escape_field(scheme.note)))
     if scheme.author:
@@ -885,8 +1005,11 @@ def to_text(scheme: Scheme) -> str:
     return TEXT_SEP.join(parts)
 
 
-def to_short(scheme: Scheme, catalog: Catalog | None = None) -> str:
-    """短字符串：【名称】CA2-<编码>，带四档和顺位，不含说明和作者。角色不在资料库、筹码没有编号时报 ValueError。"""
+def to_short(scheme: Scheme, catalog: Catalog | None = None, *, maps: bool | None = None) -> str:
+    """短字符串：【名称】CA2-<编码>，带四档和顺位，不含说明和作者。角色不在资料库、筹码或地图没有编号时报 ValueError。
+
+    maps 为真、方案又标了地图时写第 3 版（【名称】ACC3-<编码>，编码里带地图）；否则照写第 2 版。maps 为 None 时按
+    WRITE_MAPS（开着：标了地图的写第 3 版）。"""
     cat = catalog or get_catalog()
     hero = cat.db.heroes.get(scheme.hero)
     if hero is None or not hero.id:
@@ -897,7 +1020,17 @@ def to_short(scheme: Scheme, catalog: Catalog | None = None) -> str:
         if code is None:
             raise ValueError(f"筹码「{name}」没有编号")
         marks.append((code, tier))
-    return SHORT_TEXT.format(name=scheme.name, code=encode_payload(ShortPayload(hero.id, tuple(marks))))
+    write_maps = WRITE_MAPS if maps is None else maps
+    map_codes: list[int] = []
+    if write_maps and scheme.maps:
+        for name in scheme.maps:
+            code = cat.map_code_of.get(name)
+            if code is None:
+                raise ValueError(f"地图「{name}」没有编号")
+            map_codes.append(code)
+    payload = ShortPayload(hero.id, tuple(marks), tuple(map_codes))
+    template = SHORT_TEXT_MAPS if map_codes else SHORT_TEXT
+    return template.format(name=scheme.name, code=encode_payload(payload))
 
 
 # ------------------------------------------------------------ 解析粘贴的内容
@@ -905,9 +1038,9 @@ def to_short(scheme: Scheme, catalog: Catalog | None = None) -> str:
 
 @dataclass(frozen=True)
 class Problem:
-    """导入时的一个问题。kind 为 PROBLEM_* 之一；参数按种类：PROBLEM_UNKNOWN_CODES 用 count，PROBLEM_REMOVED、
-    PROBLEM_UNKNOWN_NAMES 用 names（原文清理过控制字符，显示时要转义），PROBLEM_HERO_ID 用 hero_id，
-    PROBLEM_HERO_NAME 用 hero。"""
+    """导入时的一个问题。kind 为 PROBLEM_* 之一；参数按种类：PROBLEM_UNKNOWN_CODES、PROBLEM_UNKNOWN_MAP_CODES 用
+    count，PROBLEM_REMOVED、PROBLEM_UNKNOWN_NAMES、PROBLEM_UNKNOWN_MAP_NAMES 用 names（原文清理过控制字符，显示时要
+    转义），PROBLEM_HERO_ID 用 hero_id，PROBLEM_HERO_NAME 用 hero。"""
 
     kind: str
     count: int = 0
@@ -946,12 +1079,12 @@ class ParseResult:
 
 
 _SP = r"[ \t\N{IDEOGRAPHIC SPACE}]*"
-# 一套的开头：【名称】（也认 [名称]、［名称］）后接「筹码方案 v<版本>」或「CA<版本>-」，中间可以有空格，不跨行。
+# 一套的开头：【名称】（也认 [名称]、［名称］）后接「筹码方案 v<版本>」或「ACC<版本>-」「CA<版本>-」，中间可以有空格，不跨行。
 # 版本不是 SHARE_VERSION 的也先认出这一套，再按版本报问题（比现在新的报来自更新版本，旧的报格式不正确或校验不符）
 _START = re.compile(
     r"(?:【(?P<n1>[^【】\r\n]{0,200})】|\[(?P<n2>[^\[\]\r\n]{0,200})\]|［(?P<n3>[^［］\r\n]{0,200})］)" + _SP
     + r"(?:(?P<text>筹码方案" + _SP + r"[vVｖＶ]" + _SP + r"(?P<tv>[0-9０-９]{1,6}))"
-    + r"|(?P<short>[CcＣｃ][AaＡａ]" + _SP + r"(?P<sv>[0-9０-９]{1,6})" + _SP + r"[-－—–‐]))"
+    + r"|(?P<short>(?:[AaＡａ][CcＣｃ][CcＣｃ]|[CcＣｃ][AaＡａ])" + _SP + r"(?P<sv>[0-9０-９]{1,6})" + _SP + r"[-－—–‐]))"
 )
 _LINE_END = re.compile(r"[\r\n]")
 _PAYLOAD = re.compile(_SP + r"([0-9A-Za-z０-９Ａ-Ｚａ-ｚ]*)")
@@ -963,7 +1096,10 @@ _AUTHOR_FIELD = re.compile(r"[｜|]" + _SP + r"作" + _SP + r"者" + _SP + r"[�
 _TRIM = " \t\N{IDEOGRAPHIC SPACE}"
 _TIER_OF_LABEL = {label: tier for tier, label in TIER_LABEL.items()}
 _LABEL_AUTHOR = "作者"
-_LIST_ITEMS_MAX = 200  # 一套可读文字里最多认几个筹码名（资料库现在 85 个能标的筹码），超过时按格式不正确
+_LABEL_MAPS = "地图"
+# 一套可读文字里最多认几个名称（资料库现在 85 个能标的筹码），地图名也算在内（和筹码名合起来算，能标的地图现在 9 张），
+# 超过时按格式不正确：大段乱写的名称不逐个去认，问题里列出的认不出的名称也就有个上限
+_LIST_ITEMS_MAX = 200
 _SHOWN_MAX = 30  # 问题里列出的原文（未能识别的筹码名、角色名）最多留几个字
 # 一次粘贴里最多做几次模糊匹配（每次约几十微秒）：大段乱码也能在 0.5 秒内给出结果；超出后名称不同的一律按未能识别。
 # 正常的粘贴（程序生成的文字，或手改过几个筹码名）远用不到这么多
@@ -1026,10 +1162,12 @@ def _parse_short(name: str, version: int, segment: str, cat: Catalog, notes: lis
     """短字符串的一套。返回（方案或 None，问题，编码部分在 segment 里的结束位置）。"""
     m = _PAYLOAD.match(segment)
     length = m.end()
-    if version != SHARE_VERSION:
-        return None, [*notes, Problem(PROBLEM_NEWER if version > SHARE_VERSION else PROBLEM_BAD_CODE)], length
+    if version > SHARE_VERSION_MAPS:
+        return None, [*notes, Problem(PROBLEM_NEWER)], length
+    if version < SHARE_VERSION:
+        return None, [*notes, Problem(PROBLEM_BAD_CODE)], length
     try:
-        payload = decode_payload(unicodedata.normalize("NFKC", m.group(1)))
+        payload = decode_payload(unicodedata.normalize("NFKC", m.group(1)), version)
     except ShareError as e:
         return None, [*notes, Problem(e.kind)], length
     if payload.marks and not cat.codes.entries:
@@ -1050,12 +1188,16 @@ def _parse_short(name: str, version: int, segment: str, cat: Catalog, notes: lis
             removed.append(cat.gone[code])
         else:
             unknown += 1
+    maps = [cat.map_name_of[code] for code in payload.maps if code in cat.map_name_of]
+    unknown_maps = sum(1 for code in payload.maps if code not in cat.map_name_of)
     problems = list(notes)
     if unknown:
         problems.append(Problem(PROBLEM_UNKNOWN_CODES, count=unknown))
     if removed:
         problems.append(Problem(PROBLEM_REMOVED, names=tuple(removed)))
-    return Scheme(hero=hero, name=name, tiers=tiers), problems, length
+    if unknown_maps:
+        problems.append(Problem(PROBLEM_UNKNOWN_MAP_CODES, count=unknown_maps))
+    return Scheme(hero=hero, name=name, tiers=tiers, maps=maps), problems, length
 
 
 def _last(pattern: re.Pattern, text: str):
@@ -1071,8 +1213,10 @@ def _parse_text(name: str, version: int, segment: str, cat: Catalog, notes: list
     def fail(kind: str = PROBLEM_BAD_TEXT, **params):
         return None, [*notes, Problem(kind, **params)], None
 
-    if version != SHARE_VERSION:
-        return fail(PROBLEM_NEWER if version > SHARE_VERSION else PROBLEM_BAD_TEXT)
+    if version > SHARE_VERSION_MAPS:
+        return fail(PROBLEM_NEWER)
+    if version < SHARE_VERSION:
+        return fail(PROBLEM_BAD_TEXT)
     # 说明、作者在最后，内容里可能有分隔符：说明从第一个「｜说明：」到最后一个「｜作者：」，作者到这一套结束
     head, note_raw, author_raw = segment, None, None
     m = _NOTE_FIELD.search(head)
@@ -1091,6 +1235,7 @@ def _parse_text(name: str, version: int, segment: str, cat: Catalog, notes: list
         return fail()  # 缺角色这一段
     hero_text = fields[0]
     lists: list[tuple[str, list[str]]] = []
+    map_values: list[str] = []
     for f in fields[1:]:
         parts = _COLON.split(f, 1)
         if len(parts) != 2:
@@ -1100,11 +1245,13 @@ def _parse_text(name: str, version: int, segment: str, cat: Catalog, notes: list
         values = [v for v in values if v]
         if label in _TIER_OF_LABEL:
             lists.append((_TIER_OF_LABEL[label], values))
+        elif label == _LABEL_MAPS and version >= SHARE_VERSION_MAPS:
+            map_values.extend(values)  # 写了几段就合在一起
         elif label == _LABEL_AUTHOR and author_raw is None:
             author_raw = parts[1]
         else:
-            return fail()  # 不认识的段（包括第 1 版的「目标流派：」）
-    if sum(len(v) for _, v in lists) > _LIST_ITEMS_MAX:
+            return fail()  # 不认识的段（包括第 1 版的「目标流派：」、第 2 版的「地图：」）
+    if sum(len(v) for _, v in lists) + len(map_values) > _LIST_ITEMS_MAX:
         return fail()
     hero = cat.find_hero(hero_text)
     if hero is None:
@@ -1128,6 +1275,17 @@ def _parse_text(name: str, version: int, segment: str, cat: Catalog, notes: list
                     removed.append(hit[0])
             elif hit[0] in cat.markable:
                 tiers.setdefault(hit[0], tier)  # 同一个筹码写在两档里时按先写的
+    maps: list[str] = []
+    unknown_maps: list[str] = []
+    for value in map_values:
+        hit = cat.find_map(value)  # 只认名称相同的（含游戏繁体界面的名字），不做模糊匹配
+        if hit is None:
+            shown = clean_text(value, _SHOWN_MAX)[0]
+            if shown and shown not in unknown_maps:
+                unknown_maps.append(shown)
+        elif hit not in maps:
+            maps.append(hit)
+    maps.sort(key=lambda m: cat.map_code_of[m])
     note, note_cut = clean_text(_unescape_field(note_raw or ""), NOTE_MAX)
     author, _ = clean_text(_unescape_field(author_raw or ""), AUTHOR_MAX)
     problems = list(notes)
@@ -1135,9 +1293,11 @@ def _parse_text(name: str, version: int, segment: str, cat: Catalog, notes: list
         problems.append(Problem(PROBLEM_REMOVED, names=tuple(removed)))
     if unknown:
         problems.append(Problem(PROBLEM_UNKNOWN_NAMES, names=tuple(unknown)))
+    if unknown_maps:
+        problems.append(Problem(PROBLEM_UNKNOWN_MAP_NAMES, names=tuple(unknown_maps)))
     if note_cut:
         problems.append(Problem(PROBLEM_NOTE_CUT))
-    return Scheme(hero=hero, name=name, tiers=tiers, author=author, note=note), problems, None
+    return Scheme(hero=hero, name=name, tiers=tiers, author=author, note=note, maps=maps), problems, None
 
 
 # ------------------------------------------------------------ 方案文件
@@ -1172,7 +1332,7 @@ class _Entry:
     scheme: Scheme | None
 
 
-_SCHEME_KEYS = ("id", "hero_id", "hero", "name", "author", "note", "chips", "copied_from_default")
+_SCHEME_KEYS = ("id", "hero_id", "hero", "name", "author", "note", "chips", "maps", "copied_from_default")
 _TOP_KEYS = ("version", "schemes", "last_used")
 ORPHAN = "orphan"  # 方案文件不在、只剩备份时，第一次保存前把备份另存成「schemes.json.bak.orphan-年月日-时分秒」
 
@@ -1198,8 +1358,11 @@ class SchemeStore:
     退回：有 fallback（用默认位置、发行版的方案文件在个人目录时为程序目录的 schemes.fallback.json，见
     paths.schemes_fallback()）时，写不进去先改存到 fallback，成功后 path 换成它、之后都存在那里；用默认位置时同时告诉
     paths（paths.storage_fallback() 变为退回，悬浮窗据此提示一次）。下次启动时个人目录能写就照常用个人目录里的文件。
-    线程：不加锁。改动都在界面线程里做；识别线程只调 current()（只读内存）。所以修改时不在原来的列表上删东西
-    （delete 换一张新列表），识别线程正在查的那一遍照旧看到完整的旧列表，不会漏掉、错认正在用的方案。"""
+    线程：不加锁。改动都在界面线程里做；识别线程只读内存：current()，和对局里按地图换方案时的 schemes()。所以每种改动
+    都一步换上：add 在列表末尾追加一项，update 把那一项换成新的一套（Scheme 不可变，角色不变），delete 换一张新列表（不在
+    原来的列表上删），set_current 只改一个键；识别线程正在查的那一遍看到的是改之前或改之后的完整内容，不会漏掉、错认
+    正在用的方案。先后两次调用（current、schemes）之间赶上一次改动时，两次读到的可能一个在改之前、一个在改之后；改完
+    悬浮窗按新的内容重算，这一下的出入不会留下来。"""
 
     def __init__(self, path: Path | str | None = None, catalog: Catalog | None = None,
                  now: Callable[[], datetime] | None = None, fallback: Path | str | None = None):
@@ -1292,7 +1455,7 @@ class SchemeStore:
         entry = self._entry(scheme_id)
         if entry is None or entry.scheme is None:
             raise ValueError(f"没有这套方案：{scheme_id}")
-        # 换一张新列表，不在原列表上删：识别线程这时正在查原列表（current）的话，照旧查完整的旧列表（见类的说明）
+        # 换一张新列表，不在原列表上删：识别线程这时正在查原列表（current、schemes）的话，照旧查完整的旧列表（见类的说明）
         self._entries = [e for e in self._entries if e is not entry]
         for hero_id, used in list(self._last_used.items()):
             if used == scheme_id:
@@ -1416,8 +1579,14 @@ class SchemeStore:
         chips = [{"code": cat.code_of.get(n), "name": n, "tier": t, **extra.get(n, {})} for n, t in s.tiers.items()]
         chips += [{"code": x.code, "name": x.name, "tier": x.tier, **stale_extra.get((x.code, x.name), {})}
                   for x in s.stale]
+        # 地图行按编号写，认不出的行（可能来自更新版本）原样跟在后面
+        map_extra, unknown_maps = _map_extras(entry.raw, cat) if entry.raw is not None else ({}, [])
+        wanted = set(s.maps)
+        maps = [{"code": code, "name": name, **map_extra.get(name, {})}
+                for name, code in cat.map_code_of.items() if name in wanted]
+        maps += unknown_maps
         out = {"id": s.id, "hero_id": self._hero_id(s.hero), "hero": s.hero, "name": s.name, "author": s.author,
-               "note": s.note, "chips": chips, "copied_from_default": s.copied_from_default}
+               "note": s.note, "chips": chips, "maps": maps, "copied_from_default": s.copied_from_default}
         if entry.raw is not None:
             out.update({k: v for k, v in entry.raw.items() if k not in _SCHEME_KEYS})  # 不认识的字段原样留着
         return out
@@ -1529,6 +1698,7 @@ def _parse_entry(raw, cat: Catalog) -> Scheme | None:
         if code is not None:
             codes_seen.add(code)
         marks.append((code, row["name"], row["tier"]))
+    map_names, _ = _read_maps(raw.get("maps"), cat)
     hero = cat.hero_by_id.get(hero_id) or (hero_name if hero_name in cat.db.heroes and cat.db.heroes[hero_name].id
                                            else None)
     if hero is None:
@@ -1543,7 +1713,7 @@ def _parse_entry(raw, cat: Catalog) -> Scheme | None:
         else:
             stale.append(StaleChip(name=name, tier=tier, code=code, removed=gone))
     return Scheme(hero=hero, name=texts["name"], tiers=tiers, author=texts["author"], note=texts["note"], id=sid,
-                  stale=tuple(stale), copied_from_default=texts["copied_from_default"])
+                  stale=tuple(stale), copied_from_default=texts["copied_from_default"], maps=map_names)
 
 
 _CHIP_KEYS = ("code", "name", "tier")  # 方案文件里筹码行本版本认识的字段
@@ -1579,6 +1749,71 @@ def _chip_extras(raw: dict, cat: Catalog) -> tuple[dict[str, dict], dict[tuple, 
         elif (_is_int(code) or code is None) and isinstance(name, str):
             by_stale.setdefault((code, name), extra)
     return by_chip, by_stale
+
+
+_MAP_KEYS = ("code", "name")  # 方案文件里地图行本版本认识的字段
+
+
+def _map_rows(value) -> list[dict] | None:
+    """文件里一套方案的地图行（maps）：没写时为空的列表；类型不对（不是列表、某一行不是对象、编号不是整数、名称不是
+    文字）时为 None。这一项可有可无，类型不对时只当这套方案是通用的，不按读坏的文件处理。"""
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        return None
+    rows: list[dict] = []
+    for row in value:
+        if not isinstance(row, dict) or not isinstance(row.get("name"), str):
+            return None
+        code = row.get("code")
+        if code is not None and not _is_int(code):
+            return None
+        if code is None and not row["name"]:
+            return None
+        rows.append(row)
+    return rows
+
+
+def _resolve_map(code, name, cat: Catalog) -> str | None:
+    """文件里的一个地图行认成有编号的地图：先认编号，再认名称（资料里的名字、游戏繁体界面里的名字，归一化后精确比，
+    不做模糊匹配）。认不出时为 None。"""
+    if _is_int(code) and code in cat.map_name_of:
+        return cat.map_name_of[code]
+    return cat.find_map(name)
+
+
+def _read_maps(value, cat: Catalog) -> tuple[tuple[str, ...], list[dict]]:
+    """文件里一套方案的 maps → （标了的地图名（按编号排、去重），认不出的行原样）。类型不对时按通用算（见 _map_rows）。"""
+    rows = _map_rows(value)
+    if rows is None:
+        return (), []
+    names: list[str] = []
+    unknown: list[dict] = []
+    for row in rows:
+        name = _resolve_map(row.get("code"), row["name"], cat)
+        if name is None:
+            unknown.append(dict(row))
+        elif name not in names:
+            names.append(name)
+    names.sort(key=lambda n: cat.map_code_of[n])
+    return tuple(names), unknown
+
+
+def _map_extras(raw: dict, cat: Catalog) -> tuple[dict[str, dict], list[dict]]:
+    """文件里一套方案的地图行里本版本不认识的字段：（认出的地图名 → 这些字段，认不出的行原样）。
+    同一张地图写了几行时只看先写的那行。"""
+    rows = _map_rows(raw.get("maps"))
+    if rows is None:
+        return {}, []
+    by_map: dict[str, dict] = {}
+    unknown: list[dict] = []
+    for row in rows:
+        name = _resolve_map(row.get("code"), row["name"], cat)
+        if name is None:
+            unknown.append(dict(row))
+        else:
+            by_map.setdefault(name, {k: v for k, v in row.items() if k not in _MAP_KEYS})
+    return by_map, unknown
 
 
 def _decode(data: bytes) -> dict:

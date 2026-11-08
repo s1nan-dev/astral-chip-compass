@@ -860,7 +860,7 @@ class NoticeModelTest(unittest.TestCase):
     """提示行的排法和悬停说明（不经悬浮窗）。"""
 
     def rows(self, assets_state):
-        view = SimpleNamespace(game_over=False, unsupported=[], unrecorded=0)
+        view = SimpleNamespace(game_over=False, unsupported=[], unrecorded=0, map_switched=False)
         model = notices.NoticeModel()
         rows = model.rows(view, live=False, reverted_chip="", capture=None, unlocked=[], schemes="", assets=assets_state,
                           calibrate_games=20, folder="AstralChipCompass")

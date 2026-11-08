@@ -10,6 +10,7 @@
 import threading
 import unittest
 from datetime import datetime
+from types import SimpleNamespace
 
 from advisor.data import load_db  # noqa: E402
 from advisor.ui.overlay import Overlay
@@ -116,6 +117,30 @@ class UndoAutoReportTest(unittest.TestCase):
         self.window.export_diagnostics()
         self.assertEqual([(e["auto"], e["picked"], e["covered"]) for e in self.diagnostics.exports],
                          [(True, None, None), (False, picked, covered)])
+
+    def test_rejoin_saves_nothing(self):
+        """主菜单结束的那一局断线以后又连回来（Session 自动撤回那次结束，不是用户撤销误判）：不存诊断包、不清理。"""
+        clock = [1000.0]
+        s, w = self.session, self.window
+        s._clock = lambda: clock[0]
+        menu = SimpleNamespace(kind="main_menu", difficulty=None, map=None, rounds=None)
+
+        def feed(fn, *args):
+            ev = fn(*args)
+            for e in [*s.take_events(), *([ev] if ev is not None else [])]:
+                w.handle(e)
+            clock[0] += 3
+
+        for reading in (6, 6, menu, menu, 7, 7):  # 第 6 轮；主菜单两次（结束）；连回来，第 7 轮两次
+            if reading is menu:
+                feed(s.on_out_of_game, menu)
+            else:
+                feed(s.on_hud, SimpleNamespace(round=reading, map=None))
+        self.assertFalse(s.game.game_over)
+        self.assertEqual(s.settings.round, 7)
+        self.assertEqual(self.diagnostics.exports, [])
+        self.assertEqual(self.diagnostics.prunes, [])
+        self.assertTrue(any(r["kind"] == "read:rejoined" for r in s.recent_events(600)))
 
 
 if __name__ == "__main__":

@@ -15,10 +15,14 @@ from advisor import paths as app_paths  # noqa: E402
 from advisor import version as app_version  # noqa: E402
 from advisor.data import load_db  # noqa: E402
 from advisor.session import GAME_FIELDS  # noqa: E402
+from advisor.ui import overlay as overlay_mod
 from advisor.ui.overlay import Overlay
 from advisor.ui.overlay_parts.wording import CAPTURE_SCREEN_TIP, CAPTURE_RESTORED, CAPTURE_NOTICE, CAPTURE_TIP_NO_CODE, CAPTURE_TIP
-from advisor.ui.overlay_parts.wording import ABOUT_LINK, FREE_NOTICE_RISK
-from advisor.ui.overlay_parts.app import UiSettings, OverlaySession, load_settings
+from advisor.ui.overlay_parts.wording import (ABOUT_LINK, FREE_NOTICE_RISK, HANT_NOTICE_TEXT, HANT_STAY, HANT_STAY_TIP,
+                                              HANT_SWITCH, HANT_SWITCH_TIP, RESTART_FAILED)
+from advisor.ui import lang
+from advisor.ui.overlay_parts.state import take_view
+from advisor.ui.overlay_parts.app import UiSettings, OverlaySession, load_settings, TAPTAP
 from advisor.ui.services import Services  # noqa: E402
 from advisor.ui.settings import settings_texts  # noqa: E402
 from advisor.ui.text import capture_detail  # noqa: E402
@@ -201,16 +205,8 @@ def unpadded(text: str) -> str:
     return re.sub(r" (https?://[^\s]+) ", r"\1", text.replace("\xa0", " "))
 
 
-class FreeNoticeTest(unittest.TestCase):
-    """第一次启动时的「免费软件」声明（version.FREE_NOTICE）后面接一句账号风险的提醒（wording.FREE_NOTICE_RISK）：main()
-    启动时调用 check_free_notice，设置里还没关过就显示在标题栏下方（全局提示，排在全局提示的最后），一行显示、全部展开都显示；
-    还是一条提示、一个「关闭本条提示」；是说明，边框不变色；网址做成能点的链接（交给系统默认浏览器打开），「关于」也是链接
-    （打开「关于」窗口、停在免责声明那一节）；点「关闭本条提示」后记进设置文件，以后启动不再显示，删掉设置文件会再显示一次；
-    开发版、发行版都显示；测试、预览不调用 check_free_notice，不显示。「关于」窗口最上面照旧只写声明那一句（每种排法），
-    逐字相同。设置文件写在项目 .tmp 下的临时文件夹里。"""
-
-    URL = "https://github.com/s1nan-dev/astral-chip-compass"
-    TEXT = app_version.FREE_NOTICE + FREE_NOTICE_RISK  # 悬浮窗上那一条
+class NoticeCase(unittest.TestCase):
+    """「免费软件」声明和认出繁体游戏那一条共用：建悬浮窗（设置文件写在测试沙箱的临时文件夹里），取全局提示各行的键。"""
 
     def setUp(self):
         self.db = load_db()
@@ -236,6 +232,18 @@ class FreeNoticeTest(unittest.TestCase):
         row = next(box.itemAt(i).widget() for i in range(box.count())
                    if box.itemAt(i).widget().objectName() == f"notice-{key}")
         return next(x for x in row.findChildren(QLabel) if x.objectName().startswith("notice_"))
+
+
+class FreeNoticeTest(NoticeCase):
+    """第一次启动时的「免费软件」声明（version.FREE_NOTICE）后面接一句账号风险的提醒（wording.FREE_NOTICE_RISK）：main()
+    启动时调用 check_free_notice，设置里还没关过就显示在标题栏下方（全局提示，排在全局提示的最后），一行显示、全部展开都显示；
+    还是一条提示、一个「关闭本条提示」；是说明，边框不变色；网址做成能点的链接（交给系统默认浏览器打开），「关于」也是链接
+    （打开「关于」窗口、停在免责声明那一节）；点「关闭本条提示」后记进设置文件，以后启动不再显示，删掉设置文件会再显示一次；
+    开发版、发行版都显示；测试、预览不调用 check_free_notice，不显示。「关于」窗口最上面照旧只写声明那一句（每种排法），
+    逐字相同。设置文件写在项目 .tmp 下的临时文件夹里。"""
+
+    URL = "https://github.com/s1nan-dev/astral-chip-compass"
+    TEXT = app_version.FREE_NOTICE + FREE_NOTICE_RISK  # 悬浮窗上那一条
 
     def test_shown_once_checked(self):
         """check_free_notice 以后显示（一行显示时也在），文字逐字照 FREE_NOTICE、后面接账号风险那一句；不调用时（测试、预览、
@@ -433,6 +441,208 @@ class FreeNoticeTest(unittest.TestCase):
                     box.deleteLater()
                     APP.sendPostedEvents(None, QEvent.Type.DeferredDelete)
         self.assertEqual(seen, set(about.LAYOUTS))  # 七种排法都查到了
+
+
+class HantNoticeTest(NoticeCase):
+    """界面是简体、认出游戏是繁体中文时标题栏下方问一句：文字和按钮转成繁体，排在「免费软件」声明前面；〔換〕把界面语言
+    存成繁体、马上重新打开拾星助手，〔不換〕记进设置文件、以后不再问；两个按钮一样宽；对局进行中先不显示。"""
+    # 转出来的全文（写死：改文字时也核对转换结果）
+    SHOWN = "認出遊戲是繁體中文，介面要換成繁體中文嗎？"
+    SWITCH = "換"
+    KEEP = "不換"
+    SWITCH_TIP = "介面換成繁體中文，馬上重新開啟拾星助手"
+    KEEP_TIP = "保持簡體介面，以後不再問"
+
+    def setUp(self):
+        super().setUp()
+        saved = lang.CURRENT
+        self.addCleanup(setattr, lang, "CURRENT", saved)
+        lang.CURRENT = lang.HANS
+        # 讲的是繁体界面打开以后的样子；关着时一律不问，见 test_not_asked_when_hant_off
+        switch = mock.patch.object(lang, "HANT_ENABLED", True)
+        switch.start()
+        self.addCleanup(switch.stop)
+
+    def test_not_asked_when_hant_off(self):
+        """繁体界面关着（lang.HANT_ENABLED）时没得换：认出繁体游戏也不问，标题栏下方没有这一条。"""
+        with mock.patch.object(lang, "HANT_ENABLED", False):
+            w = self.make()
+            w.session.hant_game = True
+            w.refresh()
+            self.assertNotIn("hant", self.global_keys(w))
+
+    def test_shown_once(self):
+        w = self.make()
+        w.session.hant_game = True
+        w.refresh()
+        self.assertEqual(self.SHOWN, lang.to_hant(HANT_NOTICE_TEXT))  # 写死的全文和转换结果一致
+        self.assertEqual(self.SWITCH, lang.to_hant(HANT_SWITCH))
+        self.assertEqual(self.KEEP, lang.to_hant(HANT_STAY))
+        self.assertEqual(self.SWITCH_TIP, lang.to_hant(HANT_SWITCH_TIP))
+        self.assertEqual(self.KEEP_TIP, lang.to_hant(HANT_STAY_TIP))
+        self.assertEqual(w.notice_model.texts()["hant"], self.SHOWN)
+        self.assertEqual(self.global_keys(w), ["hant"])
+        buttons = w.notices.buttons("hant")
+        self.assertEqual([b.text() for b in buttons], [self.SWITCH, self.KEEP])
+        self.assertEqual([tip_text(b.toolTip()) for b in buttons], [self.SWITCH_TIP, self.KEEP_TIP])
+
+    def test_switch(self):
+        """〔換〕：界面语言存成繁体（设置文件里也是），马上重新打开拾星助手；识别记录记一条 hant_switch。"""
+        w = self.make()
+        w.session.hant_game = True
+        w.refresh()
+        quit_called = []
+        app = SimpleNamespace(quit=lambda: quit_called.append(True))
+        with mock.patch.object(overlay_mod.relaunch, "start", return_value=True) as start, \
+                mock.patch.object(overlay_mod, "QApplication", SimpleNamespace(instance=lambda: app)):
+            w.notices.buttons("hant")[0].click()
+        start.assert_called_once()
+        self.assertEqual(quit_called, [True])
+        self.assertEqual(w.session.settings.ui_lang, lang.HANT)
+        self.assertEqual(json.loads(self.path.read_text(encoding="utf-8"))["ui_lang"], lang.HANT)
+        records = [e.get("action") for e in w.session.recent_events(600) if e.get("kind") == "read:user"]
+        self.assertEqual(records, ["hant_switch", "ui_lang"])
+
+    def test_switch_failure_keeps_running(self):
+        """起不来新的进程时不退出，提示一次；设置已经存成繁体，这一条按显示条件自己收起。"""
+        w = self.make()
+        w.session.hant_game = True
+        w.refresh()
+        quit_called = []
+        app = SimpleNamespace(quit=lambda: quit_called.append(True))
+        with mock.patch.object(overlay_mod.relaunch, "start", return_value=False), \
+                mock.patch.object(w.tray_part, "show_from_tray"), \
+                mock.patch.object(overlay_mod, "QApplication", SimpleNamespace(instance=lambda: app)):
+            w.notices.buttons("hant")[0].click()
+        self.assertEqual(quit_called, [])
+        self.assertEqual(w.message.text, RESTART_FAILED)
+        self.assertNotIn("hant", w.notice_model.texts())
+        self.assertEqual(w.session.settings.ui_lang, lang.HANT)
+        self.assertEqual(json.loads(self.path.read_text(encoding="utf-8"))["ui_lang"], lang.HANT)
+        records = [e.get("action") for e in w.session.recent_events(600) if e.get("kind") == "read:user"]
+        self.assertEqual(records, ["hant_switch", "ui_lang", "restart_failed"])
+
+    def test_placement_and_keep(self):
+        """〔不換〕：记进设置文件（hant_notice_closed），这一行收起，以后启动不再问；排在「免费软件」声明前面。"""
+        w = self.make()
+        w.notices.check_free_notice()
+        w.session.hant_game = True
+        w.refresh()
+        self.assertEqual(self.global_keys(w), ["hant", "free"])
+        w.notices.buttons("hant")[1].click()
+        self.assertNotIn("hant", w.notice_model.texts())
+        self.assertIs(w.session.settings.hant_notice_closed, True)
+        self.assertIs(json.loads(self.path.read_text(encoding="utf-8"))["hant_notice_closed"], True)
+        records = [e for e in w.session.recent_events(600) if e.get("kind") == "read:user"]
+        self.assertEqual([e.get("action") for e in records], ["dismiss_hant"])
+        again = self.make(settings=load_settings(self.path))
+        again.session.hant_game = True
+        again.refresh()
+        self.assertNotIn("hant", again.notice_model.texts())
+
+    def test_second_lane_forwards(self):
+        """第二张上的〔換〕转给第一张：存进共用的设置，由第一张退出。"""
+        first = self.make()
+        second = Overlay(self.db, OverlaySession(self.db, UiSettings(hero="凛"), self.path), threading.Lock(),
+                         services=self.services, primary=first, platform=TAPTAP)
+        second.run_background = lambda fn: fn()
+        self.addCleanup(second.hide)
+        first.session.hant_game = True
+        first.refresh()
+        second.notice_model.lane_only = False
+        second.session.hant_game = True
+        second.refresh()
+        quit_called = []
+        app = SimpleNamespace(quit=lambda: quit_called.append(True))
+        with mock.patch.object(overlay_mod.relaunch, "start", return_value=True) as start, \
+                mock.patch.object(overlay_mod, "QApplication", SimpleNamespace(instance=lambda: app)):
+            second.notices.buttons("hant")[0].click()
+        start.assert_called_once()
+        self.assertEqual(quit_called, [True])
+        self.assertEqual(first.session.settings.ui_lang, lang.HANT)
+        self.assertEqual(json.loads(self.path.read_text(encoding="utf-8"))["ui_lang"], lang.HANT)
+
+    def test_equal_width(self):
+        """〔換〕〔不換〕一样宽，而且都不少于按按钮自己的字体写三个汉字的宽度（一个字的按钮也好点）。"""
+        w = self.make()
+        w.session.hant_game = True
+        w.refresh()
+        w.show()
+        APP.processEvents()
+        buttons = w.notices.buttons("hant")
+        self.assertEqual(len(buttons), 2)
+        self.assertEqual(buttons[0].width(), buttons[1].width())
+        for btn in buttons:
+            fm = btn.fontMetrics()
+            min_width = (btn.sizeHint().width() - fm.horizontalAdvance(btn.text())
+                         + fm.horizontalAdvance("三个字"))
+            self.assertGreaterEqual(btn.width(), min_width, btn.text())
+
+    def test_playing(self):
+        """对局进行中、找得到游戏窗口时先不显示；这一局结束、回到大厅（找不到游戏窗口）后显示；中途退出、认不出主菜单（连着
+        一阵子看不到对局里的读数，这一局的状态还留着）也显示，又读到了就收起。"""
+        w = self.make()
+        w.session.hant_game = True
+        w.session.settings.round = 3
+        w.follower.activity = "game"
+        w.refresh()
+        self.assertNotIn("hant", w.notice_model.texts())
+        w.session.game_quiet = True
+        w.refresh()
+        self.assertIn("hant", w.notice_model.texts())
+        w.session.game_quiet = False
+        w.refresh()
+        self.assertNotIn("hant", w.notice_model.texts())
+        w.session.game.game_over = True
+        w.refresh()
+        self.assertIn("hant", w.notice_model.texts())
+        w.session.game.game_over = False
+        w.session.settings.round = 3
+        w.follower.activity = "nogame"
+        w.refresh()
+        self.assertIn("hant", w.notice_model.texts())
+
+    def test_conditions(self):
+        """只在第一张上显示（全局提示，第二张滤掉）；界面已经是繁体、设置里已经选了繁體（等重开）、这条关过时不显示。"""
+        w = self.make()
+        w.session.hant_game = True
+        w.refresh()
+        self.assertIn("hant", w.notice_model.texts())
+        w.notice_model.lane_only = True
+        w.refresh()
+        self.assertNotIn("hant", w.notice_model.texts())
+        w.notice_model.lane_only = False
+        w.session.settings.ui_lang = lang.HANT
+        w.refresh()
+        self.assertNotIn("hant", w.notice_model.texts())
+        w.session.settings.ui_lang = lang.HANS
+        w.session.settings.hant_notice_closed = True
+        w.refresh()
+        self.assertNotIn("hant", w.notice_model.texts())
+        lang.CURRENT = lang.HANT
+        w.session.settings.hant_notice_closed = False
+        w.refresh()
+        self.assertNotIn("hant", w.notice_model.texts())
+
+    def test_counts_complete_reads(self):
+        """完整识别连着两次读到繁体标题才记下；只重查绿框（reread）、快速盯绿框的沿用读数不算；中间读到简体就清零。"""
+        session = OverlaySession(self.db, UiSettings(hero="凛"))
+
+        def seen(hant, reread=False):
+            return SimpleNamespace(names=[None, None, None], raw=["", "", ""], name_scores=[0, 0, 0],
+                                   rarity=[None, None, None], rerolls=2, probabilities=None, selected=None,
+                                   problems=[], centers=[], unit=0.0, unrecorded=[False, False, False],
+                                   team=False, partial=[False, False, False], reread=reread, watch=False, hant=hant)
+
+        session.on_frame(seen(True, reread=True))
+        session.on_frame(seen(True))
+        self.assertFalse(session.hant_game)
+        session.on_frame(seen(True))
+        self.assertTrue(session.hant_game)  # 两次完整识别
+        self.assertEqual(take_view(session).hant_notice, True)
+        session.on_frame(seen(False))
+        self.assertTrue(session.hant_game)  # 这次运行里一直为真
+        self.assertEqual(len([e for e in session.recent_events(600) if e.get("kind") == "read:hant_game"]), 1)
 
 
 if __name__ == "__main__":

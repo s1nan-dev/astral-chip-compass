@@ -13,7 +13,7 @@ import unittest
 from pathlib import Path
 
 from advisor import paths
-from advisor.data import DataError, load_db
+from advisor.data import MAP_CODE_MAX, DataError, load_db
 from advisor.engine import default_rerolls
 
 FILES = ("chips.json", "heroes.json", "rules.toml", "synergy.toml", "series.toml", "maps.json", "mutators.json", "meta.json")
@@ -128,6 +128,23 @@ class DegradeTest(Base):
         self.assertEqual((db.map_info["御魂庆典"].extreme_cap, db.map_info["御魂庆典"].extreme_tasks), (None, 4.0))
         self.assertEqual(db.map_info["御魂庆典"].cap_for(None, "极限"), 19)
 
+    def test_maps_json_bad_task_levels(self):
+        # maps.json 的 task_levels（任务等级）写坏了：记警告，这张地图按没有等级资料处理（之后的任务照旧按当前星数估），
+        # 其余照常
+        def edit(data):
+            data["森秋幻境"]["task_levels"] = {"困难": [1, 2, "三"]}
+            data["水乡古镇"]["task_levels"] = {"普通": []}
+            data["魔法学院"]["task_levels"] = {"噩梦": [[1, 2, 2], 2]}
+            data["幽魂暗巷"]["task_levels"] = {"地狱": [1, 2, 2, 3]}
+            data["龙宫游乐园"]["task_levels"] = {"困难": [2, 2, 2, 4]}  # 等级只有 1～3
+        db = self.load(maps_json=self.edit_json(edit))
+        for name in ("森秋幻境", "水乡古镇", "魔法学院", "幽魂暗巷", "龙宫游乐园"):
+            with self.subTest(map=name):
+                self.assertIn(f"maps.json 地图「{name}」：task_levels 的类型不对，按没有资料处理", db.warnings)
+                self.assertEqual(db.map_info[name].task_levels, {})
+                self.assertIsNone(db.map_info[name].task_level_shares("困难"))
+        self.assertEqual(db.map_info["园林中庭"].task_levels["困难"], [[1, 2, 2, 3], [1, 2, 2, 3], [1, 2, 3, 3]])
+
     def test_optional_files_unreadable(self):
         # 可以没有的文件读不出：不抛 json.JSONDecodeError，当作没有这个文件
         db = self.load(mutators_json="{坏掉的", meta_json="[]")
@@ -144,6 +161,96 @@ class DegradeTest(Base):
         self.assertIn(f"chips.json 第 {index.index('会员推荐信') + 1} 个筹码（「会员推荐信」）：缺少 base，已忽略", db.warnings)
         self.assertNotIn("会员推荐信", db.chips)
         self.assertEqual(len(db.chips), len(self.db.chips) - 1)
+
+    def test_hant_optional(self):
+        # 游戏繁体中文界面里的名字没写（或写 null、空着）：这一项照常载入、只认简体的写法，不记警告（缺了由
+        # tools/check_data.py 报）。当成必填的话，缺一个繁体名整个筹码、角色就被跳过，适配表里引用它的地方跟着报一串「不存在」
+        def chips(data):
+            by_name = {c["name"]: c for c in data["chips"]}
+            by_name["拳击手套-初级"].pop("hant")
+            by_name["书签"]["hant"] = None
+            by_name["标靶"]["hant"] = ""
+
+        def heroes(data):
+            by_name = {h["name"]: h for h in data}
+            for key in ("hant", "hant_title"):
+                by_name["帕露南"].pop(key)
+            by_name["超天酱"].pop("hant_full_name")
+
+        def maps(data):
+            data["魔法学院"].pop("hant")
+            data["魔法学院"].pop("hant_tasks")
+            data["幽魂暗巷"]["hant_tasks"] = None
+
+        db = self.load(expect_log=False, chips_json=self.edit_json(chips), heroes_json=self.edit_json(heroes),
+                       maps_json=self.edit_json(maps), mutators_json=self.edit_json(lambda d: d["狂风"].pop("hant")))
+        self.assertEqual(db.warnings, [])
+        self.assertEqual(len(db.chips), len(self.db.chips))
+        self.assertEqual(len(db.heroes), len(self.db.heroes))
+        self.assertEqual([db.chips[n].hant for n in ("拳击手套-初级", "书签", "标靶")], ["", "", ""])
+        self.assertEqual((db.heroes["帕露南"].hant, db.heroes["帕露南"].hant_title, db.heroes["超天酱"].hant_full_name),
+                         ("", "", ""))
+        self.assertEqual(db.heroes["超天酱"].hant, "超天醬")  # 写了的照常
+        self.assertEqual((db.map_info["魔法学院"].hant, db.map_info["魔法学院"].hant_tasks), ("", ()))
+        self.assertEqual(db.mutators["狂风"].hant, "")
+        # 只认简体的任务文字；简体的认法和原来一样
+        self.assertEqual(db.map_tasks["魔法学院"], ("击倒果冻战士", "击倒魔法茶壶", "击倒果冻护卫", "击倒果冻巫师"))
+        self.assertEqual(db.map_tasks["幽魂暗巷"], self.db.map_tasks["幽魂暗巷"])
+        for name in ("魔法学院", "幽魂暗巷"):
+            self.assertEqual(db.map_task_keys[name], tuple((k,) for k in db.map_tasks[name]))
+        self.assertEqual(db.resolve_chip("拳击手套-初级").name, "拳击手套-初级")
+        self.assertEqual(db.match_chip("拳击手套-初级", "蓝")[:2], ("拳击手套-初级", 1.0))
+        self.assertEqual(db.resolve_hero("帕露南").name, "帕露南")
+        self.assertEqual(db.resolve_map("魔法学院"), "魔法学院")
+
+    def test_hant_wrong_type(self):
+        # 繁体名写了却不是文字：记警告、只忽略这一项，这个筹码（角色、地图、组件）照常载入。不这样处理的话组件整个被跳过，
+        # 地图的繁体任务写成一段文字时会按字拆开
+        def chips(data):
+            next(c for c in data["chips"] if c["name"] == "书签")["hant"] = ["書籤"]
+
+        def heroes(data):
+            next(h for h in data if h["name"] == "凛")["hant_title"] = 1
+
+        def maps(data):
+            data["魔法学院"]["hant"] = 1
+            data["幽魂暗巷"]["hant_tasks"] = "擊敗3隻科學怪猿"
+            data["森秋幻境"]["hant_tasks"][0] = 3
+
+        db = self.load(chips_json=self.edit_json(chips), heroes_json=self.edit_json(heroes), maps_json=self.edit_json(maps),
+                       mutators_json=self.edit_json(lambda d: d["狂风"].update(hant={"name": "狂風"})))
+        self.assertEqual(sorted(db.warnings), sorted([
+            "chips.json 筹码「书签」：hant 的类型不对，已忽略",
+            "heroes.json 角色「凛」：hant_title 的类型不对，已忽略",
+            "maps.json 地图「魔法学院」：hant 的类型不对，按没有资料处理",
+            "maps.json 地图「幽魂暗巷」：hant_tasks 应为任务文字的列表（拼不出来的写 null），按没有资料处理",
+            "maps.json 地图「森秋幻境」：hant_tasks 应为任务文字的列表（拼不出来的写 null），按没有资料处理",
+            "mutators.json 组件「狂风」：hant 的类型不对，已忽略",
+        ]))
+        self.assertEqual((db.chips["书签"].hant, db.heroes["凛"].hant_title, db.heroes["凛"].hant), ("", "", "凜"))
+        self.assertEqual((db.map_info["魔法学院"].hant, db.map_info["幽魂暗巷"].hant_tasks), ("", ()))
+        self.assertEqual(db.map_tasks["幽魂暗巷"], self.db.map_tasks["幽魂暗巷"])
+        for name in ("幽魂暗巷", "森秋幻境"):  # 没有按字拆开：只有简体的写法
+            self.assertEqual(db.map_task_keys[name], tuple((k,) for k in db.map_tasks[name]))
+        self.assertIn("狂风", db.mutators)
+        self.assertEqual(db.mutators["狂风"].hant, "")
+
+    def test_hant_tasks_null_placeholder(self):
+        # 拼不出来的繁体任务写 null（资料的写法说明里这样写）：不当成文字去归一化（会抛 TypeError，程序起不来），
+        # 这一条只有简体的写法，其余照常按位置配对（null 占着位置，后面的不往前挪）
+        def maps(data):
+            data["魔法学院"]["hant_tasks"][0] = None
+            data["森秋幻境"]["hant_tasks"] = [None, None, None, None]
+
+        db = self.load(expect_log=False, maps_json=self.edit_json(maps))
+        self.assertEqual(db.warnings, [])
+        self.assertEqual(db.map_info["魔法学院"].hant_tasks[0], "擊敗3隻魔法茶壺")
+        self.assertEqual(db.map_tasks["魔法学院"], self.db.map_tasks["魔法学院"])
+        self.assertEqual(db.map_task_keys["魔法学院"][:2], (("击倒果冻战士",), ("击倒魔法茶壶", "擊敗魔法茶壺")))
+        self.assertEqual(db.map_task_keys["魔法学院"][2:], self.db.map_task_keys["魔法学院"][2:])
+        self.assertEqual(db.map_info["森秋幻境"].hant_tasks, ())
+        self.assertEqual(db.map_tasks["森秋幻境"], self.db.map_tasks["森秋幻境"])
+        self.assertEqual(db.map_task_keys["森秋幻境"], tuple((k,) for k in db.map_tasks["森秋幻境"]))
 
     def test_required_files_unreadable(self):
         # 推荐离不开的三份整份读不出来：抛 DataError，写明文件名和位置，不抛 json.JSONDecodeError、
@@ -171,7 +278,7 @@ class RulesCheckTest(Base):
             ('combos = ["完备治疗与美工刀", "治愈来源与美工刀"]', 'combos = ["完备治疗与美工刀", "治愈来源与美工刀X"]'),
             ('trait = "需要生存"', 'trait = "需要生存X"'),
             ('[difficulty]', '[difficulty]\ncap_untrusted = ["园林中庭X"]'),
-            ('school = "充能"', 'school = "雷电"'),
+            ('schools = ["充能", "标记", "星光"]', 'schools = ["充能", "标记", "雷电"]'),
         )
 
         def rename(text: str) -> str:
@@ -186,7 +293,7 @@ class RulesCheckTest(Base):
             "rules.toml [heal_knife] knives：筹码「美工刀-初级X」不存在",
             "rules.toml [heal_knife] combos：组合规则「治愈来源与美工刀X」不存在",
             "rules.toml [survival] trait：特性「需要生存X」不存在",
-            "rules.toml [charge_build] school：应为流派名（星光、治愈、标记、充能）",
+            "rules.toml [school_build] schools：流派「雷电」不存在",
         ])
 
     def test_school_list_names_bad_entry(self):
@@ -204,7 +311,7 @@ class RulesCheckTest(Base):
         self.assertEqual(db.warnings, ["rules.toml [picks]：缺少 end_round"])
         # 会除零的几项：end_round = 1、temperature = 0、keyword_boost = 0、reward_every = 0、某一行概率全是 0
         edits = (
-            (r"(?m)^end_round = 13", "end_round = 1"), (r"(?m)^temperature = 25", "temperature = 0"),
+            (r"(?m)^end_round = 13", "end_round = 1"), (r"(?m)^temperature = 18", "temperature = 0"),
             (r"(?m)^keyword_boost = 2\.0", "keyword_boost = 0"), (r"(?m)^reward_every = 3", "reward_every = 0"),
             (r"(?m)^rows = \[\[60, 37, 3\]", "rows = [[0, 0, 0]"),
         )
@@ -229,7 +336,7 @@ class RulesCheckTest(Base):
         # （end_round）、按星数的列表（[lookahead] picks）写成 inf、nan 时记警告，同角色的 keep_schools_penalty。不这样
         # 核对时载入一条警告都没有，算推荐时总分、推荐度成了 inf、nan
         edits = (
-            (r"(?m)^keep_schools = -40", "keep_schools = -inf"), (r"(?m)^temperature = 25", "temperature = inf"),
+            (r"(?m)^keep_schools = -40", "keep_schools = -inf"), (r"(?m)^temperature = 18", "temperature = inf"),
             (r"(?m)^end_round = 13", "end_round = nan"), (r"(?m)^picks = \[2\.0, 2\.0", "picks = [2.0, inf"),
         )
 
@@ -349,6 +456,24 @@ class MapListTest(Base):
         self.assertEqual(db.maps, (*self.db.maps, "测试新地图"))  # 原有的顺序不变，接在后面
         self.assertEqual(db.resolve_map("测试新地图"), "测试新地图")
         self.assertIn("测试新地图", db.active_maps())
+
+    def test_map_code(self):
+        # 地图编号（code）可以不写：旧的资料、没有编号的地图照常载入，不记警告。写了却不是 1～MAP_CODE_MAX 的整数：
+        # 记警告、按没有编号处理，这张地图照常载入、认得出，只是不能标在方案上（不这样处理的话整张地图被跳过）
+        db = self.load(expect_log=False, maps_json=self.edit_json(lambda d: d["魔法学院"].pop("code")))
+        self.assertEqual(db.warnings, [])
+        self.assertEqual((db.map_info["魔法学院"].code, db.map_info["龙宫游乐园"].code, db.map_info["海选赛运动场"].code),
+                         (None, 1, None))
+        names = ("魔法学院", "幽魂暗巷", "园林中庭", "水乡古镇")
+
+        def bad(data):
+            for name, value in zip(names, ("5", MAP_CODE_MAX + 1, True, 0)):
+                data[name]["code"] = value
+        db = self.load(maps_json=self.edit_json(bad))
+        self.assertEqual(sorted(db.warnings), sorted(f"maps.json 地图「{n}」：code 的类型不对，按没有资料处理" for n in names))
+        self.assertEqual([db.map_info[n].code for n in names], [None] * 4)
+        self.assertEqual(db.map_tasks["魔法学院"], self.db.map_tasks["魔法学院"])
+        self.assertEqual(db.resolve_map("魔法学院"), "魔法学院")
 
 
 class EndlessCycleNameTest(Base):

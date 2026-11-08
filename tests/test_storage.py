@@ -39,7 +39,7 @@ from advisor import assets, clock
 from advisor import diagnostics, paths, prefs, version  # prefs：设置的读写（替换 _write_settings 要换这个模块里的）
 from advisor import schemes as S
 from advisor.session import GAME_FIELDS, Session
-from advisor.ui import skin_preview, theme, widgets
+from advisor.ui import lang, skin_preview, theme, widgets
 from advisor.ui.overlay_parts import option_widgets
 from advisor.ui.overlay_parts.app import UiSettings, load_settings  # 悬浮窗的设置（含只有悬浮窗用的几项）、启动时读设置
 from advisor.vision import chip_panel, hero, stars
@@ -62,12 +62,18 @@ def _scheme(hero: str = "芬妮", name: str = "治愈坦克") -> S.Scheme:
     return S.Scheme(hero=hero, name=name, tiers={"缓冲盾牌": "core", "大碗炖肉": "first"})
 
 
+# 已经不是设置项、读写一遍以后就没有了的旧项（见 UiSettings 里的说明）：已取消的「允许截图」allow_capture，以及自动检查
+# 更新改成每次启动都查以后不再记的上一次检查日期 update_checked
+_DROPPED = frozenset(("allow_capture", "update_checked"))
+
+
 def _check_round_trip(test: unittest.TestCase, original: bytes, saved: Path) -> None:
-    """读写一遍后的设置文件：原有各项（只少了已取消的 allow_capture）逐项相同、一项不少；多出来的只能是以后新加的
+    """读写一遍后的设置文件：原有各项（只少了已经不是设置项的 _DROPPED）逐项相同、一项不少；多出来的只能是以后新加的
     设置项，而且等于默认值（例如导入/导出窗口的格式 share_format）。这会儿不写的项（UiSettings.hidden_fields：发行版皮肤
     功能解锁以前的 skin）原来有也不写。"""
     hidden = set(UiSettings().hidden_fields())
-    before = {k: v for k, v in json.loads(original.decode("utf-8")).items() if k != "allow_capture" and k not in hidden}
+    before = {k: v for k, v in json.loads(original.decode("utf-8")).items() if k not in _DROPPED and k not in hidden}
+    test.assertEqual(_DROPPED & set(json.loads(saved.read_text(encoding="utf-8"))), set())
     after = json.loads(saved.read_text(encoding="utf-8"))
     test.assertEqual(hidden & set(after), set())
     test.assertEqual({k: after.get(k, "（缺少这一项）") for k in before}, before)
@@ -236,8 +242,10 @@ class ReleaseLayoutTest(_Release):
         self.assertFalse(self.user.exists())
         settings = UiSettings.load(paths.state_path())
         self.assertEqual(settings, UiSettings())  # 默认设置
-        # 悬浮窗启动时读设置：没有设置文件（新用户）时「已有筹码」卡片默认收起，其余照默认设置
-        self.assertEqual(load_settings(paths.state_path()), UiSettings(collapsed_cards=["owned"]))
+        # 悬浮窗启动时读设置：没有设置文件（新用户）时「已有筹码」卡片默认收起，其余照默认设置（界面语言没选过：繁体界面
+        # 打开时按这次启动的语言填上，关着时留空）
+        self.assertEqual(load_settings(paths.state_path()),
+                         UiSettings(collapsed_cards=["owned"], ui_lang=lang.CURRENT if lang.HANT_ENABLED else ""))
         store = self.store()
         self.assertEqual((store.path, store.schemes(), store.notice), (self.user / "schemes.json", [], None))
         self.assertTrue(self.user.is_dir())

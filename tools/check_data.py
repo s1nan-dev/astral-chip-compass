@@ -12,20 +12,25 @@ data/ 里的 JSON 就是游戏数据本身：游戏更新后直接改 JSON。
   地方，都在这里查。
 
 每一项检查：
-- 筹码（chips.json）：筹码名不重复；别名（aliases）不和其他筹码的名字、别名重复；fit、fit_minor 写的是 heroes.json 里的
-  角色名；group、school、maps 对得上（group 是流派时 school 也写这个流派，否则 school 为 null；地图专属的筹码写所属地图，
-  别的不写）；removed 里没有现役筹码；
+- 筹码（chips.json）：筹码名不重复；别名（aliases）不和其他筹码的名字、别名重复；每个筹码有游戏繁体中文界面里的名字
+  （hant）；fit、fit_minor 写的是 heroes.json 里的角色名；group、school、maps 对得上（group 是流派时 school 也写这个流派，
+  否则 school 为 null；地图专属的筹码写所属地图，别的不写）；removed 里没有现役筹码；
 - 标记为地图直接发放（granted）的筹码要有所属地图；
-- 角色（heroes.json）：角色名、编号（id）不重复；四个职业的权重写全；aliases 包含 name、full_name、title、en；
+- 角色（heroes.json）：角色名、编号（id）不重复；四个职业的权重写全；aliases 包含 name、full_name、title、en；有繁体名
+  （hant）、繁体称号（hant_title，有 title 时）、繁体全名（hant_full_name，full_name 和 name 不同时）；
   group 取六类之一（和 mechanics/characters.md 第三章一致，决定三处角色下拉框的先后和审查清单的分节）；
+- 繁体名和同一类里别的项目的名字、旧名、繁体名归一化以后撞车时报出来（认名字时只会认成一个）；
 - 同系列筹码表（data/series.toml）写全：图标相同的筹码两两都要写一对 [[pair]]，每一对都要写 reason；
 - 筹码编号表（data/chip_codes.json）：每张现役筹码都有自己的一行，编号不重复、不超上限；改名、移除、移除后又回来的
   筹码照编号表的规矩写（编号只增不改：已经分享出去的筹码方案靠它解码）；现役筹码那一行的 en 和 chips.json 里的一致，
   已移除的筹码不核对；
-- maps.json：每张地图的任务和四个难度的进度上限齐全，progress_cap 和 progress_caps 对得上，限时地图的日期和开关
-  写法对；筹码写的地图都在这份文件里；每张地图的 file 指向的机制文档（mechanics/maps/ 下）存在，文档里「任务」表
-  的任务名和这张地图的 tasks 一致（文档里表的写法照现在的，解析宽容；读不出来时报「看不懂这张表」）；
-- mutators.json：有这个文件，而且不是空的；
+- maps.json：每张地图的任务和四个难度的进度上限齐全，有繁体名（hant）、繁体任务（hant_tasks，和 tasks 条数相同、顺序
+  对应，拼不出来的写 null）；progress_cap 和 progress_caps 对得上，限时地图的日期和开关写法对；任务等级（task_levels）
+  每条路线的个数和一局的筹码任务数（chip_tasks，极限对 extreme.chip_tasks）对得上、等级是 1～3；筹码写的地图都在这份文件里；
+  地图编号（code）是 1～63 的整数、不重复；有作业站短名的地图都有编号，没有短名的（已经结束的运动场）不该有编号；
+  每张地图的 file 指向的机制文档（mechanics/maps/ 下）存在，文档里「任务」表的任务名和这张地图的 tasks 一致（文档里表的
+  写法照现在的，解析宽容；读不出来时报「看不懂这张表」）；
+- mutators.json：有这个文件，而且不是空的；每个组件有繁体名（hant）；
 - photo_tilt.json（对局里斜着摆的角色照，认角色时先转再比）：photos 的键是识别图片清单（assets_manifest.json）里的
   角色照（或不用下载的健全版，sfw_skip.json 里列的；名单读不出来时健全版不核对，见 sfw_skip.json 那一条），角度是 -45～45
   之间的数；
@@ -68,7 +73,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from advisor import fileio  # noqa: E402
-from advisor.data import CLASSES, DIFFICULTIES, HERO_GROUPS, RARITIES, SCHOOLS, DataError, _norm, load_db  # noqa: E402
+from advisor.data import (CLASSES, DIFFICULTIES, DIFFICULTY_NAMES, EXTREME, HERO_GROUPS, MAP_CODE_MAX, RARITIES, SCHOOLS,
+                          DataError, _norm, load_db)  # noqa: E402
+from advisor.hub import MAP_SLUGS  # noqa: E402
 from advisor.paths import app_dir, assets_dir, data_dir, mechanics_dir  # noqa: E402
 from advisor.schemes import CODE_MAX  # noqa: E402
 from tools import json_layout, make_review  # noqa: E402
@@ -100,7 +107,8 @@ SERIES = DATA / "series.toml"
 # 文件里每张地图的任务和 maps.json 的 tasks 重复，核对两边一致（见 map_task_problems）。
 MAP_DOCS = "mechanics/maps"
 # data/ 里的资料文件：载入时的警告里写了其中一个文件名的，不再补文件名
-DATA_FILES = (CHIPS, HEROES, MAPS, MUTATORS, META, CHIP_CODES, "rules.toml", "synergy.toml", "series.toml")
+DATA_FILES = (CHIPS, HEROES, MAPS, MUTATORS, META, CHIP_CODES, "rules.toml", "synergy.toml", "series.toml",
+              "zh_hant.json", "zh_hant_extra.toml")
 # 载入时的警告里没写文件名的几种：按开头认出是哪个文件的（适配表的各段、同系列筹码表）
 WARNING_FILES = (("同系列筹码表", "series.toml"), ("适配表", "synergy.toml"), ("特性", "synergy.toml"),
                  ("角色", "synergy.toml"), ("玩家思路", "synergy.toml"), ("组合规则", "synergy.toml"),
@@ -168,6 +176,12 @@ def _is_int(value) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
+def _lacks(item: dict, key: str) -> bool:
+    """可以不写、但应当写上的一项文字（游戏繁体中文界面里的名字）没写：不在、写 null 或空着。写了别的类型由载入时的警告
+    报出，这里不重复。"""
+    return item.get(key) is None or item.get(key) == ""
+
+
 def _shown(value) -> str:
     """JSON 里的一个值照 JSON 的写法写出来（null、true、"文字"），放进提示里。"""
     return json.dumps(value, ensure_ascii=False)
@@ -194,7 +208,8 @@ def chip_problems(chips: list, heroes: list, removed=()) -> list[str]:
     - fit（官方适配）、fit_minor（普通适配）写的是 heroes.json 里的角色名：写错的那个角色拿不到适配分；
     - group、school、maps 对得上：group 是流派时 school 也写这个流派，group 是通用、地图专属时 school 为 null（推荐按
       school 算流派）；地图专属的筹码写所属地图（maps 空着时每张地图都会把它算进三选一），别的筹码 maps 写 []；
-    - removed（已移除的筹码，识别时认得出、不当成现役筹码）里没有现役筹码。
+    - removed（已移除的筹码，识别时认得出、不当成现役筹码）里没有现役筹码；
+    - 有游戏繁体中文界面里的名字（hant）：没写时程序照常载入，只是繁体的游戏画面上认不出这个筹码。
     """
     problems: list[str] = []
     hero_names = {h["name"] for h in _named(heroes)}
@@ -202,6 +217,9 @@ def chip_problems(chips: list, heroes: list, removed=()) -> list[str]:
     for c in _named(chips):
         name = c["name"]
         count[name] = count.get(name, 0) + 1
+        if _lacks(c, "hant"):
+            problems.append(f"{CHIPS}：筹码「{name}」缺少繁体名（hant）：请补上游戏繁体中文界面里的名字"
+                            f"（照游戏原文，不自己转换）。")
         for key, what in (("fit", "官方适配"), ("fit_minor", "普通适配")):
             bad = [n for n in _names(c.get(key)) if n not in hero_names]
             if bad and hero_names:
@@ -284,7 +302,9 @@ def hero_problems(heroes: list) -> list[str]:
     - 角色名不重复（重名时程序只认最后一个）；编号（id）是正整数、不重复：分享筹码方案的短字符串用它代表角色；
     - weights 写全四个职业：最左格的职业筹码池按它分配；
     - aliases 包含 name、full_name、title、en：按名字认角色时用它，改了称号、英文名时要一起改；
-    - group 取六类之一（HERO_GROUPS，和 mechanics/characters.md 第三章一致）：它决定三处角色下拉框的先后和审查清单的分节。
+    - group 取六类之一（HERO_GROUPS，和 mechanics/characters.md 第三章一致）：它决定三处角色下拉框的先后和审查清单的分节；
+    - 有游戏繁体中文界面里的名字（hant）、称号（hant_title，写了 title 时）、全名（hant_full_name，full_name 和 name
+      不同时）：没写时程序照常载入，只是繁体的游戏画面上认不出这种写法。
     """
     problems: list[str] = []
     count: dict[str, int] = {}
@@ -292,6 +312,16 @@ def hero_problems(heroes: list) -> list[str]:
     for h in _named(heroes):
         name = h["name"]
         count[name] = count.get(name, 0) + 1
+        if _lacks(h, "hant"):
+            problems.append(f"{HEROES}：角色「{name}」缺少繁体名（hant）：请补上游戏繁体中文界面里的名字"
+                            f"（照游戏原文，不自己转换）。")
+        title, full = h.get("title"), h.get("full_name")
+        if isinstance(title, str) and title and _lacks(h, "hant_title"):
+            problems.append(f"{HEROES}：角色「{name}」缺少繁体称号（hant_title）：请补上游戏繁体中文界面里的称号"
+                            f"（照游戏原文，不自己转换）。")
+        if isinstance(full, str) and full and full != name and _lacks(h, "hant_full_name"):
+            problems.append(f"{HEROES}：角色「{name}」的全名（full_name）和名字不同，缺少繁体全名（hant_full_name）："
+                            f"请补上游戏繁体中文界面里的全名（照游戏原文，不自己转换）。")
         hid = h.get("id")
         if _is_int(hid):
             if hid < 1:
@@ -326,6 +356,80 @@ def hero_problems(heroes: list) -> list[str]:
 
 def check_heroes(base: Path, db) -> list[str]:
     return hero_problems(heroes_list(base))
+
+
+def _collision_problems(where: str, entries: list[tuple[str, str, str]], what: str) -> list[str]:
+    """繁体名归一化以后和同一类里别的项目的名字（简体的名字、旧名、繁体名）撞车时返回要改的地方。
+
+    entries 是（项目名, 这一项是什么, 文字）的列表，同一项目的几项之间不算撞车。认名字时只取先出现的那一个，
+    撞车会让其中一项永远认不出来。
+    """
+    index: dict[str, list[tuple[str, str, str]]] = {}
+    for owner, label, text in entries:
+        if isinstance(text, str) and text:
+            index.setdefault(_norm(text), []).append((owner, label, text))
+    problems: list[str] = []
+    reported: set[frozenset] = set()
+    for owner, label, text in entries:
+        if label != what or not isinstance(text, str) or not text:
+            continue
+        for other, other_label, other_text in index.get(_norm(text), []):
+            if other == owner:
+                continue
+            pair = frozenset(((owner, label), (other, other_label)))
+            if pair in reported:
+                continue
+            reported.add(pair)
+            problems.append(f"{where}：{owner}的{label}「{text}」和{other}的{other_label}「{other_text}」重复"
+                            f"（归一化后相同）：认名字时只会认成一个，请改掉其中一个。")
+    return problems
+
+
+def hant_collision_problems(chips: list, heroes: list, maps: dict, mutators: dict) -> list[str]:
+    """繁体名归一化以后和别的项目的名字撞车的地方（见 _collision_problems）：筹码查名字、别名、繁体名，
+    角色查名字、别名、繁体名、繁体称号、繁体全名，地图和畸变组件查名字、繁体名。还没写繁体名的项目，它的名字、别名
+    也算在里面（别的项目的繁体名和它撞车时，认名字会把它的简体写法认成那个项目）。"""
+    problems: list[str] = []
+    entries = []
+    for c in _named(chips):
+        entries.append((f"筹码「{c['name']}」", "名字", c["name"]))
+        for a in _names(c.get("aliases")):
+            entries.append((f"筹码「{c['name']}」", "别名", a))
+        entries.append((f"筹码「{c['name']}」", "繁体名", c.get("hant")))
+    problems += _collision_problems(CHIPS, entries, "繁体名")
+
+    entries = []
+    for h in _named(heroes):
+        owner = f"角色「{h['name']}」"
+        entries.append((owner, "名字", h["name"]))
+        for a in _names(h.get("aliases")):
+            entries.append((owner, "别名", a))
+        for label, key in (("繁体名", "hant"), ("繁体称号", "hant_title"), ("繁体全名", "hant_full_name")):
+            entries.append((owner, label, h.get(key)))
+    problems += _collision_problems(HEROES, entries, "繁体名")
+    problems += _collision_problems(HEROES, entries, "繁体称号")
+    problems += _collision_problems(HEROES, entries, "繁体全名")
+
+    entries = []
+    for name, info in (maps if isinstance(maps, dict) else {}).items():
+        entries.append((f"地图「{name}」", "名字", name))
+        if isinstance(info, dict):
+            entries.append((f"地图「{name}」", "繁体名", info.get("hant")))
+    problems += _collision_problems(MAPS, entries, "繁体名")
+
+    entries = []
+    for name, m in (mutators if isinstance(mutators, dict) else {}).items():
+        entries.append((f"组件「{name}」", "名字", name))
+        if isinstance(m, dict):
+            entries.append((f"组件「{name}」", "繁体名", m.get("hant")))
+    problems += _collision_problems(MUTATORS, entries, "繁体名")
+    return problems
+
+
+def check_hant(base: Path, db) -> list[str]:
+    maps = _read_json(base / MAPS)
+    return hant_collision_problems(chips_list(base), heroes_list(base), maps,
+                                   _read_json(base / MUTATORS))
 
 
 def series_problems(chips: list, path: Path = SERIES) -> list[str]:
@@ -474,7 +578,9 @@ def map_problems(maps, chips: list) -> list[str]:
       改进度上限时要一起改；
     - until（限时地图的结束日期）写成 YYYY-MM-DD 或 null，limited（限时）、ended（已结束）写 true 或 false：程序按日期
       的文字比先后，"false" 这样的文字也算真，写成别的样子会算错地图还开不开放；
-    - 筹码写的地图（专属筹码的 maps）都在这份文件里。
+    - 筹码写的地图（专属筹码的 maps）都在这份文件里；
+    - 有游戏繁体中文界面里的地图名（hant）和任务文字（hant_tasks），繁体任务和 tasks 条数相同（一一对应、顺序相同）：
+      没写时程序照常载入，只是繁体的游戏画面上认不出这张地图。
     类型不对的由 advisor/data.py 载入时另外报出（记成警告），这里只查缺没缺、对不对得上。
     """
     if not isinstance(maps, dict):
@@ -487,6 +593,15 @@ def map_problems(maps, chips: list) -> list[str]:
         tasks = info.get("tasks")
         if isinstance(tasks, list) and not tasks:
             problems.append(f"{where}：缺少任务（tasks 是空的），请补上这张地图的任务文字。")
+        if _lacks(info, "hant"):
+            problems.append(f"{where}：缺少繁体名（hant）：请补上游戏繁体中文界面里的地图名（照游戏原文，不自己转换）。")
+        hant_tasks = info.get("hant_tasks")
+        if hant_tasks is None:
+            problems.append(f"{where}：缺少繁体任务（hant_tasks）：请按 tasks 的顺序写游戏任务栏里的繁体任务文字"
+                            f"（拼不出来的写 null）。")
+        elif isinstance(hant_tasks, list) and isinstance(tasks, list) and tasks and len(hant_tasks) != len(tasks):
+            problems.append(f"{where}：hant_tasks 和 tasks 条数不同（hant_tasks {len(hant_tasks)} 条、tasks "
+                            f"{len(tasks)} 条），请一一对应、顺序相同。")
         cap = info.get("progress_cap")
         if cap is None:
             problems.append(f"{where}：缺少 progress_cap（最高难度疯狂的进度上限），请补上。")
@@ -509,9 +624,57 @@ def map_problems(maps, chips: list) -> list[str]:
         if isinstance(until, str) and not _valid_date(until):
             problems.append(f"{where}：until（限时地图的结束日期）应写成 YYYY-MM-DD，没有结束日期时写 null"
                             f"（现为 {_shown(until)}）。")
+        # 任务等级（task_levels）：一条路线写的等级个数和一局的筹码任务数对得上（极限对 extreme.chip_tasks），等级 1～3。
+        # 类型不对由载入时的警告报出，这里只查条数和范围
+        levels = info.get("task_levels")
+        if isinstance(levels, dict):
+            extreme = info.get("extreme")
+            extreme_tasks = extreme.get("chip_tasks") if isinstance(extreme, dict) else None
+            for diff, routes in levels.items():
+                if diff not in DIFFICULTY_NAMES or not isinstance(routes, list) or not routes:
+                    continue
+                want = extreme_tasks if diff == EXTREME else info.get("chip_tasks")
+                if not _is_int(want) and not isinstance(want, float):
+                    continue
+                lines = [routes] if all(_is_int(v) for v in routes) else routes
+                for i, line in enumerate(lines, 1):
+                    if not isinstance(line, list):
+                        continue
+                    bad = [v for v in line if not (_is_int(v) and 1 <= v <= 3)]
+                    place = f"{where}：task_levels 的{diff}" + (f"第 {i} 条路线" if len(lines) > 1 else "")
+                    if bad:
+                        problems.append(f"{place}里 {_shown(bad)} 不是 1～3 级的整数，请照机制文档改好。")
+                    elif len(line) != want:
+                        problems.append(f"{place}写了 {len(line)} 个任务等级，一局的筹码任务是 {int(want)} 个，"
+                                        f"请照机制文档的「任务」表补齐。")
         for key, what in (("limited", "限时地图"), ("ended", "已经结束")):
             if key in info and not isinstance(info[key], bool):
                 problems.append(f"{where}：{key}（是不是{what}）应写 true 或 false（现为 {_shown(info[key])}）。")
+
+    # 地图编号（code）：和网站对好的固定约定。有作业站短名的地图都要有编号；没有短名的（已经结束的运动场）不该有。
+    # 编号只增不改：改名时编号不变，结束的地图留着编号，不再给别的地图用
+    codes: dict[int, str] = {}
+    for name, info in maps.items():
+        if not isinstance(info, dict):
+            continue
+        where = f"{MAPS} 地图「{name}」"
+        code = info.get("code")
+        if code is None:
+            if name in MAP_SLUGS:
+                problems.append(f"{where}：缺少地图编号（code），筹码方案不能标这张地图；请和网站对好短名"
+                                f"（advisor/hub.py 的 MAP_SLUGS）和编号后补上。")
+            continue
+        if not _is_int(code) or not 1 <= code <= MAP_CODE_MAX:
+            problems.append(f"{where}：code（地图编号）应为 1～{MAP_CODE_MAX} 的整数（现为 {_shown(code)}）。")
+            continue
+        if name not in MAP_SLUGS:
+            problems.append(f"{where}：这张地图没有作业站短名（advisor/hub.py 的 MAP_SLUGS），不该有地图编号；"
+                            f"请删掉 code。")
+        if code in codes:
+            problems.append(f"{where}：code 和地图「{codes[code]}」重复（都是 {code}）；地图编号只增不改，"
+                            f"请改成本版本还没用过的一个。")
+        else:
+            codes[code] = name
     known_maps = set(maps)
     for c in _named(chips):
         for m in _names(c.get("maps")):
@@ -674,14 +837,22 @@ def check_map_tasks(base: Path, db) -> list[str]:
 
 def check_mutators(base: Path, db) -> list[str]:
     """mutators.json（合作挑战的畸变组件）有这个文件，而且不是空的：载入时没有这个文件不记警告，推荐区会悄悄少了
-    组件的提示。"""
+    组件的提示。每个组件还要有游戏繁体中文界面里的名字（hant）。"""
     mutators, error = _load_json(base / MUTATORS)
     if error == MISSING:
         return [f"{MUTATORS}：文件不存在。合作挑战的畸变组件（效果和对选筹码的影响）写在这里，推荐区的提示要用，"
                 f"请从版本库恢复。"]
     if isinstance(mutators, dict) and not mutators:
         return [f"{MUTATORS}：一个畸变组件都没有，请照游戏补上。"]
-    return []  # 读不出来、最外层不是表：载入时已经记了警告
+    problems = []
+    if isinstance(mutators, dict):
+        for name, m in mutators.items():
+            if not isinstance(m, dict):
+                continue  # 格式不对由载入时的警告报出
+            if _lacks(m, "hant"):
+                problems.append(f"{MUTATORS}：组件「{name}」缺少繁体名（hant）：请补上游戏繁体中文界面里的名字"
+                                f"（照游戏原文，不自己转换）。")
+    return problems
 
 
 def manifest_items(base: Path) -> list[dict] | None:
@@ -1134,9 +1305,9 @@ def format_files(base: Path) -> list[str]:
 
 # 载入时不检查的几项：加一项检查只要加一个函数、放进这张表。不用下载的健全版名单排在斜着摆的、现裁的两项前面：名单读不出来
 # 时先报出根子（那两项这时健全版都不核对在不在清单里，不跟着报，见 _skipped_or_sfw）
-CHECKS = (check_chips, check_granted, check_chip_aliases, check_heroes, check_series, check_codes, check_maps,
-          check_map_files, check_map_tasks, check_mutators, check_sfw_skip, check_photo_tilt, check_card_crops, check_meta,
-          check_layout, check_review)
+CHECKS = (check_chips, check_granted, check_chip_aliases, check_heroes, check_hant, check_series, check_codes,
+          check_maps, check_map_files, check_map_tasks, check_mutators, check_sfw_skip, check_photo_tilt, check_card_crops,
+          check_meta, check_layout, check_review)
 
 
 # ---------------------------------------------------------------- 追加编号

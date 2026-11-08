@@ -84,8 +84,11 @@ def reference(ov, view, clock, set_tip, set_accent) -> None:
     ov._place_card(ov.recog_card, full or bool(keys), keys, ov._recog_summary())
 
     keys = {"hero"} if ov._hero_needed else set()
+    notes = notices.keys("scheme")
+    keys |= notes
+    ov.scheme_notices.setVisible(bool(notes))
     ov._set_message(ov.scheme_msg, ov._area_message("scheme", waiting) if full else "")
-    ov._place_card(ov.scheme_card, full or ov._hero_needed, keys, ov._scheme_summary(view.hero))
+    ov._place_card(ov.scheme_card, full or ov._hero_needed or bool(keys), keys, ov._scheme_summary(view.hero))
 
     keys = set()
     live = ov._live
@@ -103,6 +106,7 @@ def reference(ov, view, clock, set_tip, set_accent) -> None:
     ov.question.setVisible(not live and question is not None and (full or prompt))
     for btn in ov.reason_buttons:
         btn.setVisible(question == "ask")
+    ov.feedback_dismiss.setVisible(question == "ask")
     stale = not live and full and ov._last_ev is not None
     if stale:
         ov._show_stale(view)
@@ -174,8 +178,10 @@ class Box:
 
 
 WIDGETS = ("title", "head_spacer", "summary", "toggle_btn", "quick_add", "add_btn", "global_msg", "global_notices",
-           "global_area", "recog_top", "status_box", "map_row", "recog_notices", "recog_msg", "scheme_msg", "body",
-           "refresh_pill", "picked_label", "question", "stale", "idle_label", "advice_notices", "advice_msg",
+           "global_area", "recog_top", "status_box", "map_row", "recog_notices", "recog_msg", "scheme_notices",
+           "scheme_msg", "body",
+           "refresh_pill", "picked_label", "question", "feedback_dismiss", "stale", "idle_label", "advice_notices",
+           "advice_msg",
            "add_row", "missed", "granted_row", "owned_notices", "owned_msg", "owned_empty", "owned_scroll", "toolbar")
 
 
@@ -188,10 +194,11 @@ class FakeOverlay:
             setattr(self, name, Widget(name, log))
         for key in CARD_KEYS:
             setattr(self, f"{key}_card", Widget(f"{key}_card", log))
-        self.reason_buttons = [Widget(f"reason{i}", log) for i in range(3)]
+        self.reason_buttons = [Widget(f"reason{i}", log) for i in range(4)]
         self.fix_row = Widget("fix_row", log, hidden=not c["fix_shown"])
         self.global_notice_box = Box(c["global_n"])
-        notes = {"recog_top": c["recog_top"], "recog": c["recog"], "advice": c["advice"], "owned": c["owned"]}
+        notes = {"recog_top": c["recog_top"], "recog": c["recog"], "scheme": c["scheme"], "advice": c["advice"],
+                 "owned": c["owned"]}
         self.notice_model = SimpleNamespace(keys=lambda area: set(notes[area]), panel_prompt=c["panel_prompt"],
                                             panel_tab=c["panel_tab"])
         self._expanded, self._live, self._live_kind, self._live_seq = c["full"], c["live"], c["live_kind"], 4
@@ -246,7 +253,7 @@ class FakeOverlay:
     def _recog_summary(self) -> list:
         return ["识别摘要"]
 
-    def _scheme_summary(self, hero) -> list:
+    def _scheme_summary(self, hero, view=None) -> list:
         return ["方案摘要", hero]
 
     def _advice_summary(self, waiting) -> list:
@@ -267,7 +274,7 @@ class FakeOverlay:
 BASE = {
     "full": False, "live": False, "live_kind": EV_ADVICE, "question": None, "pick": None, "feedback_until": 0.0,
     "ask_until": 0.0, "global_n": 0, "source": None, "msg_area": None, "game_over": False,
-    "recog_top": (), "recog": (), "map_on": False, "map_prompt": False, "map_entered": False,
+    "recog_top": (), "recog": (), "scheme": (), "map_on": False, "map_prompt": False, "map_entered": False,
     "hero_needed": False,
     "last_ev": None, "fix_shown": False, "fix_slot": None, "advice": (),
     "add_open": False, "missed_on": False, "granted_on": False, "owned": (), "owned_shown": None,
@@ -286,7 +293,7 @@ SECTIONS = {
                        "msg_area": (None, "global", "recog", "scheme", "advice", "owned"), "game_over": (False, True)},
     "识别": {"recog_top": ((), ("newgame",)), "recog": ((), ("capture",)), "map_on": (False, True),
              "map_prompt": (False, True), "map_entered": (False, True)},
-    "筹码方案": {"hero_needed": (False, True)},
+    "筹码方案": {"hero_needed": (False, True), "scheme": ((), ("map_switch",))},
     "推荐": {"live_kind": (EV_ADVICE, EV_REFRESHING), "last_ev": (None, "上一次推荐"), "fix_shown": (False, True),
              "fix_slot": (None, 1), "advice": ((), ("unlock",))},
     "已有筹码": {"add_open": (False, True), "missed_on": (False, True), "granted_on": (False, True),

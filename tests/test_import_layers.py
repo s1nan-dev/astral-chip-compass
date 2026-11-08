@@ -44,18 +44,20 @@ QT = ("PySide6", "shiboken6")
 # advisor 下新加的模块要登记在这里，不然 test_every_module_placed 报出来。
 CHAIN = (
     # 资料、路径、写盘、错误记录，和只靠它们的几样：日期、版本、Win32 声明、本进程和电脑的运行状况、下载、软件内更新（查新版本、
-    # 下载、只下变了的文件、换版本：换版本程序不导入界面库和识别库）、设置和方案的读写、设置里加密存的一项记录、识别记录、
-    # 识别各步耗时的统计
+    # 下载、只下变了的文件、换版本、三段共用的更新记录：换版本程序不导入界面库和识别库）、设置和方案的读写、设置里加密存的一项
+    # 记录、识别记录、识别各步耗时的统计、处理器占用的采样
     ("底层", ("advisor.data", "advisor.paths", "advisor.fileio", "advisor.errors", "advisor.clock", "advisor.version",
               "advisor.win32", "advisor.sysinfo", "advisor.winhttp", "advisor.assets", "advisor.update",
-              "advisor.update_files", "advisor.update_apply",
-              "advisor.prefs", "advisor.schemes", "advisor.unlock", "advisor.gamelog", "advisor.perfstats")),
+              "advisor.update_files", "advisor.update_apply", "advisor.update_log",
+              "advisor.prefs", "advisor.schemes", "advisor.hub", "advisor.hub_api", "advisor.wincred",
+              "advisor.unlock", "advisor.gamelog", "advisor.perfstats", "advisor.usage")),
     ("推荐、识别", ("advisor.pool", "advisor.engine", "advisor.vision")),
     # 识别流程（pipeline）把每帧的读数交给记账，和记账同层；打包自检用的整套读数（readout）用到 pipeline 的去黑边、限线程，
     # 也在这一层
     ("记账", ("advisor.session", "advisor.vision.pipeline", "advisor.vision.readout")),
-    # 界面和只给界面、命令行用的：导出诊断、推荐日志、命令行入口
-    ("界面", ("advisor.ui", "advisor.diagnostics", "advisor.logbook", "advisor.cli", "advisor.__main__")),
+    # 界面和只给界面、命令行用的：导出诊断、推荐日志、「我的统计」的数字、命令行入口
+    ("界面", ("advisor.ui", "advisor.diagnostics", "advisor.logbook", "advisor.cli", "advisor.__main__",
+              "advisor.play_stats", "advisor.game_report")),
 )
 
 

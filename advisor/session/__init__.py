@@ -10,7 +10,8 @@
           （advisor.vision.chip_panel.PanelReading）
 
 启动时不沿用 state.json 里的对局状态（已有筹码、轮次、星数、地图、来源全部重新识别）。
-已有筹码要靠游戏里的「查看筹码」面板：进入对局后发 panel_prompt，请用户打开面板；读到自己那一页后写入。
+已有筹码要靠游戏里的「查看筹码」面板：进入对局后发 panel_prompt，请用户打开面板；读到自己那一页后写入。从选角界面看起的一局，
+以及刚打开时在主菜单、房间等对局外的画面上、进对局时还在第 1、2 轮（没先看到三选一）的一局，已有筹码确实为空，不请用户打开。
 
 新的一局不用手动点，靠这些迹象自动判断（一局之内它们都不会发生）：
   看到选角界面；轮次变小了；自己的星星变少了；认出的角色换了（手动锁定角色时不看这一条）；
@@ -29,13 +30,19 @@
 对局外画面上读到的难度（结算画面 > 「匹配成功」画面 > 房间）、按地图和进度条上的进度上限推算、概率行。
 房间和「匹配成功」画面上读到的难度和地图属于下一局：先存着（PendingNextGame）。难度在新的一局开始时用上；
 地图等到这一局第一次对局内读数时再用（地图算对局状态，选角界面那一帧就用上的话，选角界面的下一帧会再判一次新的一局）。
-读到「匹配成功」画面以后又回到了房间：那次匹配没有开始，它上面的难度和地图作废。
+读到「匹配成功」画面以后又回到了房间或主菜单：那次匹配没有开始，它上面的难度和地图作废。
 
 对局结束（on_out_of_game，规则表见 offgame.SCREEN_RULES）：读到结算画面，或对局状态还在时隔一会儿连续两次读到房间、
-「匹配成功」画面、奖励画面，本局标为已结束（game_over）。这一局的轮次、星数、地图、难度和已有筹码保留到新的一局开始；之后读到的
-星数、角色、进度条、面板不再记进这一局；撤销新一局、漏记补录、补录提示、「查看筹码」面板提示和离开后的核对都取消。之后的新一局
-在选角界面、连续两次读到同一个轮次、或出现筹码三选一界面时开始（不经过 NewGameJudge.vetoed 的互相印证）：结算画面结束的
-不可撤销；房间等画面结束的可以撤销（对局中途误认出这几种画面时，撤销连同「已结束」一起撤回）。
+「匹配成功」画面、奖励画面、主菜单，本局标为已结束（game_over）。这一局的轮次、星数、地图、难度和已有筹码保留到新的一局开始；
+之后读到的星数、角色、进度条、面板不再记进这一局；撤销新一局、漏记补录、补录提示、「查看筹码」面板提示和离开后的核对都取消。
+之后的新一局在选角界面、连续两次读到同一个轮次、或出现筹码三选一界面时开始（不经过 NewGameJudge.vetoed 的互相印证）：
+结算画面结束的不可撤销；房间等画面结束的可以撤销（对局中途误认出这几种画面时，撤销连同「已结束」一起撤回）。
+主菜单结束的局可能只是断线、中途退出以后又连回了同一局：结束以后没读到别的对局外画面、连续两次读到的轮次不比离开时小
+（离开不到两小时）时，不开新的一局，撤回那次结束、接着记（offgame.round_after_game）。
+通关还是失败（offgame.outcome，只进推荐日志和对局报告，悬浮窗上不显示）：结算页之前读到了通关画面「VICTORY」（on_victory）
+算通关，读到打输时棋盘上那条「GAME OVER」横幅（on_game_over_banner）算失败；结束以后读到奖励画面时按上面的星币数补定
+（通关给的数才算通关、正好是失败给的数才算失败，别的数不知道），读到奖励画面这一局的结果就算定了（result_settled）。
+两种画面和星币数说的不一样时算矛盾，两项都不知道。
 
 地图分四层认：①加载画面上的地图名 ②任务栏的任务文字 ③地图专属筹码推定 ④任务栏读过、几张地图的匹配度都低时请用户选。
 任务栏的匹配度为高或中（hud 的 map_confidence 为 high / medium）、或来自①③、或用户手动指定的，都算可靠，
@@ -54,10 +61,13 @@
 识别记录：挂了 recorder（advisor.gamelog.GameRecorder）时，note()、trace() 记下的每一条同时交给它写盘（events.EventLog），
 判定新的一局时换一段，撤销时接回上一段，对局结束时记一个标记。
 
-筹码方案：scheme_for（悬浮窗接上方案存储后设置）按角色名给出该角色正在用的方案，推荐按当前角色的方案计算（scheme_plan）；
-方案内容参与「是不是同一个三选一」的判断，切换方案、编辑正在用的方案后下一帧就会重算，recompute() 按最近一次三选一的画面
-立即重算（手动模式也一样，不用等下一帧、不用再按热键）。按方案计算时另算一次默认推荐的首推（Advice.default_best，推荐日志记它）；
-用的方案变了时记一条识别记录（scheme）。
+筹码方案：scheme_for（悬浮窗接上方案存储后设置）按角色名给出该角色保存的方案，schemes_of 给出该角色的全部方案；推荐按
+这一局实际用的那套计算（scheme_choice、scheme_plan）：认出地图以后，保存的方案没标这张地图、这个角色另有标了它的方案时，
+这一局换用标了它的第一套（每次现算，不存盘；对局结束、新的一局回到保存的方案）。点了「换回原来的」或在悬浮窗上手动换了方案，
+这一局就不再按地图换（stop_map_scheme）。
+方案内容参与「是不是同一个三选一」的判断，切换方案、编辑正在用的方案、地图改判换了方案后下一帧就会重算，recompute() 按最近
+一次三选一的画面立即重算（手动模式也一样，不用等下一帧、不用再按热键）。按方案计算时另算一次默认推荐的首推
+（Advice.default_best，推荐日志记它）；用的方案变了时记一条识别记录（scheme）。
 
 各模块（只往下导入，不互相循环导入；对外的名字都从本包导入，不依赖模块的划分）：
 - core：Session（读数的入口和编排、用户的操作、新的一局和撤销、星数、星币、地图、队友、畸变组件）；
@@ -78,7 +88,8 @@ from ..prefs import (GAME_FIELDS, SETTINGS_INT_LIMIT, SETTINGS_ORPHAN, SETTINGS_
                      _file_key, _fits, _parse_settings, _write_settings)
 from .core import (CHIP_SOURCE_LABEL, CONFIDENCE_LABEL, FOREIGN_CONFIRM, GAIN_GRACE, HERO_SELECT_LOG_S, LEDGER_KEEP,
                    MAP_SCREEN_SOURCES, MAP_SOURCE_LABEL, MATE_CONFIRM, ROUND_OVER_PROGRESS, STAR_COSTS,
-                   STAR_MIN_CONFIDENCE, UNSUPPORTED_ORDER, UNSUPPORTED_TEXT, WHOLE_GAME_ROUND, Session, WatchHints)
+                   STAR_MIN_CONFIDENCE, UNSUPPORTED_ORDER, UNSUPPORTED_TEXT, WHOLE_GAME_ROUND, SchemeChoice, Session,
+                   WatchHints)
 from .difficulty import DIFFICULTY_SOURCE_LABEL, DifficultyInfo, resolve_difficulty
 from .events import FIRST_KINDS, HISTORY, KINDS, Event, EventLog, _event_record, _jsonable, split_extra
 from .game_state import GameState, PendingNextGame, UndoPoint

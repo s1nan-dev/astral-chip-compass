@@ -14,11 +14,12 @@ import os
 import threading
 import time
 import traceback
+from datetime import datetime
 
 from ... import gamelog
 from ... import paths as app_paths
 from ... import unlock
-from .. import log_error
+from .. import lang, log_error
 from ..services import Services, StopFlag, count
 from ..text import advice_text
 from .factory import _alive
@@ -49,7 +50,7 @@ class Background:
                  run_background, watcher, previews, frame_source, emit_progress, emit_finished, emit_exported,
                  update_settings, editor_window, activity, capture_method, overlay_state, export_event, show_export,
                  assets_unwritable=None, later=None, now=None, unread_source=None, pick_source=None,
-                 covered_source=None):
+                 covered_source=None, finish_source=None, also_pause=None):
         # 服务：资料库、Session 和它的锁、可选模块（services() 每次现取）；只读的显示状态：三选一显示期间的状态（live：
         # 显示着没有、界面处理过的事件）
         self.db, self.session, self.lock, self.services, self.live = db, session, lock, services, live
@@ -63,10 +64,15 @@ class Background:
         # 同样每次现取：最近一次三选一有筹码没读出来时的那一帧（unread_source()，返回取它的函数或 None；那个函数返回
         # (时刻, 画面) 或 None，见 Watcher.unread_shot）。不给时（测试、预览）导出诊断不带这一张
         self.unread_source = unread_source if unread_source is not None else (lambda: None)
-        # 同样：最近一次记下选中项用的那一帧、被临时盖住而没有采用的那一帧（pick_source()、covered_source() 返回取它的函数
-        # 或 None；那个函数返回 (时刻, 画面, 那一次的情况) 或 None，见 Watcher.pick_shot、covered_shot）
+        # 同样：最近一次记下选中项用的那一帧、被临时盖住而没有采用的那一帧、对局中途像一局打完的那一帧（pick_source()、
+        # covered_source()、finish_source() 返回取它的函数或 None；那个函数返回 (时刻, 画面, 那一次的情况) 或 None，见
+        # Watcher.pick_shot、covered_shot、finish_shot）
         self.pick_source = pick_source if pick_source is not None else (lambda: None)
         self.covered_source = covered_source if covered_source is not None else (lambda: None)
+        self.finish_source = finish_source if finish_source is not None else (lambda: None)
+        # 下载挡着识别时要一起暂停、下载完一起重建识别流程的别的识别线程（同时识别两个客户端时第二张的；
+        # 测试、预览没有）
+        self.also_pause = also_pause if also_pause is not None else (lambda: [])
         # 后台线程交回界面线程：下载进度、下载完了、诊断包写好了（悬浮窗三个信号的 emit）
         self.emit_progress, self.emit_finished, self.emit_exported = emit_progress, emit_finished, emit_exported
         # 设置窗口跟着更新、编辑方案窗口（没建过时为 None）、前台状态、实际的截取方式、诊断包里「悬浮窗状态」那一段、导出时
@@ -106,8 +112,8 @@ class Background:
         self.blocked = False  # 识别所需的图片还在下载：识别功能暂不可用
         self._preview_waiting: set[str] = set()  # 正在下载的图片里预览局面要用、还没处理完的（_preview_first）
 
-    def snapshot(self) -> dict:
-        """当时的对局状态和悬浮窗状态（写进诊断包的 state.json）。"""
+    def snapshot(self, extra: dict | None = None) -> dict:
+        """当时的对局状态和悬浮窗状态（写进诊断包的 state.json）。extra 另合并进 state（同时识别时第二张的 lanes 段）。"""
         with self.lock:
             s = self.session
             try:
@@ -119,6 +125,8 @@ class Background:
             data.setdefault("fixes", jsonable(s.fixes))
             data.setdefault("map_confidence", s.map_confidence)
         data["overlay"] = self.overlay_state()
+        if extra:
+            data.update(extra)
         return data
 
     def recent_events(self, seconds: int = 600) -> list:
@@ -137,6 +145,18 @@ class Background:
             log_error("读取最近的识别事件出错", traceback.format_exc(), append=True)
         return handled
 
+    def events_reader(self):
+        """导出诊断用的识别记录读取：在界面线程里调用，当场取好识别记录器和界面处理过的事件，返回一个不带参数的函数，
+        哪个线程都能调用，调用时返回 game_events 的 (记录, {segments, since})（见 _read_events）。"""
+        recorder, handled = self.session.eventlog.recorder, list(self.live.recent)
+        return lambda: self._read_events(recorder, handled)
+
+    def stats_reader(self):
+        """导出诊断用的统计记录读取：在界面线程里调用，当场取好识别记录器，返回一个不带参数的函数，哪个线程都能调用，
+        调用时返回 collect_stats 的 (记录, 说明)（见 _read_stats）。没挂识别记录器时交回空表和 source 为 none 的说明。"""
+        recorder = self.session.eventlog.recorder
+        return lambda: self._read_stats(recorder)
+
     def game_events(self) -> tuple[list, dict]:
         """导出诊断用的识别记录和导出范围：（记录, {segments, since}）。
 
@@ -144,8 +164,16 @@ class Background:
         按时间顺序，各段以段头开始；还没写盘的行也在内）。没挂记录器时（测试）退回最近的识别事件
         （recent_events），同样经 gamelog.mask_record 把玩家名字换成代号。since 是最早一条的时刻（ISO 格式），
         推荐日志按它取（logbook.records_between）。
-        在界面线程里调用（撤销误判的新一局之前要先取好）；导出诊断时在后台线程里取（_read_events）。"""
-        return self._read_events(self.session.eventlog.recorder, list(self.live.recent))
+        在界面线程里调用（撤销误判的新一局之前要先取好）。"""
+        return self.events_reader()()
+
+    def current_frame(self):
+        """后台识别最近取到的一帧游戏画面；没接上（frame_source() 为 None）、取的时候出错时为 None。在界面线程里调用。"""
+        try:
+            source = self.frame_source()
+            return None if source is None else source()
+        except Exception:  # noqa: BLE001
+            return None
 
     def _read_events(self, recorder, handled: list) -> tuple[list, dict]:
         """game_events 的读法，哪个线程都可以调用（识别记录器自带锁）。退回最近的识别事件时界面处理过的那份用 handled。"""
@@ -160,6 +188,14 @@ class Background:
         times = sorted(e["time"] for e in events if isinstance(e, dict) and isinstance(e.get("time"), str))
         return events, {"segments": [], "since": times[0] if times else None, "source": "recent_events"}
 
+    @staticmethod
+    def _read_stats(recorder) -> tuple[list, dict]:
+        """stats_reader 的读法，哪个线程都可以调用（识别记录器自带锁）。没挂记录器时交回空表和 source 为 none 的说明。"""
+        if recorder is None:
+            return [], {"hours": 12.0, "since": None, "segments": 0, "lines": 0, "source": "none"}
+        stats, scope = recorder.collect_stats()
+        return jsonable(list(stats)), jsonable(dict(scope or {}))
+
     def flush_records(self) -> None:
         """识别记录写盘（切到后台、找不到游戏窗口、退出时）：之后崩溃或被关掉也不丢这一段。"""
         recorder = self.session.eventlog.recorder
@@ -171,17 +207,26 @@ class Background:
             log_error("识别记录写盘出错（拾星助手仍在运行）", traceback.format_exc(), append=True)
 
     @staticmethod
-    def _logbook_extra(services: Services, scope: dict) -> dict:
+    def _logbook_extra(services: Services, scope: dict, starts: dict | None = None) -> dict:
         """诊断包另带的推荐日志：从识别记录最早一条的时刻到现在（logbook.records_between），
-        写成 diagnostics.LOGBOOK。不知道从哪里开始、或推荐日志模块没有这个接口时不带。在后台线程里调用。"""
+        写成 diagnostics.LOGBOOK。不知道从哪里开始、或推荐日志模块没有这个接口时不带。在后台线程里调用。
+
+        同时识别两个客户端时，两张的推荐日志记在同一份日志里（第二张写的每条带 "lane"）：export_diagnostics 交来的
+        scope 的 since 是两张导出范围里最早的那一刻（_earliest_scope），starts 是每条线自己的起点（_lane_starts）。
+        按最早的那一刻取出来以后，每条只留在它那一张自己的导出范围以内的：一张很久没玩时，它的上一局可能是很久以前，
+        只按最早的那一刻取，会把这段时间里另一张的推荐日志全带进来。starts 不给或为空（只有一张、撤销误判时自动存的
+        那份）时不筛，取到的照原样全带上。"""
         since = (scope or {}).get("since")
         if not since or not services.has("logbook", "records_between"):
             return {}
         records = services.call("logbook", "records_between", since, default=None)
         if records is None:
             return {}
+        records = list(records)
+        if starts:
+            records = [record for record in records if _in_own_range(record, starts)]
         name = getattr(services.diagnostics, "LOGBOOK", "logbook.jsonl")
-        return {name: list(records)}
+        return {name: records}
 
     def export_text(self) -> str:
         """推荐全文：推荐区正显示的（或上一次的）推荐。"""
@@ -190,31 +235,33 @@ class Background:
             return "（导出时没有推荐）\n"
         return advice_text(self.db, ev)
 
-    def export_diagnostics(self) -> None:
+    def export_diagnostics(self, extra: dict | None = None, lanes: dict | None = None) -> None:
         """「导出诊断」：原图、当时状态、本局和上一局的识别记录与推荐日志、推荐全文存到 reports\\<时间>\\，旁边另打一个同名的
         压缩包 reports\\<时间>.zip（_zip，在同一个后台线程里打；打不成时文件夹照旧可用，提示里照实说）。
         当时的状态、推荐全文在这里取；识别记录（写盘、读回本局和上一局，长局时有几千行）和写文件都在后台线程里做，界面
         不卡。state.json 里的 export_scope 写明识别记录取了哪几段、各段的起止时刻。
         识别流程留着最近一次三选一有筹码没读出来时的那一帧时（unread_source），另存一张带时刻的（diagnostics.export 的
         select_unreadable），在后台线程里编码成 PNG。记下选中项用的那一帧（pick_source）、被临时盖住而没有采用的那一帧
-        （covered_source）同样（select_picked、select_covered）。"""
+        （covered_source）、对局中途像一局打完的那一帧（finish_source）同样（select_picked、select_covered、finish_look）。
+        lanes：同时识别两个客户端时另一张悬浮窗的画面和识别记录，{端名: {"frame": 那一张的 current_frame() 的结果,
+        "read": 那一张的 events_reader() 的结果, "stats": 那一张的 stats_reader() 的结果}}，由调用方在界面线程里取好后
+        传进来。read()、stats() 在后台线程里调用，导出范围写进 state.json 的 lanes.<端名>.export_scope、stats_scope；
+        读不出来时记进错误记录，诊断包照常导出（这一端的识别记录为空，export_scope、stats_scope 带 error）。
+        推荐日志带上两张各自的导出范围以内的（_logbook_extra）。第二张没有画面时不现截屏幕
+         （屏幕上是前台那个游戏，对不上第二张）。不给或为空时不带这一项，调用方式和平常一样。
+        导出时在后台线程最前面现量一小段（usage.probe），写进 state.json 的 usage_probe（读识别记录、编码截图本身也占
+        处理器，先量到的才是导出之前的占用）；内存里每分钟一条的占用记录（usage.records）经 extra 写成 usage.jsonl。"""
         if self.exporting:
             return
         if not self.services().has("diagnostics", "export"):
-            self.set_status("导出诊断不可用：程序文件不完整，请把压缩包整个重新解压。")
+            self.set_status(lang.t("导出诊断不可用：程序文件不完整，请把压缩包整个重新解压。"))
             return
-        snapshot = self.snapshot()
+        snapshot = self.snapshot(extra)
         text = self.export_text()
-        frame = None
-        frame_source = self.frame_source()
-        if frame_source is not None:
-            try:
-                frame = frame_source()
-            except Exception:  # noqa: BLE001
-                frame = None
+        frame = self.current_frame()
         shot = {}
         for key, source in (("select_unreadable", self.unread_source), ("select_picked", self.pick_source),
-                            ("select_covered", self.covered_source)):
+                            ("select_covered", self.covered_source), ("finish_look", self.finish_source)):
             try:
                 getter = source()
                 got = getter() if getter is not None else None
@@ -223,26 +270,49 @@ class Background:
             if got is not None:
                 shot[key] = got
         self._set_exporting(True)
-        self.set_status("正在导出诊断包…")
+        self.set_status(lang.t("正在导出诊断包…"))
         services = self.services()
         # 原图用后台识别最近取到的一帧。没有时：截取屏幕的方式下照旧现截一张（和后台识别一样贴补悬浮窗遮挡的区域，
         # 原图里没有悬浮窗）；直接截取时不另建会话，诊断包里不带原图
         grab_now = self.capture_method() == "screen"
-        recorder, handled = self.session.eventlog.recorder, list(self.live.recent)
+        read_events = self.events_reader()
+        read_stats = self.stats_reader()
 
         def work():
             try:
-                events, scope = self._read_events(recorder, handled)
+                # 现量放在最前面：读识别记录、编码截图本身也占处理器，先量到的才是导出之前的占用
+                probe = services.call("usage", "probe", default=None)
+                if probe is not None:
+                    snapshot["usage_probe"] = probe
+                events, scope = read_events()
                 snapshot["export_scope"] = scope
+                try:
+                    stats, stats_scope = read_stats()
+                except Exception as e:  # noqa: BLE001  统计记录读不出来也要导出诊断包
+                    log_error("读取统计记录出错（诊断包照常导出，拾星助手仍在运行）", traceback.format_exc(), append=True)
+                    stats, stats_scope = [], {"hours": 12.0, "since": None, "segments": 0, "lines": 0,
+                                              "error": f"{type(e).__name__}: {e}"}
+                snapshot["stats_scope"] = stats_scope
                 image = frame
                 if image is None and grab_now:
                     try:
                         image = _grab_screen()
                     except Exception:  # noqa: BLE001  找不到游戏窗口时诊断包里没有原图
                         image = None
-                extra = self._logbook_extra(services, scope)
+                lane_exports = self._read_lanes(snapshot, lanes)
+                lane_state = snapshot.get("lanes")
+                extra = self._logbook_extra(services, self._earliest_scope(scope, lane_state),
+                                            self._lane_starts(scope, lane_state))
+                records = services.call("usage", "records", default=None)
+                if records:
+                    name = getattr(services.diagnostics, "USAGE", "usage.jsonl")
+                    extra = {**(extra or {}), name: records}
+                if not stats_scope.get("error"):  # 读出错时不带 stats.jsonl，说明里写着 error
+                    name = getattr(services.diagnostics, "STATS", "stats.jsonl")
+                    extra = {**(extra or {}), name: stats}
                 path = services.call("diagnostics", "export", image, snapshot, events, text, default=None,
-                                     **({"extra": extra} if extra else {}), **shot)
+                                     **({"extra": extra} if extra else {}),
+                                     **({"lanes": lane_exports} if lane_exports else {}), **shot)
                 path = None if path is None else str(path)
             except Exception:  # noqa: BLE001  哪一步出错都按导出失败告诉界面，不然一直「正在导出」、按钮不能再点
                 log_error("导出诊断包出错（拾星助手仍在运行）", traceback.format_exc(), append=True)
@@ -250,6 +320,96 @@ class Background:
             self.emit_exported(path, self._zip(services, path))
 
         self.run_background(work)
+
+    @staticmethod
+    def _read_lanes(snapshot: dict, lanes: dict | None) -> dict:
+        """另一张悬浮窗的识别记录和统计（在后台线程里读，见 export_diagnostics）：返回交给 diagnostics.export 的
+        {端名: {"frame": 画面, "events": 识别记录, "stats": 统计记录}}，并把导出范围写进 state.json 的
+        lanes.<端名>.export_scope、stats_scope。read()、stats() 抛异常时记进错误记录，这一端的记录为空、范围带 error，
+        诊断包照常导出；read、stats 为 None 时当成空的。"""
+        out = {}
+        for name, lane in (lanes or {}).items():
+            lane = lane if isinstance(lane, dict) else {}
+            read = lane.get("read")
+            if read is None:
+                events, scope = [], {"segments": [], "since": None}
+            else:
+                try:
+                    events, scope = read()
+                except Exception as e:  # noqa: BLE001  第二张的识别记录读不出来也要导出诊断包
+                    log_error("第二张悬浮窗的识别记录读不出来（诊断包照常导出，拾星助手仍在运行）",
+                              traceback.format_exc(), append=True)
+                    events, scope = [], {"segments": [], "since": None, "error": f"{type(e).__name__}: {e}"}
+                else:
+                    events, scope = list(events or []), dict(scope or {})
+            read_stats = lane.get("stats")
+            if read_stats is None:
+                stats, stats_scope = [], {"hours": 12.0, "since": None, "segments": 0, "lines": 0, "source": "none"}
+            else:
+                try:
+                    stats, stats_scope = read_stats()
+                except Exception as e:  # noqa: BLE001  第二张的统计记录读不出来也要导出诊断包
+                    log_error("第二张悬浮窗的统计记录读不出来（诊断包照常导出，拾星助手仍在运行）",
+                              traceback.format_exc(), append=True)
+                    stats, stats_scope = [], {"hours": 12.0, "since": None, "segments": 0, "lines": 0,
+                                              "error": f"{type(e).__name__}: {e}"}
+                else:
+                    stats, stats_scope = list(stats or []), dict(stats_scope or {})
+            lane_state = snapshot.get("lanes")
+            if lane_state is None:
+                lane_state = snapshot["lanes"] = {}
+            if isinstance(lane_state, dict):
+                entry = lane_state.get(name)
+                if entry is None:
+                    entry = lane_state[name] = {}
+                if isinstance(entry, dict):
+                    entry["export_scope"] = scope
+                    entry["stats_scope"] = stats_scope
+            out[name] = {"frame": lane.get("frame"), "events": events, "stats": stats}
+        return out
+
+    @staticmethod
+    def _earliest_scope(scope: dict, lanes) -> dict:
+        """两张的导出范围里最早的那一刻：scope 是第一张的，lanes 是 state.json 的 lanes 段（第二张的在
+        lanes.<端名>.export_scope）。按时刻比较（读不了的、None 的不算），交回最早那个的原文字符串。一个都读不了时交回
+        第一张的 since 原样：为空时不带推荐日志，读不了时由 records_between 照它的规矩处理，和只按第一张取时一样；所以
+        只有一张（没有 lanes）时结果和只按第一张取时一模一样。
+
+        比较按时间、不按字符串：时区、毫秒写法不一样的字符串按字面比会排错。"""
+        since = (scope or {}).get("since")
+        best = None
+        values = [since]
+        if isinstance(lanes, dict):
+            for entry in lanes.values():
+                lane_scope = entry.get("export_scope") if isinstance(entry, dict) else None
+                if isinstance(lane_scope, dict):
+                    values.append(lane_scope.get("since"))
+        for value in values:
+            when = _as_datetime(value)
+            if when is None:
+                continue
+            if best is None or when < best[0]:
+                best = (when, value)
+        return {"since": best[1] if best is not None else since}
+
+    @staticmethod
+    def _lane_starts(scope: dict, lanes) -> dict:
+        """每条推荐日志线自己的导出范围起点（_logbook_extra 按它筛记录）：第一张的键为 None（它写的记录不带 "lane"），
+        另一张的键为端名（它写的记录带 "lane": 端名，和 state.json 的 lanes 段的键相同）。起点换成本地时间、按秒向下
+        取整（同 logbook.records_between：识别记录的时刻精确到毫秒，推荐日志只到秒，同一秒的记录不漏）。只有一张（没有
+        lanes）时为空表，不筛。起点读不了的那条线不放进来，它的记录不筛。"""
+        if not isinstance(lanes, dict) or not lanes:
+            return {}
+        values = [(None, (scope or {}).get("since"))]
+        for name, entry in lanes.items():
+            lane_scope = entry.get("export_scope") if isinstance(entry, dict) else None
+            values.append((name, lane_scope.get("since") if isinstance(lane_scope, dict) else None))
+        starts = {}
+        for key, value in values:
+            when = _as_datetime(value)
+            if when is not None:
+                starts[key] = when.replace(microsecond=0)
+        return starts
 
     @staticmethod
     def _zip(services: Services, path: str | None) -> str | None:
@@ -313,7 +473,7 @@ class Background:
             self.show_export(path, zip_path)
             self.say("" if self.live.on else self.waiting_text())
         else:
-            self.say(f"诊断包导出失败，详细信息已写入错误记录（{app_paths.shown(ERR_RECORD)}）")
+            self.say(lang.t(f"诊断包导出失败，详细信息已写入错误记录（{app_paths.shown(ERR_RECORD)}）"))
         self.refresh()
         if self._undo_queue:  # 写的时候撤销了误判：接着存那一份
             self.save_undo_record(*self._undo_queue.pop(0))
@@ -536,8 +696,9 @@ class Background:
         的，悬停说明另写，见 gone_later）。前几张的原因写进错误记录（log_failures），隔天再试的另写一句；「重试」照旧。"""
         self._downloading = False
         self._set_blocked(False)
-        if self.watcher() is not None:
-            self.watcher().reload()
+        for watcher in (self.watcher(), *self.also_pause()):
+            if watcher is not None:
+                watcher.reload()
         n_failed = count(failed)
         reasons = failure_reasons(failed)
         paused = self.count_paused(reasons)
@@ -549,7 +710,7 @@ class Background:
             self.log_failures(reasons, n_failed, writes, later=self.deferred_count(failed))
         else:
             self.assets_state = None
-            self.flash(f"{DOWNLOAD_DONE}（{count(ok)} 张）")
+            self.flash(lang.t(f"{DOWNLOAD_DONE}（{count(ok)} 张）"))
         self.refresh()
         self._icons_arrived()
         self._refresh_previews()
@@ -698,8 +859,37 @@ class Background:
 
     def _set_blocked(self, on: bool) -> None:
         self.blocked = on
-        if self.watcher() is not None:
-            self.watcher().set_paused("assets", on)
+        for watcher in (self.watcher(), *self.also_pause()):
+            if watcher is not None:
+                watcher.set_paused("assets", on)
+
+
+def _as_datetime(value) -> datetime | None:
+    """datetime 或 ISO 格式的文字 → 本地时间的 datetime（不带时区），读不了时为 None。同 logbook._as_datetime：
+    带时区的换成本地时间再去掉时区，两张导出范围的时刻写法可能不一样。换不成本地时间的也算读不了（换出来超出年份范围时
+    报 OverflowError；Windows 上 1970 年以前的时刻换本地时间报 OSError）：在导出诊断的后台线程里调用，一个坏了的时刻
+    不能让整个诊断包都导不出来。"""
+    try:
+        when = value if isinstance(value, datetime) else datetime.fromisoformat(str(value))
+        return when.astimezone().replace(tzinfo=None) if when.tzinfo is not None else when
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
+
+
+def _in_own_range(record, starts: dict) -> bool:
+    """推荐日志的一条记录在不在它那条线自己的导出范围里（Background._logbook_extra 筛记录用）。没有 "lane" 的算第一张
+    （键 None）。线的起点不知道（starts 里没有）、记录的时刻读不了、记录不是字典、"lane" 不是文字时都留着：
+    records_between 已经按最早的那一刻筛过，这里只去掉明确早于自己那条线起点的。"""
+    if not isinstance(record, dict):
+        return True
+    lane = record.get("lane")
+    if lane is not None and not isinstance(lane, str):
+        return True
+    start = starts.get(lane)
+    if start is None:
+        return True
+    when = _as_datetime(record.get("time"))
+    return when is None or when >= start
 
 
 def _item_name(item) -> str | None:

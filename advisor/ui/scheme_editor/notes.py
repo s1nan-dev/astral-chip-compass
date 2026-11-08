@@ -14,6 +14,7 @@ from statistics import mean
 from ...data import CLASSES, SCHOOLS, TIERS
 from ...data import TIER_LABEL as PLAYER_TIER_LABEL
 from ...pool import appear_prob, player_pool, slot_dists
+from .. import lang, names
 from ..scheme_list import BLOCK_OTHER, BLOCK_UNMARKED, BlockSpec, GroupSpec, RowSpec
 from ...schemes import (
     LISTED_TIERS,
@@ -27,6 +28,9 @@ from ...schemes import (
     target_schools,
 )
 from ..theme import EDITOR as L
+
+# 拿来和筹码资料比对、当分组和档位的键：必须照资料库的简体写
+HANT_KEEP = ("CLASSES", "SCHOOLS", "TIER_LABEL", "PLAYER_TIER_LABEL")
 
 # ------------------------------------------------------------ 界面文字
 
@@ -79,6 +83,18 @@ TARGET_COUNT = "{school}：必选 {core}、推荐 {first}"  # TARGET_NOTE 的前
 TARGET_COUNT_SEP = "；"
 TARGET_NOTE = "{counts}。未标记的筹码中，目标流派的优先推荐，会让目标流派本局不再出现的排在后面。"
 NOTE_LABEL = "说明"
+# 适用地图：一套方案可以标几张地图（多选），一张都不标算全地图通用。对局里认出地图以后，悬浮窗自动换到这个角色标了这张图的
+# 方案。左边方案列表里标了地图的那一行在悬停说明里写出地图，通用的不写。
+MAPS_LABEL = "适用地图"
+MAPS_ALL = "全地图通用"  # 下拉框上一张都没标时写这一句
+# 窄的排法（游戏内风格，下拉框和说明并排）里「全地图通用」放不下时写这两个字，不省略成「全…」
+MAPS_ALL_SHORT = "通用"
+# 标了几张、地图名连起来在下拉框上放不下时改写张数：截成「龙…」看不出标了什么（全标了哪几张写在悬停说明里）。
+# 左边紧挨着「适用地图」，只写张数；窄的排法里下拉框只有四五个字宽，写成「2 张地图」也放不下
+MAPS_COUNT = "{n} 张"
+MAPS_HINT = "不选＝全地图通用；对局中认出标了的地图时，悬浮窗自动换用这套方案"  # 下拉框的悬停说明
+MAPS_TIP_CHECKED = "已标地图：{maps}"  # 悬停说明的第二行：全标了哪几张（下拉框上省略了也看得全）
+LIST_MAPS = "适用地图：{maps}"
 # 筹码列表
 SEARCH_PLACEHOLDER = "搜索筹码名称或效果"
 ONLY_MARKED = "只看已标记"
@@ -214,7 +230,7 @@ def percent_text(p: float) -> int:
 
 
 def _quoted(names) -> str:
-    return "".join(QUOTED.format(n) for n in names)
+    return "".join(QUOTED.format(lang.t(n)) for n in names)
 
 
 def pool_notes(db, hero_name: str | None) -> dict[str, PoolNote]:
@@ -227,7 +243,8 @@ def pool_notes(db, hero_name: str | None) -> dict[str, PoolNote]:
     out: dict[str, PoolNote] = {}
     for name, chip in db.chips.items():
         if chip.maps and not chip.granted:
-            out[name] = PoolNote(NOTE_MAP, POOL_MAP, POOL_MAP_TIP.format(chip=name, maps=_quoted(chip.maps)))
+            out[name] = PoolNote(NOTE_MAP, POOL_MAP, POOL_MAP_TIP.format(
+                chip=names.chip_name(chip), maps=_quoted([names.map_in(db, m) for m in chip.maps])))
     hero = db.heroes.get(hero_name) if hero_name else None
     if hero is None:
         return out
@@ -239,7 +256,7 @@ def pool_notes(db, hero_name: str | None) -> dict[str, PoolNote]:
         classes = [cls for cls in CLASSES if cls in chip.pools]
         if not classes:  # 职业池里的名字都不在 CLASSES 里：不提醒（资料库不该这样，防越界）
             continue
-        fields = dict(chip=name, classes=_quoted(classes), hero=hero.name,
+        fields = dict(chip=names.chip_name(chip), classes=_quoted(classes), hero=names.hero_name(hero),
                       weight=hero.weights.get(classes[0], STANDARD_WEIGHT), percent=percent_text(chance))
         if len(classes) == 1:
             tip = POOL_RARE_TIP.format(**fields)
@@ -263,7 +280,7 @@ def default_ends(db, hero_name: str | None) -> dict[str, tuple[str, str]]:
     out: dict[str, tuple[str, str]] = {}
     for chip, tier in ps.tiers.items():
         if chip in db.chips and not db.chips[chip].granted and chip not in reasons and tier in PLAYER_TIER_LABEL:
-            out[chip] = (DEFAULT_TIER.format(tier=PLAYER_TIER_LABEL[tier]), "")
+            out[chip] = (DEFAULT_TIER.format(tier=lang.t(PLAYER_TIER_LABEL[tier])), "")
     for chip, texts in reasons.items():
         if chip in db.chips and not db.chips[chip].granted:
             out[chip] = (DEFAULT_RULE, "\n".join(dict.fromkeys(texts)))
@@ -335,7 +352,7 @@ def list_layout(db, catalog, tiers: Tiers, mine: bool = True) -> ListLayout:
 
 def block_title(tier: str, n: int, draggable: bool) -> str:
     """四块的标题：「必选 · 6 个（拖动调整顺位）」；不能拖时（默认推荐、只读）「必选 · 3 个」。"""
-    return (BLOCK_TITLE if draggable else BLOCK_TITLE_FIXED).format(tier=TIER_LABEL[tier], n=n)
+    return (BLOCK_TITLE if draggable else BLOCK_TITLE_FIXED).format(tier=lang.t(TIER_LABEL[tier]), n=n)
 
 
 def row_end(name: str, tier: str | None, *, mine: bool, locked_school: str | None,
@@ -349,7 +366,7 @@ def row_end(name: str, tier: str | None, *, mine: bool, locked_school: str | Non
     text, tip = ends.get(name, ("", ""))
     if locked_school is not None:
         end_tip = "\n".join(x for x in (text, tip) if x)
-        return LOCKED_END, L.END_COLOR, end_tip, LOCKED_TIP.format(school=locked_school)
+        return LOCKED_END, L.END_COLOR, end_tip, LOCKED_TIP.format(school=lang.t(locked_school))
     color = L.END_COLOR
     note = notes.get(name) if tier in NOTE_TIERS else None
     if note is not None:
@@ -391,17 +408,18 @@ def second_only_notes(db, tiers, listed, locked: str) -> str:
     unlock = len(listed) == max_schools(db)
     heads, tails = [], []
     for school in listed:
-        names = [name for name in seconds if school_of(db, name) == school]
-        if school in targets or not names:
+        chips_in = [name for name in seconds if school_of(db, name) == school]
+        if school in targets or not chips_in:
             continue
-        k = len(names)
-        chips = LIST_SEP.join(names[:LOCK_SECOND_SHOWN])
+        k = len(chips_in)
+        chips = LIST_SEP.join(names.chip_in(db, n) for n in chips_in[:LOCK_SECOND_SHOWN])
         if k > LOCK_SECOND_SHOWN:
             chips = LOCK_SECOND_MORE.format(chips=chips, n=k)
         these = LOCK_THESE.format(count="" if k == 1 else COUNT_WORD.get(k, f" {k} "))
-        heads.append(LOCK_SECOND_ONLY.format(school=school, chips=chips))
+        heads.append(LOCK_SECOND_ONLY.format(school=lang.t(school), chips=chips))
+        # locked 是 lock_notice 用 _quoted 拼好的（已按界面语言转过），这里和下面合成的一句都原样用
         tails.append(LOCK_SECOND_UNLOCK.format(these=these, locked=locked) if unlock
-                     else LOCK_SECOND_LEAVE.format(these=these, school=school))
+                     else LOCK_SECOND_LEAVE.format(these=these, school=lang.t(school)))
     if unlock and len(heads) > 1:
         return "".join(heads) + LOCK_SECOND_UNLOCK_ANY.format(locked=locked)
     return "".join(h + t for h, t in zip(heads, tails))
@@ -418,7 +436,8 @@ def series_hints(db, tiers) -> list[str]:
         low, high = tiers.get(pair.low), tiers.get(pair.high)
         if low not in LISTED_TIERS or TIER_STEP[low] <= TIER_STEP[high]:
             continue
-        out.append((HINT_SERIES if high is not None else HINT_SERIES_UNMARKED).format(low=pair.low, high=pair.high))
+        out.append((HINT_SERIES if high is not None else HINT_SERIES_UNMARKED).format(
+            low=names.chip_in(db, pair.low), high=names.chip_in(db, pair.high)))
     return out
 
 
@@ -449,7 +468,7 @@ def target_note(db, tiers) -> str:
     for school in targets:
         core = sum(1 for n in tiers.order("core") if school_of(db, n) == school)
         first = sum(1 for n in tiers.order("first") if school_of(db, n) == school)
-        parts.append(TARGET_COUNT.format(school=school, core=core, first=first))
+        parts.append(TARGET_COUNT.format(school=lang.t(school), core=core, first=first))
     return TARGET_NOTE.format(counts=TARGET_COUNT_SEP.join(parts))
 
 
@@ -491,7 +510,8 @@ def content(ed) -> list[BlockSpec]:
         chip = ed.db.chips.get(name)
         name_tip = None
         if chip is not None and chip.maps:
-            name_tip = chip.effect + "\n" + POOL_MAP_TIP.format(chip=name, maps=_quoted(chip.maps))
+            name_tip = chip.effect + "\n" + POOL_MAP_TIP.format(
+                chip=names.chip_name(chip), maps=_quoted([names.map_in(ed.db, m) for m in chip.maps]))
         return RowSpec(chip=name, tier="avoid" if locked_school is not None else tier, school=school, end=end,
                        end_color=color, end_tip=end_tip, tip=tip, name_tip=name_tip, enabled=writable,
                        locked=locked_school is not None)
@@ -504,16 +524,19 @@ def content(ed) -> list[BlockSpec]:
                         rows=tuple(row(n, tier, school_text(n)) for n in names), draggable=writable)
               for tier, names in layout.blocks if names]
     totals = dict(layout.totals)
-    groups = tuple(GroupSpec(key=g, title=GROUP_TITLE.format(group=g, n=len(names), total=totals[g]),
+    groups = tuple(GroupSpec(key=g, title=GROUP_TITLE.format(group=lang.t(g), n=len(names), total=totals[g]),
                              rows=tuple(row(n, None) for n in names), open=g != GROUP_MAP)
                    for g, names in layout.unmarked if names)
     if groups:
         n = sum(len(g.rows) for g in groups)
         blocks.append(BlockSpec(key=BLOCK_UNMARKED, title=UNMARKED_TITLE.format(n=n), groups=groups))
-    groups = tuple(GroupSpec(key=s, title=OTHER_GROUP_TITLE.format(school=s, n=len(names)),
+    groups = tuple(GroupSpec(key=s, title=OTHER_GROUP_TITLE.format(school=lang.t(s), n=len(names)),
                              rows=tuple(row(n, None, locked_school=s) for n in names))
                    for s, names in layout.other if names)
     if groups:
         n = sum(len(g.rows) for g in groups)
         blocks.append(BlockSpec(key=BLOCK_OTHER, title=OTHER_TITLE.format(n=n), groups=groups))
     return blocks
+
+
+lang.localize(globals())

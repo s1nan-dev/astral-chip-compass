@@ -11,11 +11,13 @@ import copy
 import time
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
+from typing import NamedTuple
 
 from ..data import DB, LEVEL_NORMAL, NORMAL
 from ..engine import default_rerolls, endless_wait, plan_of
 from ..pool import State, difficulty_of, rarity_rows
 from ..prefs import GAME_FIELDS, Settings
+from ..schemes import taggable_maps
 from . import offgame, panel, selection
 from .difficulty import DifficultyInfo, resolve_difficulty
 from .events import Event, EventLog, _jsonable
@@ -42,13 +44,18 @@ STAR_MIN_CONFIDENCE = 0.6  # 星数读数的把握（OwnStars.confidence）低�
 STAR_COSTS = (15, 20, 25)  # 升星要的星币：0→1 星、1→2 星、2→3 星（见 next_star_cost）
 GAIN_GRACE = 2  # 星数增加后，再在对局画面上读到几次新的星数仍没有出现三选一，才算「没有对应的三选一记录」
 MATE_CONFIRM = 2  # 同一行认成同一个队友角色几次才采用
-FOREIGN_CONFIRM = 2  # 连续几次三选一类画面读不到简体中文标题，才提示游戏语言
+FOREIGN_CONFIRM = 2  # 连续几次三选一类画面读不到简体或繁体的标题，才提示游戏语言
+HANT_CONFIRM = 2  # 连续几次三选一完整识别读到繁体标题，才记下这次运行里游戏是繁体中文
 HERO_SELECT_LOG_S = 30.0  # 识别记录：一直停在选角界面时（每 hud_ms 认一次），隔这么久才再记一条
 # 星币拆账（on_list、ledger）：最多留这么多段等悬浮窗取走（悬浮窗每次刷新都取，平时只有一两段）
 LEDGER_KEEP = 20
 # 这一局第一次采用的轮次不超过这一轮（还没有已有筹码）时，算从开局看起（whole_game；同上一局结束后开的新一局，轮次大于 2 时
 # 开局后可能已经拿过筹码）
 WHOLE_GAME_ROUND = 2
+# 刚打开时见过对局外的画面、进对局以后先读到的是星数这类不带轮次的读数：等读到轮次再定要不要请用户打开「查看筹码」面板
+# （见 Session._entered_game），最多等这么多秒。轮次每 hud_ms（3 秒）读一次，数字被挡住时每半秒看一眼，等这么久还读不到，
+# 多半是这台电脑上轮次一直认不出：照旧请用户打开面板，免得一局都不知道已有筹码
+PANEL_WAIT_S = 20.0
 # 循环往复给的额外那次三选一过了到期那一轮以后再算几轮（Session.endless_pending）：被击倒时那一回合不计，额外那次可能晚
 # 一轮；再晚还没认出来的（认漏了）不再算，不会一直多算 1 次
 ENDLESS_GRACE = 1
@@ -75,7 +82,8 @@ UNSUPPORTED_TEXT = {
     "fullscreen": "检测到独占全屏模式：悬浮窗无法显示在游戏画面上方，截图可能失败。请在游戏设置中将显示模式改为「全屏」或「窗口化」。",
     "small_window": "游戏窗口过小（{size} 像素）：界面文字过小，识别可能失败。请调大游戏窗口：16:9 窗口宽度 1000 像素以上，"
                     "更宽的窗口高度 563 像素以上。",
-    "language": "未读取到简体中文的界面文字：游戏语言可能不是简体中文，筹码三选一界面无法识别。请在游戏设置中将语言改为简体中文。",
+    "language": "未读取到简体中文或繁体中文的界面文字：游戏语言可能不是简体中文或繁体中文，筹码三选一界面无法识别。"
+                "请在游戏设置中将语言改为简体中文或繁体中文。",
 }
 
 
@@ -91,6 +99,18 @@ class ChipRemoval:
     game: object  # 移出时的这一局（GameState 对象：判新的一局、撤销新一局都换成别的对象）
     games: int  # 移出时判过几次新的一局
     select_no: int  # 移出时是第几次三选一（之后又出现了一次三选一就不放回）
+
+
+class SchemeChoice(NamedTuple):
+    """这一局用哪套筹码方案（Session.scheme_choice）。方案是 advisor.schemes.Scheme，None 为默认推荐。
+
+    saved：保存的方案（scheme_for 给的，即方案存储里这个角色上次用的那套）。在悬浮窗上手动换方案改的就是它，改动即存。
+    used：这一局实际用的方案：推荐按它算，悬浮窗的方案下拉框选中它。按地图换方案只改这一项，不存盘。
+    map：used 是按哪张地图换上的（used 不是 saved 时）；没有按地图换时为 None。"""
+
+    saved: object = None
+    used: object = None
+    map: str | None = None
 
 
 class Session:
@@ -123,16 +143,29 @@ class Session:
         self._name_votes: dict[str, int] = {}
         self._unsupported: dict[str, str] = {}
         self._foreign = 0
+        # 这次运行里认出游戏是繁体中文（三选一完整识别连着 HANT_CONFIRM 次读到繁体标题）：不写进设置文件和对局记录，
+        # 认出来以后一直为真（界面是简体时悬浮窗据此提示一次可以换界面语言）
+        self.hant_game = False
+        self._hant_votes = 0
+        # 连着一阵子（[map_detect] quiet_ms，只算看着画面的时间）看不到对局里的读数：多半是中途退出以后认不出主菜单（弹窗挡住了
+        # 等；认得出时由主菜单结束这一局），或停在别的认不出的画面上，这一局的状态一直留着。识别流程置上
+        # （vision.pipeline.FrameProcessor._count_quiet），又读到对局里的东西时清掉；不写进设置文件。悬浮窗上对局中先不显示的
+        # 提示、性能自检能不能开始据此按不在对局里算，这一局记的状态不动
+        self.game_quiet = False
         # 判定新的一局前的撤销点（game_state.UndoPoint, 依据种类, 触发的读数），到这一局第一次记录筹码为止可以撤销（误判时退回去）
         self._undo: tuple[UndoPoint, str, object] | None = None
         # 最近一次小卡片的「×」移出的筹码（remove_chip 记下，restore_chip 放回；放回、判新的一局时清掉）
         self._removal: ChipRemoval | None = None
         # 识别记录：上一次记下认出选角界面的时刻
         self._hero_select_logged = float("-inf")
-        # 筹码方案：按角色名取该角色正在用的方案（advisor.schemes.Scheme；用默认推荐时为 None）。悬浮窗接上方案存储后设置
+        # 筹码方案：按角色名取该角色保存的方案（advisor.schemes.Scheme；用默认推荐时为 None）。悬浮窗接上方案存储后设置
         # （session.scheme_for = SchemeStore.current），每次给推荐前都调用一次，要能很快返回（只读内存里的方案）。
         # 为 None 时一律按默认推荐计算
         self.scheme_for = None
+        # 按角色名取该角色的全部方案（Scheme 的列表，先后同悬浮窗的方案下拉框）：认出地图以后找标了这张地图的方案
+        # （scheme_choice）。悬浮窗同时接上（session.schemes_of = SchemeStore.schemes），同 scheme_for 只读内存、要能很快返回。
+        # 为 None 时不按地图换方案
+        self.schemes_of = None
         self._saved: dict | None = None  # 最近一次存成的设置内容（save 比较用；None 为还没存过、或上一次没写成）
         # 局面版本里界面那一半（另一半是三选一状态机跑过的次数 SelectTracker._runs）：用户在悬浮窗上改了会影响推荐的状态
         # （角色、地图、已有筹码、撤销新一局）就加一。识别线程在锁外算推荐，算完核对它没变才把结果装进去（SelectTracker._advise）
@@ -241,7 +274,8 @@ class Session:
         })
 
     def _scheme_snapshot(self) -> dict | None:
-        """诊断用：当前角色正在用的筹码方案（Plan.record），用默认推荐时为 None。取不到时记下原因，不影响导出。"""
+        """诊断用：推荐用的筹码方案（这一局实际用的那套，scheme_plan；Plan.record），用默认推荐时为 None。取不到时记下原因，
+        不影响导出。"""
         try:
             plan = self.scheme_plan()
         except Exception as e:  # noqa: BLE001  方案存储出错不能让导出诊断失败
@@ -341,16 +375,73 @@ class Session:
     # ------------------------------------------------------------ 筹码方案
 
     def scheme_plan(self):
-        """当前角色正在用的筹码方案（engine.Plan，只含参与打分的内容）。用默认推荐、没有接上方案存储（scheme_for）、
-        角色资料库未收录时为 None；方案的角色和当前角色不同时（不该出现）也按默认推荐。"""
+        """推荐用的筹码方案：这一局实际用的那套（scheme_choice 的 used）整理成 engine.Plan，只含参与打分的内容。用默认推荐、
+        没有接上方案存储（scheme_for）、角色资料库未收录时为 None；方案的角色和当前角色不同时（不该出现）也按默认推荐。"""
+        scheme = self.scheme_choice().used
+        return plan_of(self.db, scheme) if scheme is not None else None
+
+    def scheme_choice(self, hero: str | None = None) -> SchemeChoice:
+        """这一局用哪套筹码方案（SchemeChoice：保存的、实际用的、按哪张地图换的）。hero 不给时为当前角色（settings.hero）。
+        没有接上方案存储（scheme_for）、角色资料库未收录时都是默认推荐；保存的方案的角色和 hero 不同时（不该出现）按默认推荐。
+
+        实际用哪套每次现算，不另记「换成了哪套」：
+        - 本局已结束、地图未知、这张地图不能标在方案上（不在 schemes.taggable_maps 里，例如运动场）、这一局不再按地图换
+          （GameState.map_scheme_off）：用保存的方案；
+        - 保存的方案标了这张地图：照用它；
+        - 否则（保存的是通用方案、只标了别的地图、默认推荐）在这个角色的方案里（schemes_of 的先后，即方案下拉框里的先后）
+          找标了这张地图的，用第一套；一套都没有时用保存的方案。
+        所以地图改判、换了角色、方案被删掉或去掉了这张地图，下一次取就跟着变；对局结束、新的一局（地图清空）、重开程序都回到
+        保存的方案。只读内存，识别线程每次给推荐前都调用。"""
+        hero = self.settings.hero if hero is None else hero
         source = self.scheme_for
-        hero = self.settings.hero
         if source is None or hero not in self.db.heroes:
+            return SchemeChoice()
+        saved = source(hero)
+        if saved is not None and (getattr(saved, "hero", "") or hero) != hero:
+            saved = None
+        name = self._scheme_map()
+        if name is None or name in getattr(saved, "maps", ()):
+            return SchemeChoice(saved, saved)
+        for scheme in (self.schemes_of(hero) if self.schemes_of is not None else ()):
+            if name in getattr(scheme, "maps", ()) and (getattr(scheme, "hero", "") or hero) == hero:
+                return SchemeChoice(saved, scheme, name)
+        return SchemeChoice(saved, saved)
+
+    def _scheme_map(self) -> str | None:
+        """按哪张地图换方案（scheme_choice）：当前地图；本局已结束、地图未知、这张地图不能标在方案上（taggable_maps 以外）、
+        这一局不再按地图换时为 None。"""
+        name, g = self.settings.map, self.game
+        if g.game_over or g.map_scheme_off or not name or name not in taggable_maps(self.db):
             return None
-        scheme = source(hero)
-        if scheme is None or (getattr(scheme, "hero", "") or hero) != hero:
+        return name
+
+    def stop_map_scheme(self) -> bool:
+        """这一局不再按地图自动换方案（GameState.map_scheme_off）：之后这一局都用保存的方案（scheme_choice）。悬浮窗在点了
+        「换回原来的」、在悬浮窗上手动换了方案时调用。返回打上了没有：还没有这一局的对局状态（has_game_state：刚启动、还没进
+        对局）时不打，对局外选的是平时用的那套，之后开始的一局照常按地图换。新的一局换上新的 GameState 就清掉，撤销新的一局时
+        跟着旧的那一局回来。局面版本加一（_edits）：在锁外算的推荐作废，下一帧按改了以后的方案重算。"""
+        if not self.has_game_state:
+            return False
+        self._edits += 1
+        self.game.map_scheme_off = True
+        return True
+
+    def take_map_switch(self) -> SchemeChoice | None:
+        """悬浮窗每次刷新时取（持锁）：这一局刚按地图换了一套方案、还没告诉过用户时返回这一次的 scheme_choice()，记下告诉过了
+        （GameState._map_switch_told：角色和换成的方案）；之后接着换着同一套不再返回。没有按地图换着时（换回了、地图改判成没有
+        专用方案的、本局结束了……）忘掉告诉过的那一次，之后又换过去照样再返回。记在这一局的状态里：撤销新的一局时跟着那一局
+        回来，换回那一局时接着换着的那一套不重复告诉。"""
+        choice = self.scheme_choice()
+        g = self.game
+        if choice.map is None:
+            if g._map_switch_told is not None:
+                g._map_switch_told = None
             return None
-        return plan_of(self.db, scheme)
+        told = (self.settings.hero, getattr(choice.used, "id", ""))
+        if g._map_switch_told == told:
+            return None
+        g._map_switch_told = told
+        return choice
 
     def recompute(self) -> Event | None:
         """切换了当前角色用的筹码方案、或编辑了正在用的方案之后调用：按最近一次三选一的画面立即重算，返回新的事件
@@ -590,8 +681,8 @@ class Session:
         """上一局已结束后开始了新的一局（kind：select / round / offer）：清空，用掉对局外读到的难度（地图在这一局
         第一次对局内读数时用上，见 _apply_pending）。识别记录换一段。
 
-        结算画面结束的局确实结束了，不会是同一局：不存撤销点，不可撤销（undo=False）。房间、「匹配成功」画面、奖励画面结束的
-        局（对局中途误认出这几种画面时也会这样结束）：按对局画面、筹码三选一判出的新一局和对局中途判出的一样先存撤销点、
+        结算画面结束的局确实结束了，不会是同一局：不存撤销点，不可撤销（undo=False）。房间、「匹配成功」画面、奖励画面、
+        主菜单结束的局（对局中途误认出这几种画面时也会这样结束）：按对局画面、筹码三选一判出的新一局和对局中途判出的一样先存撤销点、
         可以撤销（undo=True；value 是触发的读数，见 undo_new_game），撤销时连同「已结束」一起撤回；按选角界面判出的不可撤销：
         选角界面只在开局时出现，看到它就是真的开了新的一局。
         panel：请用户打开「查看筹码」面板（轮次大于 2、或先看到筹码三选一界面时，开局后可能已经拿过筹码）。
@@ -618,10 +709,7 @@ class Session:
 
         撤销后，触发判定的那个读数不再判成新的一局：轮次、星数的「确实到过」降到那个读数（之后连续读到它算改正读错）；
         角色换了的，之后不再把那个角色当成新一局的迹象；选角界面的，回到对局画面之前不再看选角界面。
-        撤销的是房间等画面结束本局以后开的新一局（_start_next_game）时，那次结束也一起撤回：接着记这一局。结束时清掉的
-        漏记补录、待补录、「查看筹码」面板提示和刚关掉的那组候选放回结束前的样子，结束那一下（连同之前待确认的那一次）读到、
-        留给下一局的难度和地图撤回（_end_cleared）。结束后到撤销之间手改过这几项的（例如手改已有筹码时关掉的提示），
-        也按结束前的放回。
+        撤销的是房间等画面结束本局以后开的新一局（_start_next_game）时，那次结束也一起撤回（_revoke_end）：接着记这一局。
         """
         if self._undo is None:
             return False
@@ -634,11 +722,7 @@ class Session:
         self.game, self.pending = point.game, point.pending  # 换回判定前的两个对象
         g = self.game
         if g.game_over:
-            # 结束时清掉的几项有这一局的状态，也有留给下一局的难度和地图：各按名字写回放它的对象（_FIELD_HOLDERS）
-            for k, v in (g._end_cleared or {}).items():
-                setattr(getattr(self, _FIELD_HOLDERS[k]), k, v)
-            g.game_over, g._ended, g._end_votes, g._ended_by_screen = False, None, None, False
-            g._end_cleared = None
+            self._revoke_end()
         # 读数缺失（None）时只撤销，不调「确实到过」：撤销本身不能因为记录不全而失败
         if kind == "round":
             if value is not None:
@@ -668,6 +752,22 @@ class Session:
         self._to_recorder("undo_segment")  # 判定时换的那一段接回上一段
         return True
 
+    def _revoke_end(self) -> None:
+        """撤回这一局的「已结束」，接着记这一局：撤销房间等画面结束以后开的新一局（undo_new_game）、断线以后连回了主菜单
+        结束的那一局（offgame.round_after_game）都用它。
+        结束时清掉的漏记补录、待补录、「查看筹码」面板提示和刚关掉的那组候选放回结束前的样子，结束那一下（连同之前待确认的
+        那一次）读到、留给下一局的难度和地图撤回（_end_cleared，见 offgame.end_game）。结束后到撤回之间手改过这几项的
+        （例如手改已有筹码时关掉的提示），也按结束前的放回。胜负的依据一起作废：那次结束是误认的（或者只是暂时离开），
+        这一局接着打，它之前读到的通关画面、横幅也不是真的结束。"""
+        g = self.game
+        # 结束时清掉的几项有这一局的状态，也有留给下一局的难度和地图：各按名字写回放它的对象（_FIELD_HOLDERS）
+        for k, v in (g._end_cleared or {}).items():
+            setattr(getattr(self, _FIELD_HOLDERS[k]), k, v)
+        g.game_over, g._ended, g._end_votes, g._ended_by_screen = False, None, None, False
+        g._end_cleared, g._end_screen, g._left = None, None, False
+        g._ended_at, g._reward_seen, g._reward_coins = None, False, None
+        g._victory_at = g._game_over_at = None
+
     @property
     def has_game_state(self) -> bool:
         """有这一局的对局状态（选角界面、对局外的画面据此判断要不要开新的一局、结束这一局）。
@@ -677,8 +777,18 @@ class Session:
         return (bool(s.owned) or s.round is not None or s.map is not None or s.star_read
                 or self.game.seen_hero is not None or s.difficulty is not None)
 
-    def _entered_game(self) -> None:
+    def _entered_game(self, rnd: int | None = None, offer: bool = False) -> None:
         """看到了对局里的画面（轮次、玩家列表、三选一）。已有筹码未知时请用户打开「查看筹码」面板（只提示一次）。
+        rnd：这次读到的轮次（on_hud）；offer：这次是一次三选一界面出现了（_select_opened）；玩家列表上的星数等两样都不传。
+
+        刚打开时见过对局外的画面（_outside_seen：主菜单、房间、「匹配成功」画面、结算画面、奖励画面，见 offgame.on_out_of_game）、
+        之后才进的对局，进对局时还在开局的就算从开局看起，不请用户打开面板（同上一局结束后轮次还小时开的新一局，见
+        _start_next_game）。按这一局先看到的是什么定（_from_start）：
+          轮次不超过 WHOLE_GAME_ROUND（这之前没看到三选一）：从开局看起（whole_game），已有筹码确实为空，不提示；
+          轮次大于它，或者先看到三选一（三选一那一帧在读轮次之前就由 begin_offer 清掉那一笔）：开局后可能已经拿过筹码，提示；
+          星数、认角色这类不带轮次的读数：先不提示，等读到轮次再定；等的时候先看到三选一就提示；一直读不到轮次，等满
+            PANEL_WAIT_S 秒照旧提示。
+        没见过对局外画面的（刚打开时就在对局里）、离开很久后回来要核对的（_resume_check）照旧：第一次对局内读数就提示。
 
         这一局第一次对局内读数时，用掉对局外读到、还留着的难度和地图（没有对局状态时读到的房间等：启动时已在房间里，
         或选角界面没有清空什么；上一局已结束后开的新一局，new_game 只用了难度，地图在这里用上）。
@@ -692,10 +802,29 @@ class Session:
             if not self.game.game_over and (self.pending._next_difficulty or self.pending._next_map):
                 self._apply_pending()
                 self._difficulty_changed()
-        if self.game.panel_needed and not self.game._panel_prompted:
-            self.game._panel_prompted = True
+        g = self.game
+        if g.panel_needed and not g._panel_prompted:
+            if g._outside_seen and not g._resume_check and self._from_start(rnd, offer):
+                return
+            g._panel_prompted = True
             # why=resume：离开很久后回来，请用户核对（悬浮窗的提示写明原因）
-            self._push(self._event("panel_prompt", why="resume" if self.game._resume_check else ""))
+            self._push(self._event("panel_prompt", why="resume" if g._resume_check else ""))
+
+    def _from_start(self, rnd: int | None, offer: bool) -> bool:
+        """刚打开时见过对局外的画面（_outside_seen）、这一局还没提示过「查看筹码」面板时，按这次对局内读数（见 _entered_game）
+        定：返回 True 不提示（从开局看起，或者还在等轮次）；返回 False 照旧提示，这一笔随即清掉，之后不再等。"""
+        g = self.game
+        if rnd is None and not offer:
+            now = self._clock()
+            if g._panel_wait is None:
+                g._panel_wait = now
+            if now - g._panel_wait < PANEL_WAIT_S:
+                return True  # 先读到的是星数这类不带轮次的读数：等读到轮次再定
+        g._outside_seen = False
+        if offer or rnd is None or rnd > WHOLE_GAME_ROUND or self.settings.owned:
+            return False
+        g.panel_needed, g.whole_game = False, True  # 第 1、2 轮、还没看到三选一：从开局看起，已有筹码确实为空
+        return True
 
     # ------------------------------------------------------------ 对局状态
 
@@ -756,7 +885,7 @@ class Session:
             hud = copy.copy(hud)
             hud.round = None
         if hud.round is not None and ROUND_RANGE[0] <= hud.round <= ROUND_RANGE[1]:
-            self._entered_game()
+            self._entered_game(hud.round)
             self.game._select_guard = False
             old = s.round
             self.judge.note_low("round", hud.round, 0 < hud.round < self.game._round_floor)
@@ -818,6 +947,8 @@ class Session:
             return self._event("status")
         if hero == self.game.seen_hero or hero == self.game._ignore_hero:
             self.game._hero_votes = None
+            if hero == self.game.seen_hero:
+                self.game._rejoined = False  # 断线以后连回来的确实是同一个角色（见下面的互相印证）
             return None
         # 认出的角色和这一局之前认出的不一样：一局之内不会换角色，所以是新的一局
         votes = self.game._hero_votes[1] + 1 if self.game._hero_votes and self.game._hero_votes[0] == hero else 1
@@ -831,7 +962,9 @@ class Session:
             return self._event("status")
         old = self.game.seen_hero
         why = self.judge.with_evidence("hero", f"识别到的角色由「{old}」变为「{hero}」")
-        if self.judge.vetoed("hero", why):
+        # 刚当成断线以后连回了这一局、还没再认出这一局的角色时（_rejoined，见 offgame.round_after_game）不互相印证：
+        # 接回来的依据就是那几次轮次读数，拿它们否决「换了角色」的话，接错了（其实是开了新的一局）就一直改不回来
+        if not self.game._rejoined and self.judge.vetoed("hero", why):
             # 轮次、星数还说这一局在继续：多半是立绘被挡住或特效改变了样子，认错了。
             # 第一次认定本身认错的情况（中途启动时）没有办法和「之后认错」区分，由用户在角色下拉框里手动指定
             self.game._hero_votes = None
@@ -1276,7 +1409,7 @@ class Session:
 
     @property
     def unsupported(self) -> list[str]:
-        """状态行要提示的不支持情况（独占全屏、窗口过小、非简体中文），按 UNSUPPORTED_ORDER 排列。"""
+        """状态行要提示的不支持情况（独占全屏、窗口过小、游戏语言既不是简体中文也不是繁体中文），按 UNSUPPORTED_ORDER 排列。"""
         return [self._unsupported[k] for k in UNSUPPORTED_ORDER if k in self._unsupported]
 
     def set_unsupported(self, key: str, active: bool, **fmt) -> bool:
@@ -1291,7 +1424,7 @@ class Session:
         return True
 
     def on_language(self, foreign: bool | None) -> Event | None:
-        """一次三选一识别的语言判断：True 像是其他语言的三选一，False 读到了简体中文标题，None 不确定。"""
+        """一次三选一识别的语言判断：True 像是其他语言的三选一，False 读到了简体或繁体的标题，None 不确定。"""
         if foreign is None:
             return None
         self._foreign = self._foreign + 1 if foreign else 0
@@ -1383,11 +1516,32 @@ class Session:
         （这次结束了这一局时）或 None；难度胶囊的写法变了时另发 status。"""
         return offgame.on_out_of_game(self, screen)
 
+    def on_victory(self) -> None:
+        """识别读到了通关画面「VICTORY」（vision/victory.py，结算页之前那一段）：记下时刻，这一局结束时按它定胜负
+        （offgame.outcome）。没有对局状态、本局已结束时不记。不发事件：胜负只进推荐日志和对局报告，悬浮窗上不显示。"""
+        if self.has_game_state and not self.game.game_over:
+            self.game._victory_at = self._clock()
+            self.trace("victory")
+
+    def on_game_over_banner(self) -> None:
+        """识别读到了打输时棋盘上那条「GAME OVER」横幅（vision/victory.py）：记下时刻，这一局结束时按它定胜负
+        （offgame.outcome）。没有对局状态、本局已结束时不记。不发事件：胜负只进推荐日志和对局报告，悬浮窗上不显示。"""
+        if self.has_game_state and not self.game.game_over:
+            self.game._game_over_at = self._clock()
+            self.trace("game_over_banner")
+
     @property
     def game_over_info(self) -> dict | None:
-        """本局已结束时的 {why, map, difficulty, level, rounds, cap}（difficulty 是难度胶囊上的写法，见
-        DifficultyInfo.label；rounds 优先取结算画面上的轮次）；还没结束时为 None。"""
+        """本局已结束时的 {why, map, difficulty, level, rounds, cap, outcome, how}（difficulty 是难度胶囊上的写法，见
+        DifficultyInfo.label；rounds 优先取结算画面上的轮次；outcome、how 是胜负和依据，见 offgame.outcome，不知道时为
+        None）；还没结束时为 None。"""
         return dict(self.game._ended) if self.game.game_over and self.game._ended is not None else None
+
+    @property
+    def result_settled(self) -> bool:
+        """本局已结束、胜负定了（结束以后读到了奖励画面，之后不会再有新的依据）：悬浮窗这时才拼这一局的对局报告，还没定的
+        先等（见 dispatch.log_game_over）。"""
+        return self.game.game_over and self.game._reward_seen
 
     # ------------------------------------------------------------ 三选一
 
@@ -1611,7 +1765,7 @@ class Session:
 
     def _select_opened(self, names: tuple) -> None:
         """一次三选一界面出现了（刷新不算新的一次；同一组候选关闭后又出现也不算，见下面「刚关掉的同一组候选又出现了」）。"""
-        self._entered_game()
+        self._entered_game(offer=True)
         closed, self.game._last_closed = self.game._last_closed, None
         reopened = closed is not None and closed[0] == names
         if not reopened:
@@ -1680,11 +1834,28 @@ class Session:
 
         本局已结束时开新的一局（返回 newgame，请用户打开「查看筹码」面板；可不可以撤销见 _start_next_game）：
         随后的轮次、星数读数记进新的一局，这次三选一的推荐就用上它们（已结束时读到的星数不起作用、轮次要连续读到两次）。
-        没有结束时什么都不做，返回 None。
+        没有结束时返回 None，只清掉「刚打开时见过对局外的画面」那一笔（_outside_seen）：这一局先看到的是三选一，开局后可能
+        已经拿过筹码，这一帧随后读到的轮次再小也不算从开局看起，照旧请用户打开面板（见 _entered_game）。
         不调用它时 on_frame 照样开新的一局，只是这一帧在 on_frame 之前的读数已按「已结束」处理掉了。"""
         if not self.game.game_over:
+            self.game._outside_seen = False
             return None
         return self._start_next_game("offer", "检测到筹码三选一界面", panel=True)
+
+    def _note_game_language(self, seen) -> None:
+        """按三选一完整识别的标题记游戏是不是繁体中文：完整识别（不是只重查绿框、快速盯绿框的沿用读数）认出繁体就加一，
+        认出简体就清零；连着 HANT_CONFIRM 次繁体时把 hant_game 置真并记一条识别记录，这次运行里不再变回假。
+        只在完整识别上数：沿用上一次结果的读数（reread）照抄原来的判断，不算一票；同一次三选一里补认、读不全再认的完整
+        识别各算一票。"""
+        if seen is None or getattr(seen, "reread", False):
+            return
+        if getattr(seen, "hant", False):
+            self._hant_votes += 1
+            if self._hant_votes >= HANT_CONFIRM and not self.hant_game:
+                self.hant_game = True
+                self.trace("hant_game")
+        else:
+            self._hant_votes = 0
 
     def on_frame(self, seen) -> Event | None:
         """喂入一帧的三选一识别结果（不是三选一界面时传 None）。有新情况时返回事件。
@@ -1693,6 +1864,7 @@ class Session:
         这次三选一在新的一局里照常处理，事件（推荐等）放进待取队列，排在新一局之后。
         识别流程每帧先读星数（on_stars）再调这里：这一帧在三选一界面上读到的星数，紧接着换成另一次三选一时算新的这一次的。
         界面这一侧的状态机（开关、刷新等待、去重、给推荐）在 SelectTracker.frame。"""
+        self._note_game_language(seen)
         sel = self.select
         fresh, sel._fresh_select_star = sel._fresh_select_star, None
         if seen is None or not self.game.game_over:
@@ -1766,6 +1938,10 @@ class WatchHints:
     # 最近一次交给记账的三选一读数记下了绿框选中的另一张筹码时为（第几个, 筹码名）（SelectTracker.noted）：识别流程留下记下它
     # 用的那一帧，导出诊断时另存一张（vision.pipeline.FrameProcessor.pick_shot）
     select_noted: tuple | None = None
+    # 手上的轮次（settings.round）：轮次被挡住时只认一小块读到的数，和它差得多就不直接交给记账（vision.pipeline.FrameProcessor._peek_round）
+    round_now: int | None = None
+    # 已经当作不在对局里了（Session.game_quiet）：识别流程又读到对局里的东西时据此清掉，满了时长也不重复置
+    game_quiet: bool = False
 
     @classmethod
     def of(cls, session, seen=None) -> WatchHints:
@@ -1786,4 +1962,6 @@ class WatchHints:
             select_unread=session.select.unread,
             select_told=session.select.told,
             select_noted=session.select.noted,
+            round_now=session.settings.round,
+            game_quiet=session.game_quiet is True,
         )

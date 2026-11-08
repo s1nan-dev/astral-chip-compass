@@ -743,7 +743,7 @@ class SeriesAdviceTest(Base):
     def test_fan_superseded(self):
         """手持风扇-小 / -大同时出现：小「被紫色上位替代」、不参与推荐度，大下面写「比蓝色多使用主动技能后获得 1 张卡牌」。
         实测那一局的局面（按现在的适配表，阿兰娜的推荐流派是治愈、标记，两张风扇都加推荐流派的分）：不算上位替代时
-        43% / 39% / 18%，算的话小的那份分给其余两项，首推是医疗箱-紧急治疗。"""
+        49% / 32% / 19%，算的话小的那份分给其余两项，首推是医疗箱-紧急治疗。"""
         st = State(**ALANA_LAST)
         adv = advise(self.db, st, ALANA_OFFER, rarity=ALANA_RARITY)
         heal, big, small = adv.evals
@@ -753,12 +753,12 @@ class SeriesAdviceTest(Base):
         self.assertEqual(big.versus, [("手持风扇-小", "使用主动技能后获得 1 张卡牌", pair.tip)])
         self.assertEqual(compare_text(RARITY_WORD[small.chip.rarity], big.versus[0][1]), "比蓝色多使用主动技能后获得 1 张卡牌")
         self.assertEqual((adv.best, adv.top, adv.reroll), ("医疗箱-紧急治疗", 0, None))
-        self.assertEqual(shown_percents(adv), {0: 52, 1: 48})  # 卡片上显示的推荐度
-        # 写成不算时三项都有推荐度：43% / 39% / 18%
+        self.assertEqual(shown_percents(adv), {0: 60, 1: 40})  # 卡片上显示的推荐度
+        # 写成不算时三项都有推荐度：49% / 32% / 19%
         old = dataclasses.replace(self.db, series=tuple(
             dataclasses.replace(p, strict=False) if p is pair else p for p in self.db.series))
         before = advise(old, st, ALANA_OFFER, rarity=ALANA_RARITY)
-        self.assertEqual(shown_percents(before), {0: 43, 1: 39, 2: 18})
+        self.assertEqual(shown_percents(before), {0: 49, 1: 32, 2: 19})
         self.assertTrue(all(e.superseded_by is None for e in before.evals))
         # 分值、前瞻不变，只是小的那份推荐度分给其余两项
         for a, b in zip(adv.evals, before.evals):
@@ -772,7 +772,8 @@ class SeriesAdviceTest(Base):
 
     def test_not_strict(self):
         # 不算上位替代的几对：都有推荐度；要点为空的一方不写对比行（银行卡-余额多 / -用不完见 test_live_130853_unchanged）
-        # 小町 0 星：夹心饼干-美味的总分比-可口高约 1.6，不会因为两张接近而对调先后（rules.toml [advice] series_near）
+        # 小町 0 星：夹心饼干-可口的总分比-美味高约 1.3，不到 rules.toml [advice] series_near，两张的推荐度对调；
+        # 其余几手牌高一级本来就排在前面，推荐度和没有同系列筹码表时相同
         cases = [
             (State(hero="小町", star=0, rerolls=3), ["夹心饼干-可口", "夹心饼干-美味", "书签"], [0, 1]),
             (State(hero="南希露", star=1, rerolls=3), ["普通瞄具", "鹰眼瞄具", "书签"], [1, 1]),
@@ -788,7 +789,13 @@ class SeriesAdviceTest(Base):
                 self.assertEqual([len(e.versus) for e in adv.evals[:2]], lines)
                 self.assertEqual(adv.evals[2].versus, [])
                 self.assertEqual(adv.best, before.best)
-                for a, b in zip(self.options(adv), self.options(before)):
+                # 同系列表只改显示（对比行、接近时对调推荐度），分值不变
+                for a, b in zip(adv.evals, before.evals):
+                    self.assertEqual((a.total, a.lookahead), (b.total, b.lookahead))
+                got, plain = self.options(adv), self.options(before)
+                if st.hero == "小町" and st.star == 0:
+                    got[0], got[1] = got[1], got[0]
+                for a, b in zip(got, plain):
                     self.assertAlmostEqual(a, b, places=12)
 
     def test_only_this_pick(self):

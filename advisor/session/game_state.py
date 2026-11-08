@@ -122,6 +122,10 @@ class GameState:
     # 这两项新的一局照旧沿用（见类的说明）
     panel_needed: bool = False
     _panel_prompted: bool = False
+    # 还没有对局状态时读到过对局外的画面（刚打开时在主菜单、房间里等，见 offgame.on_out_of_game）：进对局时还在开局的算从开局
+    # 看起，不请用户打开面板；先读到不带轮次的读数时从什么时候起等轮次（Session 的时钟）。见 Session._entered_game
+    _outside_seen: bool = False
+    _panel_wait: float | None = None
     _last_panel: tuple | None = None  # 上一次发 panel_read 时的（已有筹码, 认不出的格数, 第几页, 这一页认出的筹码）
     # 连着几帧读成「只有一页」（数到 panel.ONLY_FRAMES 为止）：记着的不少于一页、或者 _paged 时要连着这么多帧才按只有一页
     # 改，见 session.panel.read_panel；读到别的页、看不清、把握不够、队友的页签、面板关了都从 0 数起
@@ -185,20 +189,43 @@ class GameState:
     # 本局已结束（结算画面等，见 Session.on_out_of_game）：状态保留到新的一局，之后的读数不再记进这一局。只由新的一局
     # 清掉（撤销房间等结束以后开的新一局时一起撤回，见 Session.undo_new_game）
     game_over: bool = False
-    _ended: dict | None = None  # 结束时的 {why, map, difficulty, level, rounds, cap}，见 Session.game_over_info
+    # 结束时的 {why, map, difficulty, level, rounds, cap, outcome, how}，见 Session.game_over_info
+    _ended: dict | None = None
+    # 胜负的依据（见 offgame.outcome）：读到通关画面「VICTORY」的时刻、读到打输横幅「GAME OVER」的时刻、结束的时刻（时钟秒），
+    # 结束后读到过奖励画面没有、奖励画面上「星币」那一格的数（读不出为 None）
+    _victory_at: float | None = None
+    _game_over_at: float | None = None
+    _ended_at: float | None = None
+    _reward_seen: bool = False
+    _reward_coins: int | None = None
     _end_votes: tuple[int, int, float] | None = None  # 结束后读到的轮次（读数, 连续次数, 时刻）
-    # 对局状态还在时第一次读到的房间、「匹配成功」画面或奖励画面（种类, 时刻, 读到之前留给下一局的难度, 地图）：
+    # 对局状态还在时第一次读到的房间、「匹配成功」画面、奖励画面或主菜单（种类, 时刻, 读到之前留给下一局的难度, 地图）：
     # 再读到一次才结束本局，见 offgame.confirmed；回到对局画面就作废，留给下一局的难度和地图退回读到之前
     # （Session._entered_game）
     _out_pending: tuple[str, float, dict, tuple | None] | None = None
-    # 本局是房间、「匹配成功」画面或奖励画面结束的（不是结算画面）：之后开的新一局可以撤销，见 Session._start_next_game
+    # 本局是房间、「匹配成功」画面、奖励画面或主菜单结束的（不是结算画面）：之后开的新一局可以撤销，见 Session._start_next_game
     _ended_by_screen: bool = False
     # 房间等画面结束本局时清掉的几项（漏记补录、待补录、「查看筹码」面板提示、刚关掉的那组候选）和结束前留给下一局的
-    # 难度、地图（{属性名: 值}）：撤销之后开的新一局时放回，见 Session.undo_new_game。结算画面结束的、还没结束时为 None
+    # 难度、地图（{属性名: 值}）：撤销之后开的新一局、断线以后连回这一局时放回，见 Session._revoke_end。结算画面结束的、
+    # 还没结束时为 None
     _end_cleared: dict | None = None
+    # 本局是哪种画面结束的（offgame.SCREEN_RULES 的键；后来又读到结算画面时改成结算画面），结束以后又读到了主菜单以外的
+    # 对局外画面没有（确实离开了这一局；结束本局的两次里先认出的那一次是这些画面的也算，见 offgame.end_game），以及刚当成
+    # 断线以后连回了这一局、还没再认出这一局的角色：见 offgame.round_after_game
+    _end_screen: str | None = None
+    _left: bool = False
+    _rejoined: bool = False
     # 地图专属筹码推出的地图和加载画面等读到的冲突、还没改时：（推出的地图或几张地图, 那一次的专属筹码和所在的格子），
     # 见 Session._chip_map_confirmed
     _chip_vote: tuple | None = None
+
+    # ---- 筹码方案（这一局实际用哪套每次现算，见 Session.scheme_choice；这里只记两样）
+    # 这一局不再按地图自动换方案（Session.stop_map_scheme：点了「换回原来的」，或在悬浮窗上手动换了方案）：之后这一局都用
+    # 保存的方案。新的一局换上新对象就清掉，撤销新的一局时跟着旧的那一局回来
+    map_scheme_off: bool = False
+    # 这一局最近一次告诉过用户的按地图换方案：（角色, 换成的方案 id），见 Session.take_map_switch。同一局里接着换着同一套
+    # 不再提示；撤销新的一局时跟着回来，换回那一局时不重复提示。没有按地图换着时为 None
+    _map_switch_told: tuple[str, str] | None = None
 
     @classmethod
     def from_settings(cls, settings) -> GameState:

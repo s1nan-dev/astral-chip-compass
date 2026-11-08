@@ -48,7 +48,7 @@ from shiboken6 import delete, getCppPointer, isValid
 
 from ..data import heroes_in_group_order
 from ..paths import download_dir  # 筹码图标是下载的识别图片（发行版在个人目录里）；每次用到时才取文件夹
-from . import decor, glyphs, theme
+from . import decor, glyphs, lang, names, theme
 from .text import keep_words, plain_words
 from .theme import COMMON as C
 from .theme import SETTINGS as L
@@ -955,6 +955,14 @@ class MapPill(QComboBox):
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.setFocusPolicy(Qt.StrongFocus)
 
+    def setCurrentText(self, text: str) -> None:  # noqa: N802  QComboBox 的方法名
+        """按程序里的名字（简体地图名、「地图：自动识别」）选中一项：下拉框的文字是显示名（繁体界面为繁体名），
+        所以先按 itemData 找，找不到（测试、旧调用传的是显示名）再按文字找。"""
+        index = self.findData(text)
+        if index < 0:
+            index = self.findText(text)
+        self.setCurrentIndex(index)
+
     def set_display(self, segments, tone: str = "") -> None:
         segments = _segments(segments)
         if (segments, tone) != (self._segments, self._tone):
@@ -1049,13 +1057,19 @@ COMBO_HEADER_ALPHA = 150  # 分组标题的字：平时的字色的不透明度�
 class ComboRowDelegate(QStyledItemDelegate):
     """下拉列表每一行的画法（见上面的说明）。行高、宽度照原来的条目代理（base；没有时照 QStyledItemDelegate），只在放不下
     文字时加宽。current 返回当前的值在第几行（下拉框的 currentIndex）；为 None 时不画短条（例如输入筹码名时的补全列表）。
+    checked 返回这一行是不是勾着的（多选的下拉框）；给了时左边画一个方框，勾着的填上强调色、打勾，文字往右让出方框的地方。
     悬停说明（各项的 ToolTipRole）照 QStyledItemDelegate 显示。"""
 
-    def __init__(self, parent, base=None, current: Callable[[], int] | None = None):
+    CHECK_SIZE = 12
+    CHECK_ROOM = 10  # 文字给方框让出的宽（方框和文字之间的空隙）
+
+    def __init__(self, parent, base=None, current: Callable[[], int] | None = None,
+                 checked: Callable[[int], bool] | None = None):
         super().__init__(parent)
         self._base = base  # 原来的条目代理：留着算行高（行高照现在的）
         self._base_ptr = getCppPointer(base)[0] if base is not None else None
         self._current = current
+        self._checked = checked
 
     def _base_delegate(self):
         """原来的条目代理。它是 Qt 自己建的（挂在下拉列表下面），PySide 偶尔会连同下拉列表的 Python 包装一起作废（底层的 Qt
@@ -1082,6 +1096,8 @@ class ComboRowDelegate(QStyledItemDelegate):
         size = base.sizeHint(option, index) if base is not None else super().sizeHint(option, index)
         text = str(index.data(Qt.DisplayRole) or "")
         need = QFontMetrics(option.font).horizontalAdvance(text) + sum(W.COMBO_TEXT_PAD)
+        if self._checked is not None:
+            need += self.CHECK_ROOM
         return QSize(max(size.width(), need), size.height())
 
     @staticmethod
@@ -1129,6 +1145,25 @@ class ComboRowDelegate(QStyledItemDelegate):
         else:
             color = option.palette.color(QPalette.Active, QPalette.Text)
         left, right = W.COMBO_TEXT_PAD
+        if self._checked is not None:  # 多选的下拉框：左边一个方框，勾着的填强调色、打勾
+            mark = QRectF(box.left() + 4, box.center().y() - self.CHECK_SIZE / 2, self.CHECK_SIZE, self.CHECK_SIZE)
+            if self._checked(index.row()):
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(self.accent())
+                painter.drawRoundedRect(mark, 3, 3)
+                pen = QPen(option.palette.color(QPalette.Active, QPalette.Base), 1.8,
+                           Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+                painter.setPen(pen)
+                painter.setBrush(Qt.NoBrush)
+                painter.drawPolyline(QPolygonF([
+                    QPointF(mark.left() + 3, mark.center().y()),
+                    QPointF(mark.center().x() - 0.5, mark.bottom() - 3),
+                    QPointF(mark.right() - 3, mark.top() + 3)]))
+            else:
+                painter.setPen(QPen(color, 1.2))
+                painter.setBrush(Qt.NoBrush)
+                painter.drawRoundedRect(mark, 3, 3)
+            left += self.CHECK_ROOM
         area = QRect(option.rect).adjusted(left, 0, -right, 0)
         painter.setFont(font)
         painter.setPen(color)
@@ -1148,8 +1183,13 @@ def draw_combo_rows(combo: QComboBox) -> ComboRowDelegate:
         popup = completer.popup()
         popup.setItemDelegate(ComboRowDelegate(popup, popup.itemDelegate()))
     if not isinstance(combo, MapPill):
-        combo.installEventFilter(_combo_arrow())
+        draw_combo_arrow(combo)
     return delegate
+
+
+def draw_combo_arrow(combo: QComboBox) -> None:
+    """皮肤写了 COMBO_ARROW 时下拉框右端的箭头自己画（ComboArrow）；没写时什么都不做（照系统的画法）。"""
+    combo.installEventFilter(_combo_arrow())
 
 
 # ------------------------------------------------------------ 下拉列表里不能选的分组标题
@@ -1174,13 +1214,14 @@ def add_combo_header(combo: QComboBox, text: str) -> int:
 def fill_hero_combo(combo: QComboBox, heroes, text: Callable | None = None) -> None:
     """角色下拉框：按 data.heroes_in_group_order 的六类排（物理主C、法术C、辅C、钱辅、奶辅、功能辅，同一类里保持传入的
     先后），每一类前面一行不能选的分组标题（HERO_GROUP_HEADER，add_combo_header）；各项的数据是角色名，文字是 text(角色)
-    （不给时为称号 · 角色名，Hero.label）。接在下拉框已有的项后面（「全部角色」这类项先加好）。"""
-    label = text or (lambda hero: hero.label)
+    （不给时为称号 · 角色名，繁体界面用繁体名，见 names.hero_label）。接在下拉框已有的项后面（「全部角色」这类项先加好）。"""
+    label = text or names.hero_label
     group = None
     for hero in heroes_in_group_order(heroes):
         if hero.group != group:
             group = hero.group
-            add_combo_header(combo, HERO_GROUP_HEADER.format(group=group))
+            # 组名是资料库里的简体（拿来分组、排序），显示时按界面语言转
+            add_combo_header(combo, HERO_GROUP_HEADER.format(group=lang.t(group)))
         combo.addItem(label(hero), hero.name)
 
 
@@ -1193,16 +1234,20 @@ class ComboArrow(QObject):
     """下拉框右端的实心小三角（皮肤的 COMBO_ARROW 写了颜色时）：下拉框照常画完以后在右端补画。样式表画不出三角形（用框线
     拼的会画成方块），系统的箭头在深色的胶囊上又看不清。皮肤没写时什么都不做（下拉框照自己的画法）。"""
 
+    CENTER = 15.0  # 三角形的中心离下拉框右边多远
+    HALF = 5  # 三角形的半宽：左端离下拉框右边 CENTER + HALF
+
     def eventFilter(self, obj, event) -> bool:
         if event.type() != QEvent.Paint or not W.COMBO_ARROW or not isinstance(obj, QComboBox):
             return False
-        QComboBox.paintEvent(obj, event)
+        obj.paintEvent(event)  # 下拉框自己的画法（自画了箭头、自己写框上的字的也是）
         p = QPainter(obj)
         p.setRenderHint(QPainter.Antialiasing)
         p.setPen(Qt.NoPen)
         p.setBrush(qcolor(W.COMBO_ARROW))
-        cx, cy = obj.width() - 15.0, obj.height() / 2 + 0.5
-        p.drawPolygon(QPolygonF([QPointF(cx - 5, cy - 3), QPointF(cx + 5, cy - 3), QPointF(cx, cy + 4)]))
+        cx, cy = obj.width() - self.CENTER, obj.height() / 2 + 0.5
+        half = self.HALF
+        p.drawPolygon(QPolygonF([QPointF(cx - half, cy - 3), QPointF(cx + half, cy - 3), QPointF(cx, cy + 4)]))
         p.end()
         return True
 
@@ -1490,7 +1535,7 @@ class Card(QFrame):
         self.toggle.set_open(on)
         name = self.title.text()
         self.toggle.setToolTip(
-            f"收起「{name}」卡片（只显示卡片头和摘要）" if on else f"展开「{name}」卡片"
+            lang.t(f"收起「{name}」卡片（只显示卡片头和摘要）" if on else f"展开「{name}」卡片")
         )
 
 

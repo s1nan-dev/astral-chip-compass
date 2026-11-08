@@ -3,6 +3,7 @@
 
 用 Qt 的 offscreen 平台，不会弹出窗口。"""
 import contextlib
+import dataclasses
 import random
 import re
 import threading
@@ -95,13 +96,19 @@ class ReasonShortTest(unittest.TestCase):
         tone = "plus" if part.score >= 0.5 else "minus" if part.score <= -0.5 else "info"
         self.assertEqual(pill.tone, "info" if part.label == "未收录" else tone)
 
-    def parts(self, hero, chip, owned=(), use_player=True, **kw):
+    def scaled(self, scale=0.5):
+        """official.scale 改回 scale 的资料库副本：查内置分参与总分、分项和理由时的行为（现在取 0，不列这几项）。"""
+        rules = {k: dict(v) if isinstance(v, dict) else v for k, v in self.db.rules.items()}
+        rules["official"]["scale"] = scale
+        return dataclasses.replace(self.db, rules=rules)
+
+    def parts(self, hero, chip, owned=(), use_player=True, db=None, **kw):
         owned = tuple(owned)
         st = State(hero=hero, owned=owned, **kw)
-        return Scorer(self.db, st, use_player=use_player).parts(chip, owned, kw.get("round"))
+        return Scorer(db or self.db, st, use_player=use_player).parts(chip, owned, kw.get("round"))
 
-    def part(self, label, hero, chip, owned=(), **kw):
-        found = [p for p in self.parts(hero, chip, owned, **kw) if p.label == label]
+    def part(self, label, hero, chip, owned=(), db=None, **kw):
+        found = [p for p in self.parts(hero, chip, owned, db=db, **kw) if p.label == label]
         self.assertTrue(found, (label, hero, chip))
         return found[0]
 
@@ -112,25 +119,26 @@ class ReasonShortTest(unittest.TestCase):
     def test_official_parts(self):
         """内置分：成长分「成长分：至第 5 轮」、角色分「角色分：适配」写要点；标签分「标签：攻击 ✓」；
         关键词分「已持有标记流派」、推荐流派「推荐流派：标记」（流派名不加「」）。"""
+        db = self.scaled(0.5)  # 内置分不计入总分时这几项不列，这里用内置分照旧计入的副本
         chip = next(c for c in self.db.chips.values() if c.growth_round and c.growth_round >= 2)
-        growth = self.part("成长分", "凛", chip.name, round=1)
+        growth = self.part("成长分", "凛", chip.name, db=db, round=1)
         self.assertEqual(part_pill(growth).text, f"成长分：至第 {chip.growth_round} 轮")
         self.assertIn(f"（第 {chip.growth_round} 轮）", growth.reason)
         self.check(part_pill(growth), growth)
         fit = next(c for c in self.db.chips.values() if "凛" in c.fit)
-        part = self.part("角色分", "凛", fit.name)
+        part = self.part("角色分", "凛", fit.name, db=db)
         self.assertEqual(part_pill(part).text, "角色分：适配")
         self.check(part_pill(part), part)
         hero, minor = next((h, c.name) for c in self.db.chips.values() for h in sorted(c.fit_minor) if h in self.db.heroes)
-        part = self.part("角色分", hero, minor)
+        part = self.part("角色分", hero, minor, db=db)
         self.assertEqual(part_pill(part).text, "角色分：普通适配")
         self.check(part_pill(part), part)
         marks = [c.name for c in self.db.chips.values() if c.school == "标记" and not c.maps and not c.granted]
-        keyword = self.part("关键词分", "美咲", marks[1], owned=[marks[0]])
+        keyword = self.part("关键词分", "美咲", marks[1], owned=[marks[0]], db=db)
         self.assertEqual(keyword.reason, "已持有「标记」流派的筹码")  # 整句照旧，在悬停说明里
         self.assertEqual(part_pill(keyword).text, "已持有标记流派")
         self.check(part_pill(keyword), keyword)
-        e = next(x for x in advise(self.db, State(hero="美咲", rerolls=2), ["标靶", "大背包", "缓冲盾牌"]).evals
+        e = next(x for x in advise(db, State(hero="美咲", rerolls=2), ["标靶", "大背包", "缓冲盾牌"]).evals
                  if x.chip.name == "标靶")
         tag = tag_pill(e)
         self.assertEqual(tag.text, "标签：攻击 ✓")
@@ -301,8 +309,8 @@ class ReasonShortTest(unittest.TestCase):
         self.assertTrue(m, part_pill(knife).text)
         self.assertIn(f"概率约 {m.group(1)}：", knife.reason)
         self.check(part_pill(knife), knife)
-        if "charge_build" in self.db.rules:
-            charge = [p for p in self.parts("邦妮", "永动机", star=1, round=3) if p.origin == "charge_build"]
+        if "school_build" in self.db.rules:
+            charge = [p for p in self.parts("邦妮", "永动机", star=1, round=3) if p.origin == "school_build"]
             self.assertTrue(charge)
             m = re.fullmatch(r"之后获得配套筹码 (\d+%)", part_pill(charge[0]).text)
             self.assertTrue(m, part_pill(charge[0]).text)
@@ -392,18 +400,20 @@ class ReasonShortTest(unittest.TestCase):
             hard = self.part("难度", "美咲", chip)
             self.assertEqual(part_pill(hard).text, "难度：生存类")
             self.check(part_pill(hard), hard)
-        coins = self.part("收入折算", "凛", "小猪存钱罐", round=3, map="异变图书馆")
+        # 纯收入筹码的正分只有内置分，现在没有可折的分：这一条用内置分照旧计入的副本
+        db = self.scaled(0.5)
+        coins = self.part("收入折算", "凛", "小猪存钱罐", db=db, round=3, map="异变图书馆")
         m = re.fullmatch(r"收入剩余 (\d+) 轮", part_pill(coins).text)
         self.assertTrue(m, part_pill(coins).text)
         self.assertIn(f"前还有 {m.group(1)} 轮", coins.reason)
         self.assertEqual(part_pill(coins).tone, "minus")
         self.check(part_pill(coins), coins)
-        star = self.part("收入折算", "茉莉", "银行卡-余额少", star=3, round=12)
+        star = self.part("收入折算", "茉莉", "银行卡-余额少", db=db, star=3, round=12)
         m = re.fullmatch(r"星光剩余 (\d+) 次兑现", part_pill(star).text)
         self.assertTrue(m, part_pill(star).text)
         self.assertIn(f"前还有 {m.group(1)} 次轮次奖励", star.reason)
         self.check(part_pill(star), star)
-        full = self.part("收入折算", "茉莉", "小猪存钱罐", star=3)  # 轮次待识别：只有满 3 星这一项
+        full = self.part("收入折算", "茉莉", "小猪存钱罐", db=db, star=3)  # 轮次待识别：只有满 3 星这一项
         self.assertIn("已达到 3 星，星币不再用于升星", full.reason)
         self.assertEqual(part_pill(full).text, "星币不再用于升星")
         self.check(part_pill(full), full)
@@ -417,7 +427,7 @@ class ReasonShortTest(unittest.TestCase):
     def test_tendency_and_unrecorded(self):
         """职业倾向（0 分，灰色）「职业倾向：卡牌（暂不加分）」；资料库未收录以分项名开头「未收录：按平均水平」，
         整句仍写全称「资料库未收录：按筹码池里各筹码的平均水平计算」（都不写中性分的数值）。"""
-        part = self.part("职业倾向", "凛", "小猪存钱罐", round=1)
+        part = self.part("职业倾向", "凛", "小猪存钱罐", db=self.scaled(0.5), round=1)
         self.assertEqual(part_pill(part).text, "职业倾向：卡牌（暂不加分）")
         self.assertEqual(part_pill(part).tone, "info")
         self.assertTrue(part.reason.endswith("职业分值未达到 100，暂不加分"), part.reason)
@@ -679,6 +689,32 @@ class TipLinesTest(unittest.TestCase):
         self.assertEqual([w for w in self.split_words(text, tip_lines(text)) if w == "三选一"], [])
         for term in ("出现率", "下次出现率", "攻击力", "生命值"):
             self.assertIn(term, TIP_TERMS)
+
+    def test_big_cores_terms_kept(self):
+        """「大小核」「受影响」整体不拆（设置窗口「只用大核」一项的说明在窄的窗口里、处理器名称长时不排成「有大小 / 核」
+        「可能略受影 / 响」）：卡片里自动换行的文字插入不换行的字符，悬停说明也不从中间断开。"""
+        for term in ("大小核", "受影响"):
+            self.assertIn(term, TIP_TERMS)
+        old = set_tip_names(self.names)
+        self.addCleanup(set_tip_names, old)
+        kept = keep_words("这台电脑的处理器是AMD Ryzen AI 9 HX 370 w/ Radeon 890M，有大小核\n"
+                          "目前拾星助手运行在小核上，打开此选项后文字识别更快，游戏帧数可能略受影响")
+        self.assertIn(f"大{KEEP_JOINER}小{KEEP_JOINER}核", kept)
+        self.assertIn(f"受{KEEP_JOINER}影{KEEP_JOINER}响", kept)
+        text = "这台电脑有大小核。打开后拾星助手只用大核，文字识别更快，但和游戏抢同一批核，游戏帧数可能略受影响。"
+        self.assertEqual([w for w in self.split_words(text, tip_lines(text)) if w in ("大小核", "受影响")], [])
+
+    def test_update_notice_terms_kept(self):
+        """「拾星助手」「下好后自动重启换上」整体不拆（标题栏下方软件内更新的提示在窄的皮肤上不排成「下次启动拾 / 星助手」，
+        「有新版本」那一句末行不只剩「上。」）：自动换行的文字（keep_words）在它们内部插入不换行的字符。"""
+        from advisor.ui.overlay_parts.wording import UPDATE_AVAILABLE, UPDATE_READY
+        for term in ("拾星助手", "下好后自动重启换上"):
+            self.assertIn(term, TIP_TERMS)
+        with tip_names_as(self.names):
+            kept = keep_words(UPDATE_AVAILABLE.format(version="1.2.0", date="", size="最多约 85 MB"))
+            self.assertIn(KEEP_JOINER.join("下好后自动重启换上"), kept)
+            self.assertIn(KEEP_JOINER.join("拾星助手"), kept)
+            self.assertIn(KEEP_JOINER.join("拾星助手"), keep_words(UPDATE_READY.format(version="1.2.0")))
 
     def test_scheme_tiers_kept(self):
         """「必选、推荐」整体不拆：档位前瞻的悬停整句、同一档先后的悬停（出现机会那一句）不排成「……必选、 / 推荐……」。"""

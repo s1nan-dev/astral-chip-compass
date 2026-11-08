@@ -9,15 +9,16 @@
 
 - **测试观点**（按测试类）：
   - `CodeTableTest`：编号表覆盖每张现役筹码、编号不重复不超上限、编号只增不改（编号 1～89 永远对应最初的筹码）、读坏的表拒收、表不在时返回空表。
+  - `MapCodeTest`：地图编号（`data/maps.json` 的 `code`）只增不改（9 张地图的编号固定在测试里）、能标的地图按编号排、结束的地图留着编号、资料里编号重复时一个编号只对应一张地图。
   - `TiersTest`：四档和顺位（改档位、改顺位、移动到某位、上下移；相等要每一档的先后也相同；可哈希、可 pickle）。
   - `SchemeTest`：方案的清理和校验、相等与哈希、目标流派不能手选（由标记推出来）、复制默认推荐、唯一名。
   - `SchoolsTest`：列进方案的流派、被锁成不选的流派、目标流派三样推导；上锁的门槛取 `rules.toml [pool] max_schools`。
-  - `CodecTest`：短字符串的编码和解码（固定样本、先后就是顺位、小编号穷举、保留位代表更新版本、非规范的内容拒收、校验连版本一起算、逐字符损坏和每个前缀都拒收、越界拒收）。
-  - `RoundTripTest`：两种分享格式往返（复制默认推荐、随机 200 套、说明和作者里含分隔符、极端组合、可读文字的写法）。
-  - `ParseTest`：宽容解析和安全（固定样本、前后带别的文字、手改的文字、坏文字与角色、旧版本的字符串、乱填不崩、名称和说明截断、前后缀不崩、大段粘贴限时、不是分享文字）。
+  - `CodecTest`：短字符串的编码和解码（第 2、3 版的固定样本、先后就是顺位、小编号穷举、保留位代表更新版本、非规范的内容拒收、第 3 版没标地图或最大编号那一位没标时拒收、校验连版本一起算、逐字符损坏和每个前缀都拒收、越界拒收、编号不认识的地图忽略并记问题）；短字符串的开头（`test_short_prefixes`：第 3 版写 ACC3-、第 2 版写 CA2-，导入时 ACC、CA 两种开头哪个版本都认，不分大小写、全角半角，别的字母不认；固定样本是 CA3- 开头，换成 ACC3- 解出来一样）。
+  - `RoundTripTest`：两种分享格式往返（复制默认推荐、随机 200 套、说明和作者里含分隔符、极端组合、可读文字的写法）；带地图的方案打开 `maps` 开关往返（含地图）；`WRITE_MAPS` 开着（默认）或参数打开时标了地图的写第 3 版、没标的照写第 2 版；开关或参数关掉时一律写第 2 版。
+  - `ParseTest`：宽容解析和安全（第 2、3 版固定样本、前后带别的文字、手改的文字、坏文字与角色、旧版本的字符串、第 3 版不写「地图」算通用、运动场和认不出的地图名忽略并记问题、乱填不崩、名称和说明截断、前后缀不崩、大段粘贴限时、不是分享文字）。
   - `DataUpdateTest`：模拟资料更新后旧的字符串和方案文件怎么读（改名、移除、更新版本的新筹码、编号表读不出）。
-  - `StoreTest`：方案文件（默认位置、没有文件、增删改和上次使用、文件格式、顺位存取、行序定顺位、没变不写、备份是上一版、坏文件和旧格式、写到一半中断、来自更新版本时只读、不认识的字段原样保留、筹码行里不认识的字段跟着筹码、先认编号再认名称、同步盘的冲突副本不动、导入、极端组合、写错不抛、写不进改存 fallback、读不了不覆盖、短暂被占用会重试、边读边删不出错）。
-- **检证对象**：`advisor/schemes.py` 的 `Tiers`、`Mark`、`Scheme`、`SchemeStore`、`ChipCodes`、`Catalog`、`get_catalog`、`load_codes`、`read_codes`、`encode_payload` / `decode_payload`、`ShortPayload`、`parse_share`、`to_text`、`to_short`、`scheme_from_default`、`default_marks`、`default_schools`、`listed_schools`、`locked_schools`、`target_schools`、`school_of`、`clean_text` / `clean_name` / `unique_name`、`backup_path`、`CODE_MAX`、`SHARE_VERSION`、`FILE_VERSION`、各 `PROBLEM_*`、`LoadNotice`、`SchemesReadOnly`；`advisor/fileio.py`；`advisor/paths.py` 的 `schemes_path`；`tools/check_data.py` 的 `codes_problems`、`CODE_MAX`；`tests/support/sandbox.py` 的 `real_paths` / `temp_dir`；`tests/test_fileio.py` 的 `Disk`。
+  - `StoreTest`：方案文件（默认位置、没有文件、增删改和上次使用、文件格式、顺位存取、行序定顺位、没变不写、备份是上一版、坏文件和旧格式、写到一半中断、来自更新版本时只读、不认识的字段原样保留、筹码行里不认识的字段跟着筹码、地图行里不认识的字段和认不出的行原样保留、先认编号再认名称、同步盘的冲突副本不动、导入、极端组合、写错不抛、写不进改存 fallback、读不了不覆盖、短暂被占用会重试、边读边删不出错）。
+- **检证对象**：`advisor/schemes.py` 的 `Tiers`、`Mark`、`Scheme`、`SchemeStore`、`ChipCodes`、`Catalog`、`get_catalog`、`load_codes`、`read_codes`、`map_codes` / `taggable_maps` / `normalize_maps`、`encode_payload` / `decode_payload`、`ShortPayload`、`parse_share`、`to_text`、`to_short`、`scheme_from_default`、`default_marks`、`default_schools`、`listed_schools`、`locked_schools`、`target_schools`、`school_of`、`clean_text` / `clean_name` / `unique_name`、`backup_path`、`CODE_MAX`、`MAP_CODE_MAX`、`SHARE_VERSION`、`SHARE_VERSION_MAPS`、`WRITE_MAPS`、`FILE_VERSION`、各 `PROBLEM_*`、`LoadNotice`、`SchemesReadOnly`；`advisor/fileio.py`；`advisor/paths.py` 的 `schemes_path`；`tools/check_data.py` 的 `codes_problems`、`map_problems`、`CODE_MAX`；`tests/support/sandbox.py` 的 `real_paths` / `temp_dir`；`tests/test_fileio.py` 的 `Disk`。
 - **什么时候要跑**：改 `advisor/schemes.py` 的任何部分（档位、分享格式、解析、方案文件）；改 `data/chip_codes.json`；改 `tools/check_data.py` 的编号检查；改 `advisor/fileio.py` 的原子写；改 `advisor/paths.py` 的方案文件位置。
 - **怎么单独跑**：`python -B tools/run_tests.py --only test_schemes`（上次约 3.9 秒）
 - **需要什么**：没有特别要求。方案文件写在沙箱 `.tmp` 下的临时文件夹里，不碰真的 `schemes.json`。
@@ -30,7 +31,8 @@
   - `RoundTripTest` / `ParseTest` 失败 → `parse_share`、`to_text` / `to_short`、模糊匹配或截断改了。
   - `DataUpdateTest` 失败 → 载入时对改名、移除、更新版本的识别改了（看 `Catalog` 的筹码解析）。
   - `StoreTest` 失败 → `SchemeStore` 的读写、备份、坏文件处理、只读、未知字段保留或 fallback 改了。
-  - 有意改的：短字符串最大长度（115）、固定样本、编号 1～89 的名称表都是与格式绑定的预期，改了格式或资料要一起改。
+  - `MapStoreTest` 失败 → 方案文件里 `maps` 的写法（按编号、同时记编号和名称）、读时先认编号再认名称、类型不对按通用、认不出的行原样保留改了。
+  - 有意改的：短字符串最大长度（115）、固定样本（含第 3 版带地图的固定样本）、编号 1～89 的名称表都是与格式绑定的预期，改了格式或资料要一起改。
 
 ## test_schemes_file.py：方案文件（`schemes.json`）的读写和各种坏情况，由方案存储 `SchemeStore` 负责
 
@@ -38,6 +40,7 @@
   - `OrphanTest`：方案文件不在、只剩备份时——不读备份、第一次保存前把备份另存为 `.bak.orphan-时间`（名字被占时接 `-2`）、另存不成时照常写方案文件但不碰备份、备份在保存前已被删时照常保存、只剩备份又没有内容要存时不建文件、写不进改存 fallback 时也先另存只剩的备份。
   - `SavedTest`：改动即存——每次改动 `save` 返回真、`saved` 为真；写不进去（改存也不成）时 `save` 返回假、`saved` 为假、`save_error` 有值、内存里的改动照旧有效；来自更新版本的文件只读；写的时候刷进硬盘（`os.fsync`）。
   - `BrokenTest`：读坏了——坏文件没能另存又没有备份时这次运行不写方案文件（`blocked`）；坏文件没能留一份、备份能用时改读备份；用备份恢复没成时 `save_error` 有值、不是 `blocked`、下次保存照常写；备份没能用上时按只剩备份处理；运行中文件被外面改坏时下次保存照常写、坏内容不盖掉备份。
+  - `MapStoreTest`：适用地图的存取——带地图存了再读回来一致（按编号排、同时记编号和名称，读时先认编号再认名称）；没有 `maps` 键时算通用；`maps` 类型不对时这一套算通用、文件不当坏文件、别的方案照常；认不出的地图行不参与计算、改了这套方案再存时原样留在后面；没改过的方案原样写回。
 - **检证对象**：`advisor/schemes.py` 的 `SchemeStore`（`_load`、`save`、`_keep_orphan`、`_save_fallback`、`saved`/`blocked`、`_atomic_write`、`backup_path`）；`advisor/fileio.py` 的 `write_bytes`、`read_with_backup`、`move_aside`。
 - **什么时候要跑**：改了 `advisor/schemes.py` 里方案文件的读写（`SchemeStore._load`、`save`、`_keep_orphan`、`_parse`），或改了 `advisor/fileio.py` 的整份写入 / 备份 / 另存 / 读并兜底，或改了 `.bak`／`.broken-时间`／`.bak.orphan-时间` 的命名与时机以后。
 - **怎么单独跑**：`python -B tools/run_tests.py --only test_schemes_file`（上次约 0.3 秒）。
@@ -73,6 +76,7 @@
   - `DeleteTest`：删除在窗口内确认、不另弹窗口、删正在用的方案改回默认推荐、切方案取消确认。
   - `SaveTest`：改动即存（停止输入后存、切方案时存没存的文字、文字和档位一起存、每种改动都发 `schemes_changed`、外部导入后刷新、方案被别处删了再点档位不出错）。
   - `ReadOnlyTest`：来自更新版本的方案文件只读（按钮、输入框、档位都不能改，文件不变）。
+  - `MapsTest`：适用地图一栏（`MapField`，一行「适用地图」和一个下拉多选 `MapCombo`）按 `taggable_maps` 列出每张地图一项；点了立即存进方案（`normalize_maps` 按地图编号排）、发 `schemes_changed`，再点一下取消；下拉框上写标了哪几张、一张都没标写「全地图通用」，悬停说明写明全标了哪几张；点开以后列着每张能标的地图，勾一项不收起（`test_popup_lists_maps_and_stays_open`；按下和松开分开、中间事件循环照常跑的真点法，下拉列表里按回车勾选，也都不收起，按下以后拖到外面松开以后 Esc、点在外面照常收起：`test_popup_stays_open_with_real_clicks`）、空格／回车点开、上下键移动、空格勾选（`test_keyboard_opens_and_checks`）、滚轮不换项（`test_wheel_does_not_change_maps`）；方案列表那一行的悬停说明写「适用地图：……」（通用的不写）；默认推荐不显示这一栏、只读时下拉框不能点；新建空方案、复制为我的方案是通用的，复制带着原来的地图；七种排法都建得出这一项；矮屏幕（1280×600、560）下窗口缩得到、这一项在窗口里（`test_short_screen_*`；经典主题-黑的表单在滚动区里，先滚到底）。方案文件里存不存地图不在这里查（另一处实现），只查 `SchemeStore` 内存里的结果。
   - `StaleAndHintsTest`：资料更新后对不上的筹码列出并可移除、灰色规则提示随标记即时出现消失、提示很多时在框里滚动。
   - `ExtremeTest`：全必选、全不选、只标通用和地图专属、标了又全撤掉。
   - `ScrollTest`：屏幕矮时只有筹码列表变短、其余不动；内容放得下时不显示滚动条。
@@ -97,6 +101,7 @@
   - `DefaultViewTest` 失败 → 默认推荐只读、复制照原样、选中默认推荐时显示哪几个按钮、「新建空方案」的悬停（`window.py` 的 `_show_selected`、`_show_copy_default`、`_copy_default`，`notes.py` 的 `NEW_BUTTON`、`NEW_EMPTY_TIP` 等）、行尾默认档位或条件规则的说明改了；`test_empty_guide*` 失败 → 空列表里那一段（`empty_guide`、`notes.DEFAULT_EMPTY_GUIDE`）的显示条件，或 `scheme_list` 的 `set_note`、`_place_note` 摆放改了。
   - `SaveTest` 失败 → 改动即存（`_commit`、`_flush`、`schemes_changed`）或外部导入后刷新的处理改坏了。
   - `ReadOnlyTest` 失败 → 只读文件下按钮／输入框／档位的处理改了。
+  - `MapsTest` 失败 → 适用地图下拉多选的勾选、存进方案的内容或方案列表的悬停说明改了（`MapField`、`MapCombo`、`_map_toggled`、`_maps_tip`、`normalize_maps`），或默认推荐、只读时这一栏的显示改了；`test_short_screen_*` 失败 → 这一项把窗口撑得超过了屏幕，或把别的地方挤了出去。
   - `PoolNotesTest`／`PoolNotesDisplayTest` 失败 → 筹码池提醒的判据、悬停文字或出现在哪些行上改了（`pool_notes`、`advisor/pool.py`）；里面的名单和数字是有意的预期。
 
 ## test_scheme_editor_package.py：`scheme_editor` 包对外的名字、共用的画法、基类上的焦点框
@@ -253,9 +258,10 @@
 - **测试观点**
   - `ExportTest`：窗口布局；按角色筛选（只列有方案的角色，角色前面有不能选的组名、只列有角色的组）、全选只管列出来的、换筛选记住勾选；默认按当前角色的方案勾选；两种格式（短字符串、可读文字）的预览和复制到剪贴板的内容完全一致；记住上次格式；别处改名/删除后刷新；剪贴板被别的程序占时写复制失败；勾选框的 Tab 次序；筹码编号表读不出时短字符串不可用；屏幕放不下时缩小；一套我的方案都没有时列表里写下一步怎么做（`EXPORT_EMPTY`，导入一套后收起，只是筛选到没有方案的角色时不写，`test_empty_guide`），七套皮肤下整段看得到、窗口和有一套方案时一样大（`test_empty_guide_all_skins`）。
   - `ImportTest`：识别结果照对照表（「识别到 N 套：」、能导入的「✓ …」）；每种问题各写一句原因、前面写「第 N 套（名称）：」；编号表读不出时标了档位的短字符串不导入；导入只新建不覆盖（同名加「（2）」）；导出→粘贴→导入后内容相同；粘贴框空着时按钮不可用、改动后自动识别；只读时导入不可用、导出照常；一次最多 50 套 / 2 万字、超出的另起一行说明（并量本进程 CPU 时间）；导入以后每套一行加「使用这套方案」按钮，点了发 `use_requested`、按悬浮窗交回的结果换成那一句（`test_use_buttons_after_import`），方案已在别处删掉时写「这套方案已被删除」、换皮肤后接回照旧（`test_use_gone_and_restore`），导入很多套时在识别结果区里滚动、窗口不变高（`test_many_imported_rows_scroll`）。
+  - `MapsTest`：能导入的一套标了地图时，识别结果在目标流派后面写「适用地图 龙宫游乐园、魔法学院」（通用的不写，直接构造带 `maps` 的 `Scheme` 和 `ParseResult`，不依赖分享格式解出地图）；导出列表里标了地图的一套悬停写「适用地图：……」；`WRITE_MAPS` 为真（默认）时勾了标地图的也不写提示；把它关掉时，勾选的方案里有标了地图的才在预览框下面写提示，取消勾选、只勾通用的都不写。
   - `EscapeTest`：名称、作者、说明、未能识别的筹码名里的网页标记和 `&` 都原样显示文字（不渲染）。
   - `WordingTest`：界面文字照对照表逐字写、都在模块顶层常量里；书面语，没有语气词、不用「我」「你」指代工具（「我的方案」是功能名，不算，`test_written_language`）。
-- **检证对象**：`advisor/ui/scheme_share.py`（`SchemeShareWindow`、`ok_line`、`button_text`、各文字常量）；`advisor/schemes.py`（`Scheme`、`SchemeStore`、`Catalog`、`ChipCodes`、`parse_share`、`to_short`、`to_text`、`encode_payload`、`target_schools`、格式键 `FORMAT_SHORT`/`FORMAT_TEXT`）。
+- **检证对象**：`advisor/ui/scheme_share.py`（`SchemeShareWindow`、`ok_line`、`button_text`、各文字常量、预览框下面带地图的提示）；`advisor/schemes.py`（`Scheme`、`Scheme.maps`、`SchemeStore`、`Catalog`、`ChipCodes`、`parse_share`、`to_short`、`to_text`、`encode_payload`、`target_schools`、格式键 `FORMAT_SHORT`/`FORMAT_TEXT`、`WRITE_MAPS`）。
 - **什么时候要跑**：改了 `advisor/ui/scheme_share.py`、`advisor/schemes.py`（分享格式、导入问题种类、上限），或改了这两个文件里的界面文字时。
 - **怎么单独跑**：`python -B tools/run_tests.py --only test_scheme_share`（上次约 2.7 秒）。
 - **需要什么**：Qt 的离屏平台——不是 offscreen 平台时 `setUpModule` 整个文件跳过（不弹窗口、不碰系统剪贴板）。不需要识别样本。

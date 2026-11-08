@@ -30,7 +30,7 @@ import zipfile
 from pathlib import Path
 from unittest import mock
 
-from advisor import update, winhttp
+from advisor import paths, update, update_log, winhttp
 from advisor import version as app_version
 from tests.support import sandbox
 from tests.support.errors import capture_errors
@@ -760,6 +760,126 @@ class CheckTest(CheckCase):
         self.assertIs(session.stream.call_args.args[3], stop)
 
 
+class LogCase(unittest.TestCase):
+    """update.log 指到沙箱；每个用例开始时清空，结束时删掉。"""
+
+    def setUp(self):
+        self.log = paths.logs_dir() / update_log.KEPT_LOG
+        self.log.unlink(missing_ok=True)
+        self.addCleanup(self.log.unlink, missing_ok=True)
+
+    def log_text(self) -> str:
+        return self.log.read_text(encoding="utf-8") if self.log.is_file() else ""
+
+
+class CheckLogTest(LogCase):
+    """check 往 update.log 记的几行：自动、手动分得出；两边各回了什么、认下哪一版、为什么不提示更新。"""
+
+    def check(self, mirror, gh, current="1.0.0", skipped=None, manual=False):
+        session = FakeSession({update.LATEST_JSON: mirror, update.GITHUB_API: gh})
+        return update.check(current, skipped, session=session, manual=manual)
+
+    def test_auto_and_manual(self):
+        result = self.check(latest(), github())
+        self.assertEqual(result.latest, "1.0.1")
+        text = self.log_text()
+        for part in ("] 查更新：自动检查（当前 1.0.0）", "下载镜像：1.0.1", "GitHub：1.0.1",
+                     "认下 1.0.1（两边一致）", "有新版本 1.0.1"):
+            self.assertIn(part, text)
+        self.log.unlink()
+        self.check(latest(), github(), manual=True)
+        self.assertIn("] 查更新：手动检查（当前 1.0.0）", self.log_text())
+
+    def test_sources_and_decisions(self):
+        with self.subTest("两边都没拿到"):
+            self.log.unlink(missing_ok=True)
+            self.check(timeout(), http_error(403))
+            text = self.log_text()
+            self.assertIn("下载镜像：没拿到（网络错误：操作超时", text)
+            self.assertIn("GitHub：没拿到（查询太频繁", text)
+            self.assertIn("两边都没拿到，没有认下版本", text)
+        for name, mirror, gh, part in (
+                ("只拿到下载镜像", latest(), timeout(), "只拿到下载镜像"),
+                ("只拿到 GitHub", timeout(), github(), "只拿到 GitHub"),
+                ("两边对不上", latest(sha="cd" * 32), github(), "两边对不上，只认 GitHub 的")):
+            with self.subTest(name):
+                self.log.unlink(missing_ok=True)
+                self.check(mirror, gh)
+                self.assertIn(part, self.log_text())
+
+    def test_latest_skipped_and_unverifiable(self):
+        self.check(latest(), github(), current="1.0.1")
+        self.assertIn("1.0.1 不比当前 1.0.1 新，不提示更新", self.log_text())
+        self.log.unlink()
+        self.check(latest(), github(), skipped="1.0.1")
+        self.assertIn("1.0.1 是跳过的版本，不提示更新", self.log_text())
+        self.log.unlink()
+        self.check(latest(), github(), skipped="1.0.0")
+        self.assertIn("有新版本 1.0.1", self.log_text())
+        self.log.unlink()
+        self.check(latest(size=SIZE + 1), github(digest=DROP))
+        self.assertIn("没有认下版本", self.log_text())
+
+    def test_write_failure_does_not_break_check(self):
+        blocker = sandbox.temp_dir(self, "update-log-blocked-") / "logs"
+        blocker.write_bytes(b"not a folder")
+        session = FakeSession({update.LATEST_JSON: latest(), update.GITHUB_API: github()})
+        with mock.patch.object(update_log.paths, "logs_dir", return_value=blocker):
+            result = update.check("1.0.0", session=session)
+        self.assertEqual(result.latest, "1.0.1")
+
+    def test_capped(self):
+        with mock.patch.object(update_log, "KEPT_LOG_MAX", 4096):
+            for i in range(200):
+                update_log.note("查更新", f"第 {i} 行")
+        kept = self.log.read_bytes()
+        self.assertLessEqual(len(kept), 4096)
+        self.assertGreater(len(kept), 1024)
+        text = kept.decode("utf-8")
+        self.assertTrue(text.startswith("["))
+        self.assertIn("第 199 行", text)
+
+
+class LogTextTest(unittest.TestCase):
+    """记录里的一行（update_log.rows）：程序目录里的路径写成 %程序目录%（程序文件夹在用户目录里时也是），别处的用户目录写成
+    %USERPROFILE%，账户名不出现；IP 形状的主机名写成「其他地址」，程序文件的四段版本号照写。用户目录是假的，不碰文件。"""
+
+    PROFILE = Path(r"C:\Users\AccLogUser")
+
+    def rows(self, text: str, program: Path, folder: Path | None = None) -> str:
+        env = {"USERPROFILE": str(self.PROFILE), "USERNAME": self.PROFILE.name}
+        with mock.patch.dict(os.environ, env), \
+                mock.patch.object(update_log.paths, "program_folder", return_value=program), \
+                mock.patch.object(update_log.paths, "app_dir", return_value=program / "app"):
+            lines = update_log.rows("下载", text, folder)
+        self.assertRegex(lines[0], r"^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\] 下载：")
+        return "\n".join(lines)
+
+    def test_program_folder_inside_profile(self):
+        # 解压在桌面上：程序目录先换，不写成 %USERPROFILE%\Desktop\…
+        program = self.PROFILE / "Desktop" / "AstralChipCompass"
+        text = self.rows(f"读不了 '{program / 'app' / 'ACC.exe'}'，另有 '{self.PROFILE / 'Documents' / 'x.txt'}'", program)
+        self.assertIn("'%程序目录%\\app\\ACC.exe'", text)
+        self.assertIn("'%USERPROFILE%\\Documents\\x.txt'", text)
+        self.assertNotIn(self.PROFILE.name, text)
+
+    def test_folder_of_apply(self):
+        # 换版本程序在 update\new 里跑、换的是给的根：写成相对这个根的
+        root = self.PROFILE / "Downloads" / "AstralChipCompass"
+        text = self.rows(f"出错：'{root / 'update' / 'new' / 'app' / 'ACC.exe'}'\n'{root / 'app'}'", root / "update" / "new",
+                         root)
+        self.assertIn("'%程序目录%\\update\\new\\app\\ACC.exe'", text)
+        self.assertIn("    '%程序目录%\\app'", text)  # 多行的后几行缩进
+        self.assertNotIn(self.PROFILE.name, text)
+
+    def test_addresses_and_versions(self):
+        program = Path(r"D:\Games\AstralChipCompass")
+        self.assertIn("下不到压缩包（其他地址：HTTP 404；其他地址：网络错误）",
+                      self.rows("下不到压缩包（127.0.0.1：HTTP 404；10.0.0.8：网络错误）", program))
+        self.assertIn("版本号是 1.0.0.0，应为 1.0.1",
+                      self.rows("下载的新版本程序（app/ACC.exe）的版本号是 1.0.0.0，应为 1.0.1，没有换上。", program))
+
+
 class CheckManifestTest(CheckCase):
     """认清单（模块说明「认清单」）：能拿到 GitHub 的那一版时以它的清单附件为准，镜像上的一样时清单地址先镜像后 GitHub；GitHub
     没拿到时用镜像的。压缩包照「认哪一版」那一套认，不受清单影响。"""
@@ -1228,6 +1348,38 @@ class DownloadTest(unittest.TestCase):
         self.assertEqual(update._source("http://127.0.0.1:8000/x"), "127.0.0.1")
 
 
+class DownloadLogTest(LogCase):
+    """download 往 update.log 记的几行：来源只写「其他地址」、文件名、实际下了多少、没成的原因；写记录失败不影响下载。"""
+
+    def setUp(self):
+        super().setUp()
+        self.server = start_server(self)
+        self.root = sandbox.temp_dir(self, "update-download-log-")
+
+    def test_sources_bytes_and_no_addresses(self):
+        Handler.routes = {"/good": PAYLOAD}
+        release = release_for([self.server.url("/missing"), self.server.url("/good")])
+        with mock.patch.dict(os.environ, {"USERPROFILE": str(self.root)}):
+            target = update.download(release, self.root)
+        self.assertEqual(target.read_bytes(), PAYLOAD)
+        text = self.log_text()
+        self.assertIn("其他地址：missing，0 字节，没成（HTTP 404）", text)
+        self.assertIn(f"其他地址：good，{len(PAYLOAD)} 字节", text)
+        self.assertIn(f"整包下载好（{len(PAYLOAD)} 字节", text)
+        self.assertNotIn("127.0.0.1", text)
+        self.assertNotRegex(text, r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b")
+        self.assertNotIn(str(self.root), text)
+
+    def test_write_failure_does_not_break_download(self):
+        Handler.routes = {"/good": PAYLOAD}
+        blocker = sandbox.temp_dir(self, "update-download-blocked-") / "logs"
+        blocker.write_bytes(b"not a folder")
+        release = release_for([self.server.url("/good")])
+        with mock.patch.object(update_log.paths, "logs_dir", return_value=blocker):
+            target = update.download(release, self.root)
+        self.assertEqual(target.read_bytes(), PAYLOAD)
+
+
 # ====================================================================== 备好
 
 
@@ -1541,6 +1693,20 @@ class PreflightTest(unittest.TestCase):
     def test_free_space_real(self):
         self.assertGreater(update.free_space(self.root), 0)
         self.assertIsNone(update.free_space(self.root / "not-there" / "x"))
+
+    def test_log(self):
+        log = paths.logs_dir() / update_log.KEPT_LOG
+        log.unlink(missing_ok=True)
+        self.addCleanup(log.unlink, missing_ok=True)
+        self.folder.write_bytes(b"")
+        with self.free(10 << 30):
+            update.preflight(self.root)
+        self.folder.unlink()
+        with self.free(100 << 20):
+            update.preflight(self.root)
+        text = log.read_text(encoding="utf-8")
+        self.assertIn("下载前检查没过：程序文件夹写不进（FileExistsError", text)
+        self.assertIn("下载前检查没过：磁盘剩余空间不到 800 MB（还剩 100 MB）", text)
 
 
 # ====================================================================== exe 的版本号、导入

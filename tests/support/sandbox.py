@@ -5,6 +5,11 @@
   %LOCALAPPDATA%\\AstralChipCompass、系统临时文件夹；tempfile 先看 TMPDIR，外面设了它时不改就还是外面的文件夹），子进程照样
   继承；
 - advisor.paths 里决定设置、筹码方案、推荐日志、识别记录、诊断包、临时文件和错误记录位置的函数（SANDBOXED）。
+Windows 凭据管理器（advisor/wincred.py，存作业站的登录令牌）不是文件、指不进沙箱：把调用系统的那一层摘掉（_block_credentials），
+存、取、删、查一律当作没有，测试碰不到这个 Windows 账号下真的凭据（导出诊断包时每次都会查有没有登录作业站）。只有设了
+WINCRED_ENV=1、要跑真的往返（tests/test_wincred.py 的 RealCredentialTest）时不摘。
+设置窗口里「只用大核」一项只在有大小核的电脑上有：测试一律按没有算，这一项说明里写的处理器名称一律按读不到算（_no_big_cores），
+窗口里的内容和高度不因跑测试的电脑不同。
 下载的识别图片的位置（paths.download_dir）不另换：开发版就是项目的 assets（见下面的指纹核对，测试靠各自的补丁换走），模拟
 发行版时按 LOCALAPPDATA 取，已经指进沙箱；画缩略图的子进程那一支（use_program_dir）照原来的做法读主程序交来的那一处
 （没交来时自己判断），只读、不建个人目录。
@@ -80,6 +85,8 @@ ERR_NAME = "overlay_err.txt"  # 沙箱里默认的错误记录（advisor.errors.
 STALE = re.compile(r"test-run-([0-9]+)")  # 以前的进程留下的沙箱（_clear_stale），整个名字要对得上
 # 用户文件的指纹核对：用 python -m unittest 跑时自动打开；测试运行器在自己的进程里跑测试时把它设为 1 打开
 CHECK_ENV = "ACC_TEST_CHECK_USER_FILES"
+# 设为 1 时不摘凭据管理器的系统调用（只给真的往返测试用，见模块说明）
+WINCRED_ENV = "ACC_TEST_WINCRED"
 # 拾星助手在运行：发行版按程序名（程序本体、根目录的启动程序），开发版按命令行（python 或 pythonw -m advisor.ui）
 APP_EXES = ("acc.exe", "拾星助手.exe")
 DEV_COMMAND = re.compile(r'(?:^|\s)-m\s*"?advisor\.ui"?(?=\s|$)')
@@ -88,6 +95,8 @@ _original: dict = {}  # advisor.paths 原来的函数
 _wrapped: dict = {}  # 指进沙箱的版本
 WATCH: Watch | None = None  # 用户真实的文件（跑测试的进程 activate 以后才有）
 _running_at_start: list[str] | None = []  # 测试开始时在运行的拾星助手（app_running）
+real_has_big_cores = None  # sysinfo.has_big_cores 原来的函数（_no_big_cores）
+real_cpu_label = None  # sysinfo.cpu_label 原来的函数（_no_big_cores）
 
 
 class Watch:
@@ -171,6 +180,8 @@ def activate() -> None:
     if fixed:  # 测试包应当在任何 advisor 模块之前导入；之前导入的，导入时取的位置已改指沙箱
         print(f"[沙箱] 注意：建测试沙箱之前已经导入了 advisor 的模块，已把这些改指沙箱：{', '.join(fixed)}", file=sys.stderr)
     _check(paths)
+    _block_credentials()
+    _no_big_cores()
     if checks_user_files():
         spots = [ROOT / "logs", ROOT / "reports", ROOT / ".tmp" / "overlay_err.txt", ROOT / "assets"]
         for real in (real_appdata, real_local):  # 设置和方案、下载的识别图片的个人目录（发行版的位置）
@@ -178,6 +189,29 @@ def activate() -> None:
                 spots.append(Path(real) / paths.FOLDER_NAME)
         WATCH = Watch(spots, [(ROOT, "state*.json*"), (ROOT, "schemes*.json*")])
         _running_at_start = app_running()
+
+
+def _block_credentials() -> None:
+    """摘掉 advisor.wincred 调用系统的那一层（见模块说明）：之后 save、delete 返回 False，load 返回 None，exists 返回 False，
+    同不是 Windows 时一样。各测试换上自己的假层（mock.patch.object(wincred, "_api", …)）照样能用，结束时换回的也是这里的空层。"""
+    if os.environ.get(WINCRED_ENV) == "1":
+        return
+    from advisor import wincred
+
+    wincred._api = None
+
+
+def _no_big_cores() -> None:
+    """设置窗口按没有大小核的电脑画，「只用大核」一项的处理器名称按读不到（见模块说明）。要测这一项的用例自己换掉：
+    mock.patch.object(sysinfo, "has_big_cores", return_value=True)，要名称时同样换掉 sysinfo.cpu_label。原来的函数留在
+    real_has_big_cores、real_cpu_label。"""
+    global real_has_big_cores, real_cpu_label
+    from advisor import sysinfo
+
+    real_has_big_cores = sysinfo.has_big_cores
+    sysinfo.has_big_cores = lambda: False
+    real_cpu_label = sysinfo.cpu_label
+    sysinfo.cpu_label = lambda: None
 
 
 def checks_user_files() -> bool:

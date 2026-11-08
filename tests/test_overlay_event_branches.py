@@ -11,6 +11,9 @@ summary_text、notice_texts、visible_texts、card_open、needs_attention 等）
 - 房间画面结束的局，之后的新一局撤销了：结束时收起的「查看筹码」提示、待补录的提示、补录行（连同「再次出现、已撤销」的
   说法）都回来；撤销说明那次结束是误认的，这一局之后真正结束时推荐日志照常再记一条对局结束（同一局以后一条为准），
   再读到结算画面也不重复记。
+- 胜负：结束时没定的，推荐日志先记一条（胜负写 null），结束以后读到奖励画面、胜负定了再记一条（别的项照抄）；认出了
+  通关画面、奖励画面又对得上时只记一条。对局报告等胜负定了才拼，一局只拼一次；没等到的，下一局开始、退出时拼。
+  悬浮窗上的文字不因胜负而变。
 
 事件由真实的 Session 产生、按 FrameProcessor 的顺序交给悬浮窗（BehaviorBase，见 tests/test_overlay_behavior.py）。
 """
@@ -19,6 +22,7 @@ from __future__ import annotations
 import unittest
 from types import SimpleNamespace
 
+from advisor.ui.overlay_parts import reporting
 from advisor.ui.overlay_parts.wording import DISMISS, FEEDBACK_QUESTION, GAIN_TEXT, MAP_READ, OPEN_TASKS, PICKED_LABEL, PROMPT_PANEL, REVERTED_PROMPT
 from tests.test_overlay_behavior import OFFER, RESULT, BehaviorBase
 from tests.test_overlay_room_undo import ROOM
@@ -184,6 +188,100 @@ class UndoAfterRoomEndTest(BehaviorBase):
         self.w.notices.buttons("newgame")[0].click()
         self.feed(self.session.on_out_of_game, RESULT)
         self.assertEqual(len(self.logbook.game_overs), 1)
+
+
+def reward(coins):
+    """奖励画面（advisor.vision.screens.OutOfGame 的样子）：「星币」那一格的数。"""
+    return SimpleNamespace(kind="reward", difficulty=None, map=None, rounds=None, coins=coins)
+
+
+class GameResultBranchTest(BehaviorBase):
+    def setUp(self):
+        super().setUp()
+        self.assembled, self.timers = [], []
+        report = self.w.reporting
+        report.assemble = lambda game, background=True: self.assembled.append((game, background))
+        report.later = lambda ms, fn: self.timers.append((ms, fn))
+
+    @staticmethod
+    def without_result(info: dict) -> dict:
+        return {k: v for k, v in info.items() if k not in ("outcome", "how")}
+
+    def screen_texts(self) -> tuple:
+        return self.w.status.status_text(), self.w.status.summary_plain, tuple(self.w.visible_texts())
+
+    def test_decided_after_end(self):
+        """没认出通关画面：结束时记一条（胜负 null），报告先等；奖励画面星币少，定了失败，再记一条、拼一次；
+        再读到奖励画面、等满的计时器晚到都不再记、不再拼。悬浮窗上的文字读到奖励画面前后一样。"""
+        self.enter(star=2)
+        self.pick_best()
+        self.feed(self.session.on_out_of_game, RESULT)
+        self.assertEqual([(g["outcome"], g["how"]) for g in self.logbook.game_overs], [(None, None)])
+        self.assertEqual(self.assembled, [])
+        self.assertEqual([ms for ms, _ in self.timers], [reporting.RESULT_WAIT_MS])
+        self.advance(20)
+        before = self.screen_texts()
+        self.assertIn("status", self.kinds(self.feed(self.session.on_out_of_game, reward(10))))
+        self.assertEqual(self.screen_texts(), before)
+        first, last = self.logbook.game_overs
+        self.assertEqual((last["outcome"], last["how"]), ("loss", "reward"))
+        self.assertEqual(self.without_result(last), self.without_result(first))  # 别的项照抄
+        self.assertEqual(self.assembled, [("g1", True)])
+        self.advance(1)
+        self.feed(self.session.on_out_of_game, reward(10))
+        self.timers[0][1]()
+        self.assertEqual(len(self.logbook.game_overs), 2)
+        self.assertEqual(self.assembled, [("g1", True)])
+
+    def test_victory_confirmed_by_reward(self):
+        """认出了通关画面：结束时就记通关；奖励画面对得上，胜负没变，不再记，这时拼。"""
+        self.enter(star=2)
+        self.advance(3)
+        self.feed(self.session.on_victory)
+        self.advance(2)
+        self.feed(self.session.on_out_of_game, RESULT)
+        self.assertEqual([(g["outcome"], g["how"]) for g in self.logbook.game_overs], [("win", "victory")])
+        self.assertEqual(self.assembled, [])
+        self.advance(20)
+        self.feed(self.session.on_out_of_game, reward(30))
+        self.assertEqual(len(self.logbook.game_overs), 1)
+        self.assertEqual(self.assembled, [("g1", True)])
+
+    def test_half_number_then_whole(self):
+        """奖励画面先读到半截（+30 读成 +3）：胜负不知道，也算定了，拼一次；读全了胜负变了，再记一条、再拼一次（同一局，
+        同一编号覆盖同一份，见 test_game_report）；之后读到小的数不再记、不再拼。"""
+        self.enter(star=2)
+        self.pick_best()
+        self.feed(self.session.on_out_of_game, RESULT)
+        self.advance(20)
+        self.feed(self.session.on_out_of_game, reward(3))
+        self.assertEqual(self.assembled, [("g1", True)])
+        self.advance(2)
+        self.feed(self.session.on_out_of_game, reward(30))
+        self.assertEqual([(g["outcome"], g["how"]) for g in self.logbook.game_overs], [(None, None), ("win", "reward")])
+        self.assertEqual(self.assembled, [("g1", True), ("g1", True)])
+        self.advance(2)
+        self.feed(self.session.on_out_of_game, reward(10))
+        self.assertEqual(len(self.logbook.game_overs), 2)
+        self.assertEqual(len(self.assembled), 2)
+
+    def test_next_game_settles_waiting(self):
+        """没等到奖励画面就开了下一局：按推荐日志里现有的拼上一局（局号是上一局的），只拼一次。"""
+        self.enter(star=2)
+        self.feed(self.session.on_out_of_game, RESULT)
+        self.advance(30)
+        self.assertIn("newgame", self.kinds(self.feed(self.session.on_select_screen)))
+        self.assertEqual(self.assembled, [("g1", True)])
+        self.assertEqual(self.logbook.current_game(), "g2")
+        self.timers[0][1]()
+        self.assertEqual(self.assembled, [("g1", True)])
+
+    def test_exit_settles_waiting(self):
+        """没等到奖励画面就退出：退出时拼好才往下走（下次启动发出）。"""
+        self.enter(star=2)
+        self.feed(self.session.on_out_of_game, RESULT)
+        self.assertTrue(self.w.shutdown())
+        self.assertEqual(self.assembled, [("g1", False)])
 
 
 if __name__ == "__main__":

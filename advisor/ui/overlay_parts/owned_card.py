@@ -9,7 +9,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
 
-from .. import theme
+from .. import lang, names, theme
 from ..text import GENERAL_SCHOOL, chip_tip, rich
 from ..theme import COMMON as C
 from ..theme import OVERLAY as O
@@ -75,13 +75,14 @@ class OwnedCard:
         # 浅色皮肤把它写在深色胶囊里（样式表的 #ownedCount）：颜色换成深色底上用的（默认皮肤照原样）；皮肤另写了颜色的
         # （OverlayLook.OWNED_COUNT_COLORS）照它
         count_color, rest_color = O.OWNED_COUNT_COLORS or (C.TEXT_COLOR, C.DIM_COLOR)
-        self.owned_count.setText(theme.ink_html(rich([(str(len(owned)), count_color), (OWNED_UNIT, rest_color)])))
+        self.owned_count.setText(
+            theme.ink_html(rich([(str(len(owned)), count_color), (lang.t(OWNED_UNIT), rest_color)])))
         key = tuple(owned)
         if key == self.owned_shown:
             return
         self.owned_shown = key
         chips = [self.db.chips[n] for n in owned]
-        self.chip_grid.set_chips([(c.name, c.rarity, c.icon, chip_tip(c)) for c in chips])
+        self.chip_grid.set_chips([(names.chip_name(c), c.rarity, c.icon, chip_tip(c)) for c in chips])
         _clear_layout(self.mini_box)
         for chip in chips:
             card = self.mini_card(chip)
@@ -102,16 +103,17 @@ class OwnedCard:
         box.setSpacing(2)
         top = QHBoxLayout()
         top.setSpacing(4)
-        name = _text_label(chip.name, C.FONT_M, C.RARITY_COLOR.get(chip.rarity, C.TEXT_COLOR))
+        name = _text_label(names.chip_name(chip), C.FONT_M, C.RARITY_COLOR.get(chip.rarity, C.TEXT_COLOR))
         remove = QPushButton("×")
         remove.setObjectName("remove")
         remove.setCursor(Qt.PointingHandCursor)
-        _set_tip(remove, REMOVE_TIP)
+        _set_tip(remove, lang.t(REMOVE_TIP))
         remove.clicked.connect(lambda _=False, n=chip.name: self.remove_owned(n))
         top.addWidget(name, 1)
         top.addWidget(remove, 0, Qt.AlignTop)
         box.addLayout(top)
-        box.addWidget(WrapTaggedText(chip.school or GENERAL_SCHOOL, "info", chip.effect, C.SOFT_COLOR, point_size=C.FONT_S))
+        box.addWidget(WrapTaggedText(lang.t(chip.school or GENERAL_SCHOOL), "info", lang.t(chip.effect),
+                                     C.SOFT_COLOR, point_size=C.FONT_S))
         return card
 
     def cards_text(self) -> list[str]:
@@ -131,27 +133,29 @@ class OwnedCard:
     def show_missed(self, visible: bool) -> None:
         """补录行：上一次三选一的候选筹码做成按钮，点一下补录；无法识别的只显示原文；最后是「忽略」按钮。"""
         if self.missed_kind == EV_PICK_REVERTED and self.missed_chip:
-            self.missed_label.setText(REVERTED_PROMPT.format(chip=self.missed_chip))
+            self.missed_label.setText(
+                lang.t(REVERTED_PROMPT.format(chip=names.chip_in(self.db, self.missed_chip))))
         else:
-            self.missed_label.setText(MISSED_PROMPT)
+            self.missed_label.setText(lang.t(MISSED_PROMPT))
         key = (tuple(self.missed_offer), tuple(self.missed_raw)) if visible else None
         if key != self.missed_shown:
             self.missed_shown = key
             widgets: list = []
             for i, name in enumerate(self.missed_offer if visible else []):
                 if name in self.db.chips:
-                    btn = _button(name, color=C.RARITY_COLOR.get(self.db.chips[name].rarity, C.TEXT_COLOR),
-                                  tip=f"补录：{name}")
+                    shown = names.chip_in(self.db, name)
+                    btn = _button(lang.t(shown), color=C.RARITY_COLOR.get(self.db.chips[name].rarity, C.TEXT_COLOR),
+                                  tip=lang.t(f"补录：{shown}"))
                     btn.clicked.connect(lambda _=False, n=name: self.pick_missed(n))
                     widgets.append(btn)
                 else:
                     text = self.missed_raw[i] if i < len(self.missed_raw) and self.missed_raw[i] else ""
-                    label = QLabel(f"「{text}」无法识别" if text else "未识别到文字")
+                    label = QLabel(lang.t(f"「{text}」无法识别" if text else "未识别到文字"))
                     label.setTextInteractionFlags(Qt.NoTextInteraction)  # 不接鼠标按下和拖动，按在文字上也能拖动悬浮窗
                     _own_style(label, f"color:{C.CAPTION_COLOR}")
                     widgets.append(label)
             if visible:
-                skip = _button(DISMISS, tip="不补录，关闭本条提示")
+                skip = _button(lang.t(DISMISS), tip=lang.t("不补录，关闭本条提示"))
                 skip.clicked.connect(lambda: self.pick_missed(None))
                 widgets.append(skip)
                 _fill_grid(self.missed_buttons, widgets, self.card_width())
@@ -175,9 +179,9 @@ class OwnedCard:
         if not self.live.on:
             # 正显示着新一次三选一的推荐时不写提示：「等待下一次筹码三选一」与画面不符，候选筹码那一行照常显示
             if added:
-                self.flash(f"已补录：{name}。等待下一次筹码三选一", "owned")
+                self.flash(lang.t(f"已补录：{names.chip_in(self.db, name)}。等待下一次筹码三选一"), "owned")
             elif name:
-                self.flash(f"「{name}」已在已有筹码中，无需补录", "owned")
+                self.flash(lang.t(f"「{names.chip_in(self.db, name)}」已在已有筹码中，无需补录"), "owned")
             else:
                 self.say(self.waiting_text(), "advice")
         self.refresh()
@@ -197,9 +201,10 @@ class OwnedCard:
         for name in view.owned:
             chip = self.db.chips.get(name)
             if chip is not None and EXTRA_CHIP.search(chip.effect):
-                sources.append(EXTRA_CHIP_OWNED.format(chip=name))
-        sources += [EXTRA_CHIP_MUTATORS[m] for m in view.mutators if m in EXTRA_CHIP_MUTATORS]
-        return "、".join(dict.fromkeys(sources)) or None
+                sources.append(EXTRA_CHIP_OWNED.format(chip=names.chip_in(self.db, name)))
+        sources += [EXTRA_CHIP_MUTATORS[m].replace(m, names.mutator_in(self.db, m))
+                    for m in view.mutators if m in EXTRA_CHIP_MUTATORS]
+        return lang.t("、".join(dict.fromkeys(sources))) or None
 
     def reset(self) -> None:
         """换皮肤：忘掉「内容没变就不重建」的记录，refresh 时重搭。"""

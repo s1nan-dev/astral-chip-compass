@@ -64,7 +64,7 @@ class FakeLogbook:
         self.games_log.append(("undo", previous))
         self.game = previous
 
-    def record_offer(self, state, advice, offer_id):
+    def record_offer(self, state, advice, offer_id, client=None):
         self.offers.append((offer_id, tuple(e.chip.name for e in advice.evals), advice.best))
 
     def record_pick(self, offer_id, chosen, via=None):
@@ -258,7 +258,7 @@ class PickedEventTest(BehaviorBase):
         self.assertIn(chip, self.texts("owned"))
 
     def test_picked_other_asks_why(self):
-        """选的不是首推：两种显示方式下「推荐」卡片都开着，写「已选」并问未选择首推的原因，三个原因按钮看得见。"""
+        """选的不是首推：两种显示方式下「推荐」卡片都开着，写「已选」并问未选择首推的原因，四个原因按钮看得见。"""
         self.enter()
         self.offer()
         best = self.best()

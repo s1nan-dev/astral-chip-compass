@@ -65,6 +65,7 @@ from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, replace
 from types import MappingProxyType
 
+from .. import lang
 from .looks import (AboutLook, ChromeLook, Common, EditorLook, Fonts,
                     Layouts, ListLook, LOOKS, OverlayLook, PANEL_ALPHA, PANEL_PAUSED_ALPHA, SEE_THROUGH,
                     SettingsLook, ShareLook, WidgetLook, rgb, rgba, rgba_tuple)
@@ -423,6 +424,17 @@ def fonts_dir():
     return folder()
 
 
+# 繁体界面的标题子集：皮肤的 Fonts.FILES 写的是简体子集的文件名，装的时候换成对应的繁体子集（字体名相同，皮肤不用改）
+HANT_FILES = {
+    "ACCHeading-Heavy.otf": "ACCHeadingTC-Heavy.otf",
+    "ACCTitle-Bold.otf": "ACCTitleTC-Bold.otf",
+}
+# 正文字体：简体界面用雅黑；繁体界面在系统装着微软正黑体（Microsoft JhengHei UI）时换成正黑体。皮肤写的 FAMILY 是雅黑时
+# 才换（皮肤自己指定的正文字体不动），换的地方只在 body_family 一处：family("body")、缺字时的替代字体和程序的默认字体都从
+# 这里取，各处拿到的正文字体名一致。
+BODY_FAMILY = "Microsoft YaHei UI"
+BODY_FAMILY_HANT = "Microsoft JhengHei UI"
+
 _loaded: dict[str, tuple[str, ...]] = {}  # 字体文件的路径 → 装进程序后的字体名（装不上为空）
 _font_ids: dict[str, int] = {}  # 字体文件的路径 → 装进程序时的编号（unload_fonts 用）
 
@@ -457,6 +469,12 @@ def load_fonts(skin: Skin | None = None, folder=None) -> list[str]:
     families: list[str] = []
     for name in skin.fonts.FILES:
         path = base / name
+        hant_name = HANT_FILES.get(name) if lang.is_hant() else None
+        if hant_name is not None:
+            if (base / hant_name).is_file():
+                path = base / hant_name
+            else:
+                log.warning("繁体字体文件不在，改用简体子集：%s", hant_name)
         key = str(path)
         if key not in _loaded:
             found: tuple[str, ...] = ()
@@ -483,7 +501,7 @@ def _fallback_to_body(families, skin: Skin) -> None:
     Qt 按替代字体（QFont.insertSubstitution）先找正文字体，再找系统的后备字体。"""
     from PySide6.QtGui import QFont
 
-    body = skin.fonts.FAMILY
+    body = body_family(skin)
     for name in families:
         # Qt 记的替代字体名一律小写
         if body and name != body and body.lower() not in (s.lower() for s in QFont.substitutes(name)):
@@ -501,12 +519,22 @@ def available(family: str) -> bool:
     return family in QFontDatabase.families()
 
 
+def body_family(skin: Skin | None = None) -> str:
+    """皮肤的正文字体名：界面是繁体、系统装着微软正黑体、皮肤写的是雅黑时换成正黑体，其余照皮肤写的。family("body")、
+    缺字时的替代字体（_fallback_to_body）和程序的默认字体（app_font）都从这里取，各处一致。"""
+    skin = skin or _state.skin
+    name = skin.fonts.FAMILY
+    if name == BODY_FAMILY and lang.is_hant() and available(BODY_FAMILY_HANT):
+        return BODY_FAMILY_HANT
+    return name
+
+
 def family(role: str = "body", skin: Skin | None = None) -> str:
     """按皮肤用哪种字体：role 为 body（正文）、title（标题）、number（数字）。标题、数字没写或系统里没有时为空字符串
     （同正文）；正文写的字体没有时退回默认皮肤的正文字体。"""
     skin = skin or _state.skin
     if role == "body":
-        name = skin.fonts.FAMILY
+        name = body_family(skin)
         return name if available(name) or not name else DEFAULT.fonts.FAMILY
     name = skin.fonts.TITLE_FAMILY if role == "title" else skin.fonts.NUMBER_FAMILY
     return name if name and available(name) else ""
@@ -585,3 +613,7 @@ SKIN_ORDER = (DEFAULT_KEY, NEON_STICKER_KEY, CARBON_FLOW_KEY, WHITE_SEAVIEW_KEY,
 
 # 默认皮肤登记完（上面的导入）以后当前皮肤才定得下来：_state 建在导入之前，这里补上
 _state.skin = DEFAULT
+
+# 本模块和 skins 下各套皮肤都不调用 lang.localize：Skin 按对象本身比（eq=False），整体转换会换成新的对象，登记表
+# （_SKINS）、当前皮肤（_state.skin）和模块里的 DEFAULT 等就不再是同一个，set_skin 等处按「是不是同一个」判断的地方
+# 都会出错。皮肤的名字（Skin.label）照旧简体（「画皮肤缩略图出错」的错误记录里写它），显示的地方各自包 lang.t。

@@ -9,10 +9,12 @@ test_newgame_after_result_is_info_only）。
 import unittest
 from types import SimpleNamespace
 
-from advisor.ui.overlay_parts.wording import NEWGAME_MIDGAME, NEWGAME_OWNED, NEWGAME_TEXT
-from tests.test_overlay_behavior import BehaviorBase
+from advisor.ui.overlay_parts.wording import (GAME_OVER_WAITING, NEWGAME_MIDGAME, NEWGAME_OWNED, NEWGAME_TEXT,
+                                              PROMPT_PANEL)
+from tests.test_overlay_behavior import RESULT, WAITING, BehaviorBase
 
 ROOM = SimpleNamespace(kind="team_room", difficulty="噩梦", map=None, rounds=None)
+MENU = SimpleNamespace(kind="main_menu", difficulty=None, map=None, rounds=None)
 
 
 class NewGameAfterRoomTest(BehaviorBase):
@@ -68,6 +70,44 @@ class NewGameAfterRoomTest(BehaviorBase):
                 self.assertEqual([b.text() for b in self.w.notices.buttons("newgame")], ["撤销"])
         self.undo(chip)
         self.assertIn("第 8 轮", self.w.status.status_text())
+
+
+class RejoinAfterMenuTest(BehaviorBase):
+    """主菜单结束的局（中途退出、断线），之后又连回了同一局（连续两次读到不比离开时小的轮次）：不开新的一局，悬浮窗回到结束
+    之前的样子，口径同撤销房间等画面结束以后开的新一局：「对局 已结束」和等下一局开始的那句收起，已有筹码照旧，「查看筹码」
+    面板的提示按结束前放回；不另加提示。推荐日志不换局，这一局真正结束时再记一条结束（以后一条为准）。"""
+
+    def test_rejoin_restores_view(self):
+        self.enter(rnd=6, star=2)
+        chip = self.pick_first()
+        self.assertEqual(self.w.notice_model.texts().get("panel"), PROMPT_PANEL)  # 进对局时提示过，还没读到面板
+        self.feed(self.session.on_out_of_game, MENU)
+        self.advance(3)
+        self.assertIn("game_over", self.kinds(self.feed(self.session.on_out_of_game, MENU)))
+        self.assertIn(GAME_OVER_WAITING, self.w.status.status_text())
+        self.assertEqual([g["why"] for g in self.logbook.game_overs], ["检测到主菜单"])
+        self.advance(16)
+        out = self.hud(7)
+        self.advance(3)
+        out += self.hud(7)
+        self.assertNotIn("newgame", self.kinds(out))
+        for mode in self.modes():
+            with self.subTest(mode=mode):
+                status = self.w.status.status_text()
+                self.assertNotIn("对局 已结束", status)
+                self.assertNotIn(GAME_OVER_WAITING, status)
+                self.assertIn(WAITING, status)
+                self.assertIn("第 7 轮", status)
+                texts = self.w.notice_model.texts()
+                self.assertNotIn("newgame", texts)  # 不另加提示
+                self.assertEqual(texts.get("panel"), PROMPT_PANEL)
+        self.w.set_expanded(True)
+        self.assertIn(chip, self.texts("owned"))
+        self.assertEqual(self.logbook.games_log, [])  # 推荐日志没有换局
+        self.advance(3)
+        self.feed(self.session.on_out_of_game, RESULT)  # 这一局真正打完了
+        self.assertEqual([g["why"] for g in self.logbook.game_overs],
+                         ["检测到主菜单", "检测到结算画面（异变图书馆、噩梦、10 轮）"])
 
 
 if __name__ == "__main__":

@@ -12,6 +12,7 @@ from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen, QPolygonF
 
 from ...data import SCHOOLS, TIER_LABEL, TIERS
+from .. import lang
 from ..text import tip_paragraphs_html
 from ..theme import LIST as L
 
@@ -156,7 +157,7 @@ def _structure(blocks: tuple[BlockSpec, ...]) -> tuple:
 
 
 def _quoted(names: Iterable[str]) -> str:
-    return "".join(QUOTED.format(n) for n in names)
+    return "".join(QUOTED.format(lang.t(n)) for n in names)
 
 
 def _school_sorted(names: Iterable[str]) -> list[str]:
@@ -224,7 +225,9 @@ class _Metrics:
         self.fm_row = QFontMetrics(self.font_row)
         self.fm_small = QFontMetrics(self.font_small)
         self.fm_title = QFontMetrics(self.font_title)
-        self.button_w = max(self.fm_small.horizontalAdvance(TIER_LABEL[t]) for t in TIERS) + 2 * L.BUTTON_PAD_X + 2
+        # 按显示出来的档名量（繁体界面画的是转过的字，见 items.py）
+        self.button_w = max(self.fm_small.horizontalAdvance(lang.t(TIER_LABEL[t])) for t in TIERS) \
+            + 2 * L.BUTTON_PAD_X + 2
         self.button_h = self.fm_small.height() + 2 * L.BUTTON_PAD_Y + 2
         self.row_h = max(L.ICON, self.button_h) + 2 * L.ROW_PAD_Y
         self.name_w = max((self.fm_row.horizontalAdvance(n) for n in names), default=60) + L.NAME_EXTRA

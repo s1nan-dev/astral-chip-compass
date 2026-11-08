@@ -295,5 +295,87 @@ class BrokenTest(_Case):
                 self.assertEqual([s.note for s in self.open().schemes()], [f"第{i + 3}版"])
 
 
+# ---------------------------------------------------------------- 适用地图
+
+
+class MapStoreTest(_Case):
+    def raw(self) -> dict:
+        return json.loads(self.path.read_text(encoding="utf-8"))
+
+    def write(self, raw: dict) -> None:
+        self.path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+
+    def test_maps_saved_and_read_back(self):
+        """带地图存了再读回来一致：文件里按编号排、同时记编号和名称；读时先认编号，再认名称。"""
+        store = self.open()
+        store.add(scheme(maps=("龙宫游乐园", "魔法学院")))
+        raw = self.raw()
+        self.assertEqual(raw["schemes"][0]["maps"], [{"code": 1, "name": "龙宫游乐园"},
+                                                     {"code": 5, "name": "魔法学院"}])
+        self.assertEqual(self.open().schemes()[0].maps, ("龙宫游乐园", "魔法学院"))
+        # 编号认得、名称是改名前或繁体写法时按编号认；编号不认识时按名称认
+        raw["schemes"][0]["maps"] = [{"code": 5, "name": "旧名字"}, {"code": 99, "name": "园林中庭"}]
+        self.write(raw)
+        self.assertEqual(self.open().schemes()[0].maps, ("园林中庭", "魔法学院"))
+
+    def test_missing_maps_is_generic(self):
+        """没有 "maps" 这个键：算全地图通用，文件不当坏文件。"""
+        self.open().add(scheme())
+        raw = self.raw()
+        del raw["schemes"][0]["maps"]
+        self.write(raw)
+        reopened = self.open()
+        self.assertIsNone(reopened.notice)
+        self.assertEqual(reopened.schemes()[0].maps, ())
+
+    def test_bad_maps_is_generic_not_broken(self):
+        """maps 的类型不对：这一套算通用，文件不当坏文件，别的方案照常；改了再存时写成空列表。"""
+        store = self.open()
+        store.add(scheme(name="第一套"))
+        store.add(scheme(name="第二套", maps=("魔法学院",)))
+        for i, bad in enumerate(("x", [1], [{"code": "1", "name": "龙宫游乐园"}],
+                                 [{"code": 1, "name": "龙宫游乐园"}, 3])):
+            with self.subTest(bad=bad):
+                raw = self.raw()
+                raw["schemes"][0]["maps"] = bad
+                self.write(raw)
+                reopened = self.open()
+                self.assertIsNone(reopened.notice)
+                self.assertEqual([s.name for s in reopened.schemes()], ["第一套", "第二套"])
+                self.assertEqual([s.maps for s in reopened.schemes()], [(), ("魔法学院",)])
+                first = next(s for s in reopened.schemes() if s.name == "第一套")
+                reopened.update(replace(first, note=f"改过{i}"))
+                self.assertEqual(self.raw()["schemes"][0]["maps"], [])
+
+    def test_unknown_map_rows_kept(self):
+        """认不出的地图行（编号、名称本版本都不认识）不参与计算；改了这套方案再存时原样留在认出的几行后面。"""
+        store = self.open()
+        store.add(scheme(maps=("龙宫游乐园",)))
+        raw = self.raw()
+        raw["schemes"][0]["maps"] += [{"code": 40, "name": "未来的地图"},
+                                      {"code": 41, "name": "另一张", "extra": [1, 2]}]
+        self.write(raw)
+        reopened = self.open()
+        first = reopened.schemes()[0]
+        self.assertEqual(first.maps, ("龙宫游乐园",))
+        reopened.update(replace(first, note="改过"))
+        self.assertEqual(self.raw()["schemes"][0]["maps"],
+                         [{"code": 1, "name": "龙宫游乐园"}, {"code": 40, "name": "未来的地图"},
+                          {"code": 41, "name": "另一张", "extra": [1, 2]}])
+
+    def test_unchanged_entry_written_as_is(self):
+        """没改过的方案原样写回：认出的地图行上本版本不认识的字段、认不出的行都照原样。"""
+        store = self.open()
+        store.add(scheme(maps=("龙宫游乐园",)))
+        raw = self.raw()
+        raw["schemes"][0]["maps"] = [{"code": 1, "name": "龙宫游乐园", "extra": True},
+                                     {"code": 40, "name": "未来的地图"}]
+        self.write(raw)
+        before = raw["schemes"][0]
+        reopened = self.open()
+        reopened.add(scheme(name="第二套"))
+        self.assertEqual(self.raw()["schemes"][0], before)
+
+
 if __name__ == "__main__":
     unittest.main()

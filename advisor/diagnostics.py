@@ -9,23 +9,39 @@
                                 那一块；FrameProcessor.pick_shot），有才带；state.json 的 select_picked 记着时刻、文件名、
                                 第几张（slot，从 0 数）、哪张筹码（chip）
                  select-covered-<时分秒>.png  最近一次三选一的筹码名像是被临时盖住、没有采用的那一帧
-                                （FrameProcessor.covered_shot），有才带；state.json 的 select_covered 记着时刻、文件名和读到的
-                                （raw、names、rarity、selected，变了的几张 slots）
+                                 （FrameProcessor.covered_shot），有才带；state.json 的 select_covered 记着时刻、文件名和读到的
+                                 （raw、names、rarity、selected，变了的几张 slots）
+                 finish-look-<时分秒>.png    对局中途看见像一局打完时的颜色、这一局却接着打下去时的那一帧
+                                 （FrameProcessor.finish_shot，缩小到长边 1280），有才带；state.json 的 finish_look 记着
+                                 时刻、文件名、look、coral、white、round、size
                  state.json     当时的对局状态和界面状态（调用方另带导出范围 export_scope：各段文件名、起止时刻），以及
                                 这台电脑的配置和运行状况（system，见 advisor/sysinfo.py 的 machine_info）、下载的识别图片
                                 放在哪和有没有退回程序文件夹（images，见 download_state）、发行版的打包信息（build，见
-                                build_state；开发环境为 null）
+                                build_state；开发环境为 null）；手动导出时另有导出那一刻现量的各线程占用 usage_probe
+                                （见 advisor/usage.py 的 probe）
                  events.jsonl   本局和上一局的识别记录（按段，段首有 segment 标记；见 advisor/gamelog.py），一行一条；
                                 其中 download_stats 是每一轮下载识别图片的用时统计（总用时、最慢的几张）
+                 stats.jsonl    识别记录还留着的各段里、最近 12 小时的统计，包括每分钟一条的 recog_stats、grab_stats，
+                                识别暂停和恢复，截取方式和层次的变化，对局结束的标记；按时间顺序；手动导出时才有
+                 <端名>/        同时识别两个客户端时另一张悬浮窗的子文件夹（端名例如 steam、taptap）：frame.png 是它最近
+                                取到的那一帧，events.jsonl 是它的本局和上一局识别记录，stats.jsonl 是它最近 12 小时的
+                                统计；它的推荐日志和第一张的在同一个
+                                logbook.jsonl 里，每条带 "lane"。state.json 的
+                                lanes.<端名> 下是它的悬浮窗状态、对局快照、导出范围 export_scope，没写成画面时的原因
+                                frame_error
                  logbook.jsonl  这段时间的推荐日志（调用方经 extra 传入时才有），一行一条
+                 usage.jsonl    最近 12 小时每分钟的处理器占用（导出时从内存取，手动导出时才有；见 advisor/usage.py。
+                                程序目录的 logs 下另有一份同名的存盘文件，和诊断包里的这个不是一回事）
+                 overlay_err.txt、overlay_err.old.txt  错误记录和它的旧记录（手动导出时才有，见 advisor/errors.py）
+                 crash.txt、crash.old.txt  崩溃记录和上一次崩溃的记录（手动导出时才有，见 advisor/ui/startup.py）
                  advice.txt     当时显示的推荐全文
                  version.txt    版本、资料日期、打包信息（打包时间、提交号）、运行环境、这台电脑的配置和运行状况、运行方式、
                                 设置目录、识别画面的截取方式、识别图片是否齐全
                  settings.json  正在用的设置文件（paths.state_path()，在个人目录里叫 state.json；诊断包里的 state.json
                                 是上面那份对局和界面状态），有才带
                  schemes.json、schemes.json.bak  正在用的筹码方案文件和它的备份（paths.schemes_path()），有才带
-                 update.log     软件内更新换版本的记录（程序目录 logs 里的 update.log，见 advisor/update_apply.py 的
-                                KEPT_LOG：写的时候已经换掉了用户目录和账户名，最多 256 KB），有才带
+                 update.log     软件内更新的记录：查更新、下载、换版本（程序目录 logs 里的 update.log，见 advisor/update_log.py
+                                的 KEPT_LOG：写的时候已经换掉了用户目录和账户名，最多 256 KB），有才带
                  auto-saved.txt 自动保存的标记（撤销误判的新一局时自动存的才有；按份数清理自动包时按它辨认）
 只在用户点击时生成（撤销误判的新一局时另存一份不含截图的），诊断包只存在本机，由用户自己决定是否发给别人。
 用户点「导出诊断」时，文件夹旁边另打一个同名的压缩包 reports/<时间>.zip（zip_report，文件夹照旧留着），发给作者的就是它；
@@ -35,7 +51,7 @@
 自动保存的诊断包按份数只留最近 KEEP_AUTO 份（prune_auto_reports，只删带标记的；手动导出的不删；推荐日志不清理）。
 
 自检（self_check）：发行版打包后用「ACC.exe --selfcheck」检查数据、文字识别模型、界面库和窗口截取组件
-是否都能在发行版里正常加载，不打开悬浮窗；结果里另写设置目录和下载的识别图片所在的文件夹（打包试启动时核对它们在指定的
+是否都能在发行版里正常加载，另用程序自己画的图读一遍（「识别合成图」：发行版的 OpenCV 是精简编译的），不打开悬浮窗；结果里另写设置目录和下载的识别图片所在的文件夹（打包试启动时核对它们在指定的
 个人目录里），以及程序、程序目录和工作目录（打包试启动经根目录的启动程序自检，核对它们都在 app 文件夹里）。
 """
 from __future__ import annotations
@@ -47,13 +63,15 @@ import os
 import re
 import shutil
 import sys
+import threading
 import time
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Iterable
 
-from . import fileio, paths
+from . import fileio, hub, paths, wincred
 from .paths import scrub_paths  # 写进诊断包的文字一律经它（错误记录也用同一个，所以放在 paths）
+from .prefs import REPORT_INSTALL_FIELD, REPORT_SECRET_FIELD
 from .version import BUILD_INFO_NAME, BuildInfo, build_info, data_date, version_text
 
 FRAME = "frame.png"
@@ -66,27 +84,49 @@ SELECT_PICKED = "select-picked-{time}.png"
 SELECT_PICKED_PREFIX = "select-picked-"
 SELECT_COVERED = "select-covered-{time}.png"
 SELECT_COVERED_PREFIX = "select-covered-"
-SHOT_PREFIXES = (SELECT_UNREADABLE_PREFIX, SELECT_PICKED_PREFIX, SELECT_COVERED_PREFIX)  # extra 的文件名不能用这几个开头
+# 对局中途看见像一局打完时的颜色、这一局却接着打下去时的那一帧（export 的 finish_look）：{time} 同上
+FINISH_LOOK = "finish-look-{time}.png"
+FINISH_LOOK_PREFIX = "finish-look-"
+SHOT_PREFIXES = (SELECT_UNREADABLE_PREFIX, SELECT_PICKED_PREFIX, SELECT_COVERED_PREFIX,
+                 FINISH_LOOK_PREFIX)  # extra 的文件名不能用这几个开头
+# 同时识别两个客户端时另一张悬浮窗在诊断包里的子文件夹名（export 的 lanes）：小写英文字母开头、由小写字母和数字组成（整个
+# 名字都要对上，末尾带换行的也不算）。它是磁盘上的文件夹名：带斜杠、点、大写字母、和顶层文件重名的会写到别处或盖掉别的
+# 文件；Windows 的设备名（LANE_DEVICES）建不成文件夹
+LANE_NAME = re.compile(r"^[a-z][a-z0-9]*$")
+LANE_DEVICES = re.compile(r"con|prn|aux|nul|com[0-9]|lpt[0-9]")
+NO_FRAME = "导出时没有可用的游戏画面"  # 导出时没有画面（顶层 frame.png、另一张的 frame.png 没写成都是这一句）
 STATE = "state.json"
 EVENTS = "events.jsonl"
 LOGBOOK = "logbook.jsonl"
+# 最近 12 小时每分钟的处理器占用（内存里那份，手动导出时经 extra 写出来）。程序目录 logs 下另有一份同名的存盘文件
+# （advisor/usage.py 的 FILE_NAME），那个是运行中一直写的，和诊断包里的这个不是一回事
+USAGE = "usage.jsonl"
+STATS = "stats.jsonl"  # 识别记录还留着的各段里、最近 12 小时的统计（经 extra 写出来，另一张的在 <端名>/ 下）
 ADVICE = "advice.txt"
 VERSION_FILE = "version.txt"
 SETTINGS = "settings.json"  # 设置文件在诊断包里的名字（state.json 是诊断包自己的对局和界面状态）
 SCHEMES = "schemes.json"  # 筹码方案文件
 SCHEMES_BACKUP = "schemes.json.bak"  # 方案文件的备份（同 schemes.backup_path 的命名）
-# 换版本的记录：程序目录 logs 里的这个文件（同 advisor/update_apply.py 的 KEPT_LOG，测试核对），诊断包里同名
+# 更新的记录（查更新、下载、换版本）：程序目录 logs 里的这个文件（同 advisor/update_log.py 的 KEPT_LOG，测试核对），诊断包里同名
 UPDATE_LOG = "update.log"
+# 崩溃记录和上一次崩溃的记录（程序目录 .tmp 里的这两个文件，同 advisor/ui/startup.py 的 CRASH_NAME、CRASH_OLD_NAME：
+# 这里不能导入界面库，由测试核对两处相同）。手动导出时带上
+CRASH_LOGS = ("crash.txt", "crash.old.txt")
 # 自动保存的诊断包里的标记文件（撤销误判的新的一局时自动存的才有）：按份数清理自动包时按它辨认。手动导出的、
 # 和以前分不清是不是自动的旧包都没有它，一律不删（见 prune_auto_reports）
 AUTO_MARK = "auto-saved.txt"
 KEEP_AUTO = 20  # 自动保存的诊断包最多留这么多份（手动导出的不在此限）
 AUTO_NOTE = (f"这个诊断包是拾星助手在撤销新的一局的判定（误判）时自动保存的，不含游戏截图。自动保存的诊断包只保留最近 "
              f"{KEEP_AUTO} 份，更早的会被自动删除；要长期保留，请把整个文件夹复制到别处。\n")
+# extra 不能用的文件名：前面是几个固定文件，后面是崩溃记录和错误记录（"overlay_err.txt"、"overlay_err.old.txt" 同
+# advisor/errors.py 的 ERR_FILE、old_path）。usage.jsonl、stats.jsonl 是经 extra 写的，不在这里
 RESERVED = (FRAME, STATE, EVENTS, ADVICE, VERSION_FILE, SETTINGS, SCHEMES, SCHEMES_BACKUP, UPDATE_LOG,
-            AUTO_MARK)  # extra 不能用的文件名
-# 设置和方案文件、换版本的记录超过这么大时不带（设置和方案正常只有几 KB，换版本的记录写的时候就限在 256 KB 以内）
+            AUTO_MARK, *CRASH_LOGS, "overlay_err.txt", "overlay_err.old.txt")
+# 设置和方案文件、更新的记录超过这么大时不带（设置和方案正常只有几 KB，更新的记录写的时候就限在 256 KB 以内）；错误记录和
+# 崩溃记录超过时只带末尾这么多字节（_copy_logs）
 USER_FILE_MAX = 4 * 2**20
+# Python 写崩溃记录时末尾附的一行：进程里已加载的扩展模块的名字（_copy_logs 去掉，诊断包不记进程里加载的模块）
+EXTENSION_MODULES_LINE = re.compile(r"^Extension modules:.*\n?", re.MULTILINE)
 # 诊断包文件夹名 reports/<时间>（同一秒重名时接 -2……）：(时间, 序号)
 REPORT_NAME = re.compile(r"^([0-9]{8}-[0-9]{6})(?:-([0-9]+))?$")
 # 清理自动保存的诊断包时先改名成「名字.deleting」再删（见 prune_auto_reports）
@@ -110,6 +150,10 @@ class ExportError(Exception):
 # version.txt 的「设置目录」一行：设置和筹码方案所在的文件夹（paths.settings_dir()）；退回程序文件夹时接上原因
 SETTINGS_DIR_LINE = "设置目录：{path}"
 SETTINGS_DIR_FALLBACK = "设置目录：{path}（{reason}，已改为保存在程序文件夹中）"
+# version.txt 里的作业站登录状态：只写有没有，不写昵称和令牌（令牌只在本机的凭据管理器里）；作业站的入口关着（hub.ENABLED）
+# 时不写这一行
+HUB_LOGIN_LINE = "作业站登录：{state}"
+HUB_LOGIN_STATES = ("有", "没有")
 FALLBACK_REASONS = {  # paths.Fallback.kind → 原因；{wanted} 是个人目录，{detail} 是出错的类型和错误代码
     "no_appdata": "未设置环境变量 APPDATA",
     "unwritable": "无法写入 {wanted}（{detail}）",
@@ -157,12 +201,19 @@ WINDOW_CAPTURE_CHECK = "窗口截取组件"  # 自检的这一项不通过时打
 STATE_KEY_CHECK = "记录密钥"
 STATE_KEY_LOADED = "已加载打包时放进程序的密钥"
 STATE_KEY_DEV = "开发版不带打包密钥"
+# 自检里试一下占用采样的那一项（usage_check）：发行版是编译过的程序，sys._current_frames() 拿不拿得到调用栈要在发行版里才看得出，
+# 打包试启动的自检结果里写着。不算关键项，不通过也不影响打包（tools/build_release.py 不用管它）
+USAGE_CHECK = "占用采样"
 # 自检里记下识别库版本的那一项：打包时比对识别读数不一致，拿它和打包脚本用的库对照（tools/build_release.py 的 vision_smoke）
 LIBRARIES_CHECK = "识别与截图库"
 # 带样本清单自检时这一项的名称和结果文件（程序目录的 .tmp 下）：打包试启动另用同一份读数逐项比（同一条流程
 # 在发行版里和源码里读出来一不一样，见 advisor/vision/readout.py、tools/build_release.py 的 vision_smoke）
 VISION_SAMPLES_CHECK = "识别读数"
 VISION_SAMPLES_FILE = "selfcheck-vision.json"
+# 自检里核对「自己画的图能读出来」的那一项（ocr_render_check）：发行版的 OpenCV 是精简编译的，程序自己画图、文字识别读图
+# 都要在发行版里管用。在程序里不算关键项（平时识别用不到这张图），打包时要求它通过（tools/build_release.py smoke_problems）
+OCR_RENDER_CHECK = "识别合成图"
+MIN_OCR_LINES = 8  # 这张合成图上有十二段文字，读到这么少说明画或读出了问题
 
 
 def _jsonable(obj: Any, depth: int = 0) -> Any:
@@ -353,7 +404,8 @@ def build_state() -> dict | None:
 
 def environment_text(capture: Any = None, machine: Any = None) -> str:
     """version.txt 的内容：版本、资料日期、打包信息（build_text）、系统和运行环境、这台电脑的配置和运行状况、运行方式、
-    设置目录、识别画面的截取方式、识别图片是否齐全。
+    设置目录、作业站有没有登录（只写有没有，不写昵称和令牌；作业站的入口关着（hub.ENABLED）时不写这一行，也不查凭据管理器）、
+    识别画面的截取方式、识别图片是否齐全。
 
     capture：当时的截取方式（CaptureState 或同样字段的 dict）；不给时取后台识别正在用的，还没有时不写这一行。
     machine：已经取好的这台电脑的配置和运行状况（导出诊断时取一次分给这里和 state.json）；不给时这里自己取一次。"""
@@ -371,6 +423,9 @@ def environment_text(capture: Any = None, machine: Any = None) -> str:
         f"运行方式：{'发行版' if is_frozen() else '开发环境'}（程序目录 {paths.app_dir()}）",
         settings_text(),
     ]
+    if hub.ENABLED:  # 作业站的入口关着时不写这一行，也不查凭据管理器
+        lines.append(HUB_LOGIN_LINE.format(state=HUB_LOGIN_STATES[0] if wincred.exists(hub.CRED_TARGET)
+                                           else HUB_LOGIN_STATES[1]))
     capture = _current_capture() if capture is None else capture
     if capture is not None:
         lines.append(capture_text(capture))
@@ -391,15 +446,32 @@ def _write_jsonl(path: Path, records: Iterable | None) -> None:
 
 
 def _user_files() -> list[tuple[str, Path]]:
-    """正在用的设置和筹码方案文件，和换版本的记录：(诊断包里的文件名, 文件)。"""
+    """正在用的设置和筹码方案文件，和更新的记录：(诊断包里的文件名, 文件)。"""
     schemes = paths.schemes_path()
     return [(SETTINGS, paths.state_path()), (SCHEMES, schemes), (SCHEMES_BACKUP, schemes.with_name(schemes.name + ".bak")),
             (UPDATE_LOG, paths.logs_dir() / UPDATE_LOG)]
 
 
+def _hide_report_install(text: str) -> str:
+    """诊断包里的文字不带对局报告的本机编号和随机值：一项只写「有」「没有」（其余文字、换行照旧）。编号只用来数人数，
+    随机值只用来算报告编号，两样都不该随诊断包发出去。设置文件（settings.json）和对局快照（state.json 的 settings、
+    lanes 下第二张的 session.settings 都是设置的副本）都经它。按文字替换，不是 JSON 的也照样换，认不出就不动。"""
+    pattern = re.compile(rf'("(?:{re.escape(REPORT_INSTALL_FIELD)}|{re.escape(REPORT_SECRET_FIELD)})"\s*:\s*)'
+                         r'("(?:[^"\\]|\\.)*"|null)')
+
+    def hide(match) -> str:
+        token = match.group(2)
+        if token in ("null", '""', '"有"', '"沒有"', '"没有"'):
+            return match.group(0)  # 没有编号、已经换过：原样留着，不改设置文件的其余文字
+        return match.group(1) + '"有"'
+
+    return pattern.sub(hide, text)
+
+
 def _copy_user_files(target: Path) -> dict[str, str]:
-    """把正在用的设置和筹码方案文件、换版本的记录复制进诊断包，返回没带上的文件和原因；文件不存在时不带，不算问题（从没换过
-    版本、开发版都没有换版本的记录）。文字照样把用户主目录换成 %USERPROFILE%（不改换行）；不是 UTF-8 的（读坏的文件）原样带上。"""
+    """把正在用的设置和筹码方案文件、更新的记录复制进诊断包，返回没带上的文件和原因；文件不存在时不带，不算问题（从没查过、
+    下过、换过版本，或者开发版，都没有更新的记录）。文字照样把用户主目录换成 %USERPROFILE%（不改换行）；不是 UTF-8 的（读坏
+    的文件）原样带上。设置文件里的本机编号和随机值换成「有」「没有」（_hide_report_install），不把这两样带进诊断包。"""
     problems: dict[str, str] = {}
     for name, src in _user_files():
         try:
@@ -418,7 +490,52 @@ def _copy_user_files(target: Path) -> dict[str, str]:
         except UnicodeDecodeError:
             (target / name).write_bytes(data)
         else:
-            (target / name).write_text(scrub_paths(text), encoding="utf-8", newline="")
+            text = scrub_paths(text)
+            if name == SETTINGS:
+                text = _hide_report_install(text)
+            (target / name).write_text(text, encoding="utf-8", newline="")
+    return problems
+
+
+def _copy_logs(target: Path) -> dict[str, str]:
+    """把错误记录和崩溃记录复制进诊断包（只在手动导出时调用），返回没带上的文件和原因。
+
+    带这四个：错误记录 errors.ERR_FILE 和它的旧记录（errors.old_path，调用时才取：测试会换掉 ERR_FILE），程序目录 .tmp 下的
+    crash.txt、crash.old.txt。文件不存在、空的（crash.txt 平时是空的）不带，不算问题。超过 USER_FILE_MAX 的只带末尾那么多
+    字节（出错时看的是最后面），切开处那半行不要（半行里的路径不全，scrub_paths 认不出后面的账户名），第一行写明只带了末尾。
+    一律按 UTF-8 读（读不了的字节换成替换符）再经 scrub_paths：不是 UTF-8 的字节也照样换掉账户名，不像 _copy_user_files
+    那样原样带上。Python 附在崩溃记录末尾的已加载扩展模块那一行（EXTENSION_MODULES_LINE）不带：诊断包不记进程里加载的模块。
+    读不了（OSError）时记进问题，不影响别的内容。
+    """
+    from . import errors
+
+    temp = paths.temp_dir()
+    sources = [(errors.ERR_FILE.name, errors.ERR_FILE),
+               (errors.old_path(errors.ERR_FILE).name, errors.old_path(errors.ERR_FILE)),
+               (CRASH_LOGS[0], temp / CRASH_LOGS[0]),
+               (CRASH_LOGS[1], temp / CRASH_LOGS[1])]
+    problems: dict[str, str] = {}
+    for name, src in sources:
+        try:
+            data = src.read_bytes()
+        except FileNotFoundError:
+            continue
+        except OSError as e:
+            problems[name] = f"{type(e).__name__}: {e}"
+            continue
+        if not data:
+            continue
+        truncated = len(data) > USER_FILE_MAX
+        if truncated:
+            data = data[-USER_FILE_MAX:]
+            data = data[data.find(b"\n") + 1:]  # 切开处那半行不要：整段都没有换行时 find 是 -1，原样留着
+        text = scrub_paths(EXTENSION_MODULES_LINE.sub("", data.decode("utf-8", errors="replace")))
+        if truncated:
+            text = "（文件过大，只带了末尾的内容）\n" + text
+        try:
+            (target / name).write_text(text, encoding="utf-8", newline="")
+        except OSError as e:
+            problems[name] = f"{type(e).__name__}: {e}"
     return problems
 
 
@@ -449,10 +566,25 @@ def _write_shot(folder: Path, shot, state: dict, key: str, template: str) -> Non
         state[f"{key}_error"] = f"{type(e).__name__}: {e}"
 
 
+def _lane_state(state: dict, name: str) -> dict:
+    """state.json 里这一端（lanes.<端名>）的那一项，没有时建上。lanes 或这一端不是字典时（调用方给的都是字典，只防万一）
+    换成新字典，原来的值放进它的 state 一项，不丢。"""
+    lanes = state.get("lanes")
+    if not isinstance(lanes, dict):
+        lanes = {"state": lanes} if lanes is not None else {}
+        state["lanes"] = lanes
+    entry = lanes.get(name)
+    if not isinstance(entry, dict):
+        entry = {"state": entry} if entry is not None else {}
+        lanes[name] = entry
+    return entry
+
+
 def export(frame_bgr, snapshot: dict, events: Iterable, advice_text: str,
            extra: dict[str, Iterable] | None = None, capture: Any = None, *, auto: bool = False,
            select_unreadable: tuple | None = None, select_picked: tuple | None = None,
-           select_covered: tuple | None = None) -> Path:
+           select_covered: tuple | None = None, finish_look: tuple | None = None,
+           lanes: dict | None = None) -> Path:
     """把现场存成诊断包，返回诊断包目录（reports/<时间>/）。
 
     frame_bgr：当时的游戏画面（BGR 的 numpy 数组）；没有画面时传 None，诊断包里就没有 frame.png。
@@ -475,7 +607,20 @@ def export(frame_bgr, snapshot: dict, events: Iterable, advice_text: str,
           （FrameProcessor.covered_shot：(时刻, 画面, {raw、names、rarity、selected、slots})）。同 select_unreadable：给了就另写
           select-picked-<时分秒>.png、select-covered-<时分秒>.png，state.json 的 select_picked、select_covered 记下时刻、那一次的
           情况和文件名，存不了时原因记在 select_picked_error、select_covered_error（见 _write_shot）；只在手动导出时带上。
-    正在用的设置和筹码方案文件、换版本的记录另外带上（settings.json、schemes.json、schemes.json.bak、update.log，有才带）；
+    finish_look：对局中途看见像一局打完时的颜色、这一局却接着打下去时的那一帧（FrameProcessor.finish_shot：(时刻, 缩小的
+          画面, {look、coral、white、round、size})）。同 select_covered：另写 finish-look-<时分秒>.png，state.json 的 finish_look
+          记下时刻、情况和文件名，存不了时原因记在 finish_look_error；只在手动导出时带上。
+    lanes：同时识别两个客户端时另一张悬浮窗的画面和识别记录，{端名: {"frame": 那一张最近的一帧（BGR 的 numpy 数组）或 None,
+           "events": 那一张的识别记录（列表）, "stats": 那一张最近 12 小时的统计（列表）}}。每个端名在诊断包里建一个同名
+           子文件夹，写 frame.png（同顶层）、events.jsonl（同顶层，文字照样经 scrub_paths），有 stats 时另写 stats.jsonl
+           （同顶层）；state.json 的 lanes.<端名> 下另记没写成画面时的原因 frame_error（给了 None 时
+           和顶层没有画面时是同一句）。端名只能是小写英文字母开头、由小写字母和数字组成，不能和顶层文件、extra 的文件名重名
+           （不分大小写），不能以 SHOT_PREFIXES 开头，也不能是 Windows 的设备名（LANE_DEVICES）：它是诊断包里的文件夹名，
+           带斜杠、点、大写字母、和文件重名的会写到别处或盖掉别的文件，查不过时抛 ValueError，不建诊断包。不给或为空时
+           什么都不多写（只有一张时、撤销误判自动保存时都不给）。
+    正在用的设置和筹码方案文件、更新的记录另外带上（settings.json、schemes.json、schemes.json.bak、update.log，有才带；
+    更新记录包括查更新、下载、换版本三段）；手动导出时另带错误记录、崩溃记录（overlay_err.txt、overlay_err.old.txt、
+    crash.txt、crash.old.txt，见 _copy_logs；自动保存的不带）；
     带不上的原因记在 state.json 的 settings_files_error。
     这台电脑的配置和运行状况（advisor/sysinfo.py 的 machine_info）只取一次，写进 state.json 的 system 和 version.txt；
     取的时候出错，system 写成 {"error": "…"}、version.txt 只写一行「电脑配置：读不到（…）」，导出照常。
@@ -491,6 +636,14 @@ def export(frame_bgr, snapshot: dict, events: Iterable, advice_text: str,
                 or name.lower().startswith(SHOT_PREFIXES) or name != name.rstrip(" .")):
             raise ValueError(f"诊断包里不能用这个文件名：{name!r}")
         files[name] = records
+    lane_frames = {}
+    for name, lane in (lanes or {}).items():
+        name = str(name)
+        if (not LANE_NAME.fullmatch(name) or LANE_DEVICES.fullmatch(name) or name.lower() in RESERVED
+                or name.lower().startswith(SHOT_PREFIXES)
+                or any(name.lower() == str(other).lower() for other in files)):
+            raise ValueError(f"诊断包里不能用这个端名：{name!r}")
+        lane_frames[name] = lane if isinstance(lane, dict) else {}
     final = _new_report_dir()
     machine = _machine_info()  # 只取一次：version.txt 和 state.json 都用这一份
     state = {"exported_at": datetime.now().isoformat(timespec="seconds"), **_jsonable(dict(snapshot or {}))}
@@ -510,6 +663,11 @@ def export(frame_bgr, snapshot: dict, events: Iterable, advice_text: str,
                 copy_problems = _copy_user_files(work)
             except Exception as e:  # noqa: BLE001  设置和方案文件带不上也要把其余内容留下
                 copy_problems = {"*": f"{type(e).__name__}: {e}"}
+            if not auto:  # 错误记录、崩溃记录只在手动导出时带：自动保存的要快，也最多留 20 份
+                try:
+                    copy_problems.update(_copy_logs(work))
+                except Exception as e:  # noqa: BLE001  这两样带不上也要把其余内容留下
+                    copy_problems["*"] = f"{type(e).__name__}: {e}"
             if copy_problems:
                 state["settings_files_error"] = copy_problems
             if frame_bgr is not None:
@@ -518,15 +676,33 @@ def export(frame_bgr, snapshot: dict, events: Iterable, advice_text: str,
                 except Exception as e:  # noqa: BLE001  画面存不了也要把其余内容留下
                     state["frame_error"] = f"{type(e).__name__}: {e}"
             else:
-                state["frame_error"] = "导出时没有可用的游戏画面"
+                state["frame_error"] = NO_FRAME
+            for name, lane in lane_frames.items():
+                folder = work / name
+                folder.mkdir()
+                entry = _lane_state(state, name)
+                lane_frame = lane.get("frame")
+                if lane_frame is None:
+                    entry["frame_error"] = NO_FRAME
+                else:
+                    try:
+                        (folder / FRAME).write_bytes(_encode_png(lane_frame))
+                    except Exception as e:  # noqa: BLE001  这一张存不了也要把其余内容留下
+                        entry["frame_error"] = f"{type(e).__name__}: {e}"
+                _write_jsonl(folder / EVENTS, lane.get("events"))
+                if lane.get("stats") is not None:
+                    _write_jsonl(folder / STATS, lane.get("stats"))
             if select_unreadable is not None:
                 _write_unreadable(work, select_unreadable, state)
             if select_picked is not None:
                 _write_shot(work, select_picked, state, "select_picked", SELECT_PICKED)
             if select_covered is not None:
                 _write_shot(work, select_covered, state, "select_covered", SELECT_COVERED)
-            # 写进诊断包的文字一律经 scrub_paths，不带出 Windows 账户名和用户目录
-            (work / STATE).write_text(scrub_paths(json.dumps(state, ensure_ascii=False, indent=2)), encoding="utf-8")
+            if finish_look is not None:
+                _write_shot(work, finish_look, state, "finish_look", FINISH_LOOK)
+            # 写进诊断包的文字一律经 scrub_paths，不带出 Windows 账户名和用户目录；对局快照里的设置副本同样不带本机编号和随机值
+            (work / STATE).write_text(
+                _hide_report_install(scrub_paths(json.dumps(state, ensure_ascii=False, indent=2))), encoding="utf-8")
             _write_jsonl(work / EVENTS, events)
             for name, records in files.items():
                 _write_jsonl(work / name, records)
@@ -718,6 +894,47 @@ def state_key_check() -> str:
     return STATE_KEY_LOADED
 
 
+def usage_check() -> dict:
+    """自检「占用采样」：调 usage.probe(0.2) 真量一次本进程的线程，枚举不到线程（thread_count 为 0）时抛错。返回
+    {"threads": 线程数, "stack_threads": 取到过调用栈的线程数}，sys._current_frames() 出错时另带 "stacks_error"。
+    自检时通常只有调用这里的一个 Python 线程，probe 又不看调用它的线程，所以另起一个等着的线程陪量：有它在，stack_threads
+    为 0 才说明这个环境里取不到调用栈。不算关键项：发行版是编译过的程序，sys._current_frames() 拿不拿得到调用栈要在发行版里才
+    看得出，这一项的结果写进自检结果，打包试启动时就能看到，不通过不影响打包。"""
+    from . import usage
+
+    stop = threading.Event()
+    companion = threading.Thread(target=stop.wait, name="usage-check", daemon=True)
+    companion.start()
+    try:
+        result = usage.probe(0.2)
+    finally:
+        stop.set()
+        companion.join(1.0)
+    if result is None:
+        raise RuntimeError("量不了本进程的线程占用")
+    threads = result.get("thread_count") or 0
+    if threads == 0:
+        raise RuntimeError("枚举不到本进程的线程")
+    out = {"threads": threads, "stack_threads": result.get("stack_threads") or 0}
+    if result.get("stacks_error"):
+        out["stacks_error"] = result["stacks_error"]
+    return out
+
+
+def ocr_render_check() -> dict:
+    """自检「识别合成图」：用程序自己画的十来行文字的图（vision/ocr_check.py 的 sample_image）读一遍，读到的文字段数不到
+    MIN_OCR_LINES 时抛错。发行版的 OpenCV 是精简编译的（画字、缩放的字形支持可能被裁掉），这一项保证发行版里画得出、
+    读得出；线程数自检用的正是这张图，量出来才靠得住。"""
+    from .vision import chip_select, ocr_check
+
+    image = ocr_check.sample_image()
+    result = chip_select._engine()(image)
+    texts = [str(text) for text in (getattr(result, "txts", None) or ())]
+    if len(texts) < MIN_OCR_LINES:
+        raise RuntimeError(f"只读到 {len(texts)} 段文字，应有 {MIN_OCR_LINES} 段以上")
+    return {"lines": len(texts)}
+
+
 def vision_samples(manifest) -> dict:
     """按清单（每张图的路径和 read_frame 需要的已知条件）逐张读样本，返回 {图片: 读数}。
 
@@ -833,9 +1050,11 @@ def self_check(vision_samples_manifest=None) -> dict:
     run("界面库", qt)
     run(TRANSLATION_CHECK, translation_check, critical=False)
     run("文字识别模型", ocr)
+    run(OCR_RENDER_CHECK, ocr_render_check, critical=False)
     run(WINDOW_CAPTURE_CHECK, window_capture_check, critical=False)
     run("识别图片", images, critical=False)
     run(STATE_KEY_CHECK, state_key_check, critical=False)
+    run(USAGE_CHECK, usage_check, critical=False)
     if vision_samples_manifest is not None:
         # 打包试启动带样本清单时才有：读一张图读错不算关键项（哪张图、哪一项不一样由打包脚本逐项比出来），
         # 但整个清单都读不了（清单坏了、识别模块进不了发行版）要让自检失败

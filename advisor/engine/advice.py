@@ -44,13 +44,16 @@ NEED_ORIGIN = "need"  # 队友刚需那一项的 Part.origin（界面按它把�
 # 最后不在卡片上第二位时，scheme_rank 把这一句换成 NEED_PLACE（{n} 是卡片上实际排在第几位，含「刷新」那一行）
 NEED_SECOND = "排在第二位，第一位仍按自身收益"
 NEED_PLACE = "排在第{n}位"
+# 前瞻分的绝对值达到这么多才显示（理由标签、悬停明细、命令行的理由）；这是打了折（[lookahead] weight）以后的数，
+# 和 weight 同比例调整
+LOOKAHEAD_MIN = 1.5
 
 
 @dataclass
 class ChipEval:
     chip: Chip
     parts: list[Part]  # 全部分项（悬停明细用），总分 = 各分项之和 + 前瞻分
-    official: float  # 游戏内置推荐分（已乘 official.scale，计入总分的部分）
+    official: float  # 游戏内置推荐分（已乘 official.scale，计入总分的部分；scale 为 0 时为 0，分项里也不列）
     immediate: float  # 不含前瞻的分值
     lookahead: float
     lookahead_reason: str
@@ -71,7 +74,7 @@ class ChipEval:
     def reasons(self, limit: int = 3) -> list[str]:
         items = sorted((p for p in self.parts if p.reason), key=lambda p: -abs(p.score))
         out = [p.text() for p in items[:limit]]
-        if self.lookahead_reason and abs(self.lookahead) >= 3:
+        if self.lookahead_reason and abs(self.lookahead) >= LOOKAHEAD_MIN:
             out.append(f"{self.lookahead_reason}（前瞻 {self.lookahead:+.0f}）")
         return out
 
@@ -397,9 +400,9 @@ def common_notes(db: DB, scorer: Scorer, offer, unrecorded) -> list[str]:
     st = scorer.st
     notes = []
     if scorer.hero.unrecorded:
-        notes.append(f"角色「{st.hero}」{UNRECORDED}：只按游戏内置推荐和通用规则计算")
+        notes.append(f"角色「{st.hero}」{UNRECORDED}：只按通用规则计算")
     elif scorer.hs is None:
-        notes.append(f"适配表缺少角色「{st.hero}」：只按游戏内置推荐和通用规则计算")
+        notes.append(f"适配表缺少角色「{st.hero}」：只按通用规则计算")
     for i in unrecorded:
         notes.append(f"第 {i + 1} 个候选筹码「{offer[i]}」{UNRECORDED}：按平均水平计算，不计前瞻")
     m = map_note(db, scorer)

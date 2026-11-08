@@ -43,14 +43,15 @@ class MutatorCatalogTest(unittest.TestCase):
     def test_real_db_effects(self):
         catalog = hud.mutator_catalog(DB)
         self.assertTrue(catalog)
-        for name, effect in catalog:
+        for name, effect, hant in catalog:
             with self.subTest(mutator=name):
                 self.assertEqual(effect, DB.mutators[name].effect)
+                self.assertEqual(hant, DB.mutators[name].hant)
                 self.assertTrue(effect, f"组件「{name}」的效果说明是空的")
 
     def test_effects_follow_data_file(self):
         """组件清单照资料文件的写法给定期望：名字是 data/mutators.json 的键，效果取 effect 字段（不是 en、hint）。"""
-        catalog = dict(hud.mutator_catalog(DB))
+        catalog = {name: effect for name, effect, _ in hud.mutator_catalog(DB)}
         self.assertEqual(catalog["狂风"], "所有单位（角色和怪物）移动 +2；最终移动点数大于 10 时，技能冷却 -1")
         self.assertEqual(catalog["暴雨"], "使用效果牌时受到 1 点伤害，本回合攻击 +1")
         self.assertEqual(catalog["过载模式"],
@@ -60,9 +61,61 @@ class MutatorCatalogTest(unittest.TestCase):
     def test_single_name_recognized_with_effect(self):
         """只读到一个组件名时，靠它旁边和效果说明相近的文字认出来。"""
         catalog = hud.mutator_catalog(DB)
-        name, effect = next((n, e) for n, e in catalog if len(e) >= 8)
+        name, effect, _ = next((n, e, h) for n, e, h in catalog if len(e) >= 8)
         lines = [hud.Line(name, 100, 100, 60, 24), hud.Line(effect, 300, 400, 600, 24)]
         self.assertEqual(hud._find_mutators(lines, catalog), [name])
+
+    def test_hant_names(self):
+        """繁体名字也认，交回简体名；两个都在画面上时下结论。"""
+        catalog = hud.mutator_catalog(DB)
+        picked = [(n, h) for n, _, h in catalog if h and h != n][:2]
+        self.assertEqual(len(picked), 2)
+        lines = [hud.Line(h, 100, 100 + 40 * i, 80, 24) for i, (_, h) in enumerate(picked)]
+        self.assertEqual(hud._find_mutators(lines, catalog), [n for n, _ in picked])
+
+    def test_hant_single_without_effect(self):
+        """繁体画面上只有一个组件名：效果说明只有简体写法，照旧不下结论。"""
+        catalog = hud.mutator_catalog(DB)
+        hant = next(h for _, e, h in catalog if h and len(e) >= 8)
+        lines = [hud.Line(hant, 100, 100, 80, 24), hud.Line("繁体画面上的效果说明", 300, 400, 600, 24)]
+        self.assertEqual(hud._find_mutators(lines, catalog), [])
+
+
+class HeroIdHantTest(unittest.TestCase):
+    """按角色名找角色时，游戏繁体中文界面里的名字、全名也认。"""
+
+    def test_hant_names(self):
+        hero = next(h for h in DB.heroes.values() if h.hant and h.hant != h.name)
+        full = next((h for h in DB.heroes.values() if h.hant_full_name), None)
+        with mock.patch.object(templates.assets, "_hero_index", None):
+            self.assertEqual(stars._hero_id(hero.hant), hero.id)
+            if full is not None:
+                self.assertEqual(stars._hero_id(full.hant_full_name), full.id)
+
+
+class ViewChipsHantTest(unittest.TestCase):
+    """左下角「查看筹码」按钮：繁体「查看籌碼」也认（存立绘模板前确认按钮在）。"""
+
+    def setUp(self):
+        self.session = Session(DB, Settings(hero="凛"))
+        self.proc = pipeline.FrameProcessor(DB, self.session)
+        self.img = np.full((1080, 1920, 3), 90, np.uint8)
+
+    def saved(self, text: str) -> bool:
+        hints = SimpleNamespace(template_wanted=DB.heroes["凛"].id)
+        with mock.patch.object(self.proc, "_hint", return_value=hints), \
+                mock.patch.object(pipeline, "save_template", return_value="template.png") as save, \
+                mock.patch.object(io, "ocr", return_value=[hud.Line(text, 200, 1000, 100, 30)]):
+            self.assertTrue(self.proc._save_template(self.img, []))
+        return save.called
+
+    def test_both_languages(self):
+        self.assertTrue(self.saved("查看筹码"))
+        self.assertTrue(self.saved("查看籌碼"))
+
+    def test_other_text_not_saved(self):
+        """左下角被别的东西挡住时照旧不存。"""
+        self.assertFalse(self.saved("查看面板"))
 
 
 class ReadAssetImageTest(unittest.TestCase):
@@ -295,11 +348,11 @@ class FlowBase(unittest.TestCase):
         patches = [
             mock.patch.object(pipeline, "looks_like_overlay_screen", side_effect=lambda img: self.seen is not None),
             mock.patch.object(pipeline, "read_chip_select", side_effect=fake("select", lambda img, db, **kw: self.seen)),
-            mock.patch.object(pipeline, "read_hud", side_effect=fake("hud", lambda img, db, full: Hud(round=self.round))),
+            mock.patch.object(pipeline, "read_hud", side_effect=fake("hud", lambda img, db, full, **kw: Hud(round=self.round))),
             mock.patch.object(pipeline, "read_progress", side_effect=fake("progress", lambda img: Progress())),
             mock.patch.object(pipeline, "is_select_screen", side_effect=fake("pick", lambda img, db, info=None: False)),
             mock.patch.object(pipeline, "read_hero", side_effect=fake("hero", lambda img, db: SimpleNamespace(hero="凛"))),
-            mock.patch.object(pipeline, "read_own_stars", side_effect=fake("stars", lambda img, who: self.stars)),
+            mock.patch.object(pipeline, "read_own_stars", side_effect=fake("stars", lambda img, who, **kw: self.stars)),
             mock.patch.object(pipeline, "read_players", return_value=None),
             mock.patch.object(pipeline, "read_chip_panel", None),
             mock.patch.object(pipeline, "read_pregame", return_value=Pregame()),

@@ -9,7 +9,10 @@ import cv2
 import numpy as np
 
 from .anchors import OCR_WIDTH
-from .chip_select import Line, _engine, ocr_scale
+from .chip_select import Line, _ENGINE_LOCK, _engine, ocr_scale
+
+# 引擎的约定：宽高比上限写 -1 时不按宽高比在上下补边（太矮的图照旧补，见 rapidocr_lite/utils/process_img.py）
+NO_RATIO_PAD = -1
 
 
 def imread(path, flag=cv2.IMREAD_UNCHANGED) -> np.ndarray | None:
@@ -38,10 +41,17 @@ def result_lines(result, scale: float = 1.0, offset: tuple[float, float] = (0.0,
     return lines
 
 
-def ocr(img: np.ndarray, box, ref_width: int = OCR_WIDTH) -> list[Line]:
+def ocr(img: np.ndarray, box, ref_width: int = OCR_WIDTH, det_side: int | None = None, pad: bool = True) -> list[Line]:
     """识别 box =（x0, y0, x1, y1，原图像素）里的文字，坐标换回原图像素。
 
     范围夹在画面内：框的上边（左边）取整后可能正好落在最后一行（一列）上，裁出来是空的，缩放到识别模型时 OpenCV 会报错。
+
+    读字本身在 _ENGINE_LOCK 里：两个客户端同时识别时两路都经这里读文字，一次只让一路用引擎（裁图、缩放照旧在锁外）。
+
+    det_side、pad 是找字一步的两个设置，不给时照引擎的设置：det_side 是把图的短边放大到多少像素（引擎默认 736）；
+    pad=False 时很扁的细长条不在上下补边（引擎默认宽超过高的 8 倍就补到 4 倍）。读进度条用（见 anchors.PROGRESS_DET_SIDE）：
+    补边以后再放大到 736，送去找字的图很大。两个设置都记在引擎上（text_det.limit_side_len、width_height_ratio，每次识别
+    按它们算），所以在锁里改、识别完马上还原（出错也还原），别的识别照旧，另一路也不会沿用。
     """
     h, w = img.shape[:2]
     if h < 1 or w < 1:
@@ -55,4 +65,23 @@ def ocr(img: np.ndarray, box, ref_width: int = OCR_WIDTH) -> list[Line]:
     scale = ocr_scale(w, h, ref_width)
     interp = cv2.INTER_AREA if scale < 1 else cv2.INTER_CUBIC
     resized = cv2.resize(crop, None, fx=scale, fy=scale, interpolation=interp)
-    return result_lines(_engine()(resized), scale, (x0, y0))
+    with _ENGINE_LOCK:
+        engine = _engine()
+        changes = []
+        if det_side:
+            changes.append((getattr(engine, "text_det", None), "limit_side_len", det_side))
+        if not pad:
+            changes.append((engine, "width_height_ratio", NO_RATIO_PAD))
+        saved = []
+        try:
+            for obj, name, value in changes:
+                old = getattr(obj, name, None)
+                if old is None:  # 引擎换版本时没有这个设置：照引擎原样识别
+                    continue
+                saved.append((obj, name, old))
+                setattr(obj, name, value)
+            result = engine(resized)
+        finally:
+            for obj, name, old in reversed(saved):
+                setattr(obj, name, old)
+    return result_lines(result, scale, (x0, y0))

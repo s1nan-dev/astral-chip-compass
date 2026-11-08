@@ -48,6 +48,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
     seen_uas: list = []  # 每次请求带的 User-Agent（同名的头有几个记几个）
     seen_cookies: list = []  # 每次请求带的 Cookie（没有时记 None）
     paths: list = []  # 收到的请求路径
+    posts: list = []  # 收到的 POST：{"path", "body", "headers"}
+    sends: list = []  # /send/ 下收到的 GET、PUT、DELETE：{"method", "path", "body", "auth"（Authorization 有几个记几个）}
 
     def log_message(self, *args):
         pass
@@ -65,6 +67,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         super().end_headers()
 
     def do_GET(self):
+        if self.path.startswith("/send/"):
+            return self._sent()
         Handler.seen_uas.append(self.headers.get_all("User-Agent"))
         Handler.seen_cookies.append(self.headers.get_all("Cookie"))
         Handler.paths.append(self.path)
@@ -137,6 +141,55 @@ class Handler(http.server.BaseHTTPRequestHandler):
             time.sleep(10)
         else:
             self._send(404, b"")
+
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        body = self.rfile.read(length) if length else b""
+        Handler.paths.append(self.path)
+        Handler.posts.append({"path": self.path, "body": body, "headers": dict(self.headers.items())})
+        if self.path == "/post/ok":
+            self._send(200, b'{"ok":true}')
+        elif self.path == "/post/400":
+            self._send(400, b'{"ok":false,"error":"bad_field:offers[0].state.star"}')
+        elif self.path == "/post/302":
+            self.send_response(302)
+            self.send_header("Location", "/post/ok")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+        elif self.path == "/post/big":  # 比 post 读回话的上限大：只读前 64 KiB
+            self._send(200, b"z" * (70 * 1024))
+        else:
+            self._send(404, b"")
+
+    def do_PUT(self):
+        self._sent()
+
+    def do_DELETE(self):
+        self._sent()
+
+    def _sent(self):
+        """Session.send 用的几个地址（GET、PUT、DELETE 都走这里）。"""
+        length = int(self.headers.get("Content-Length") or 0)
+        body = self.rfile.read(length) if length else b""
+        Handler.paths.append(self.path)
+        Handler.sends.append({"method": self.command, "path": self.path, "body": body,
+                              "auth": self.headers.get_all("Authorization")})
+        if self.path == "/send/204":
+            self.send_response(204)
+            self.end_headers()
+        elif self.path == "/send/429":
+            self.send_response(429)
+            self.send_header("Retry-After", "12")
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"{}")
+        elif self.path == "/send/302":
+            self.send_response(302)
+            self.send_header("Location", "/ok")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+        else:
+            self._send(200, b'{"ok":true}')
 
     def _send(self, code, body):
         self.send_response(code)
@@ -211,6 +264,33 @@ class RawServer:
 
 def reply(client, body: bytes, code: int = 200, reason: str = "OK") -> None:
     client.sendall(b"HTTP/1.1 %d %s\r\nContent-Length: %d\r\n\r\n%s" % (code, reason.encode(), len(body), body))
+
+
+def read_with_body(srv: RawServer, client) -> tuple[str, bytes] | None:
+    """读一个带正文的请求（正文按 Content-Length 读完，不留在连接里搅乱下一个请求）：返回（请求行, 正文）；对方关了
+    连接、正文没收全时返回 None。请求行同 read_request 记进 srv.requests。"""
+    data = b""
+    while b"\r\n\r\n" not in data:
+        chunk = client.recv(65536)
+        if not chunk:
+            return None
+        data += chunk
+    head, rest = data.split(b"\r\n\r\n", 1)
+    text = head.decode("latin-1")
+    length = 0
+    for row in text.split("\r\n")[1:]:
+        name, _, value = row.partition(":")
+        if name.strip().lower() == "content-length":
+            length = int(value.strip())
+    while len(rest) < length:
+        chunk = client.recv(65536)
+        if not chunk:
+            return None
+        rest += chunk
+    line = text.split("\r\n", 1)[0]
+    srv.requests.append(line)
+    srv.heads.append(text)
+    return line, rest[:length]
 
 
 def no_proxy_env(case: unittest.TestCase) -> None:
@@ -290,6 +370,87 @@ class BasicTest(WinHttpCase):
         self.assertEqual(len(Handler.paths), 11)
 
 
+class PostTest(WinHttpCase):
+    """Session.post（对局报告发送用）：正文经 lpOptional 真的发出去，头照传；任何状态码都交回、不抛 HTTPError；
+    3xx 原样交回、不跟重定向；回话正文最多读 64 KiB；连接、发送、接收的超时分开设。"""
+
+    HEADERS = {"Content-Type": "application/json", "Content-Encoding": "gzip", "User-Agent": "test-agent"}
+
+    def post(self, path, data=b"{}", timeout=10, connect_timeout=2, stop=None):
+        return self.session.post(self.server.url(path), data, dict(self.HEADERS), timeout=timeout,
+                                 connect_timeout=connect_timeout, stop=stop)
+
+    def test_body_and_headers(self):
+        Handler.posts.clear()
+        status, body = self.post("/post/ok", b"hello-body")
+        self.assertEqual((status, body), (200, b'{"ok":true}'))
+        sent = Handler.posts[-1]
+        self.assertEqual(sent["body"], b"hello-body")
+        self.assertEqual(sent["headers"].get("Content-Type"), "application/json")
+        self.assertEqual(sent["headers"].get("Content-Encoding"), "gzip")
+        self.assertEqual(sent["headers"].get("User-Agent"), "test-agent")
+        self.assertEqual(sent["headers"].get("Content-Length"), "10")
+
+    def test_error_status_returned(self):
+        status, body = self.post("/post/400", b"x")
+        self.assertEqual(status, 400)
+        self.assertIn(b"bad_field:offers[0].state.star", body)
+
+    def test_redirect_not_followed(self):
+        Handler.paths.clear()
+        status, _body = self.post("/post/302", b"x")
+        self.assertEqual(status, 302)
+        self.assertEqual(Handler.paths, ["/post/302"])
+
+    def test_reply_capped(self):
+        status, body = self.post("/post/big", b"x")
+        self.assertEqual(status, 200)
+        self.assertEqual(len(body), 64 * 1024)
+
+    def test_timeouts_set_separately(self):
+        with mock.patch.object(winhttp.winhttp, "WinHttpSetTimeouts") as set_timeouts:
+            self.post("/post/ok", b"x", timeout=10, connect_timeout=2)
+        self.assertEqual(set_timeouts.call_args[0][1:], (10000, 2000, 10000, 10000))
+
+    def test_stopped(self):
+        with self.assertRaises(winhttp.Stopped):
+            self.post("/post/ok", b"x", stop=lambda: True)
+
+
+class SendTest(WinHttpCase):
+    """Session.send（作业站的接口用；post 也由它实现，见 PostTest）：方法照传，正文和请求头真的发出去（Authorization 只有
+    一个），DELETE、GET 不带正文；任何状态码都交回、回话头一并交出（读 Retry-After），3xx 不跟。"""
+
+    def send(self, method, path, data=b"", headers=None):
+        return self.session.send(method, self.server.url(path), data, dict(headers or {"User-Agent": "test-agent"}),
+                                 timeout=10, connect_timeout=2)
+
+    def test_methods(self):
+        Handler.sends.clear()
+        headers = {"User-Agent": "test-agent", "Authorization": "Bearer t-1"}
+        status, head, body = self.send("PUT", "/send/ok", b'{"a":1}', headers)
+        self.assertEqual((status, body), (200, b'{"ok":true}'))
+        self.assertEqual(head.get("content-length"), "11")
+        self.assertEqual(self.send("DELETE", "/send/204", b"", headers)[::2], (204, b""))
+        self.assertEqual(self.send("GET", "/send/ok", b"", headers)[0], 200)
+        self.assertEqual([(s["method"], s["path"], s["body"], s["auth"]) for s in Handler.sends],
+                         [("PUT", "/send/ok", b'{"a":1}', ["Bearer t-1"]),
+                          ("DELETE", "/send/204", b"", ["Bearer t-1"]),
+                          ("GET", "/send/ok", b"", ["Bearer t-1"])])
+
+    def test_status_and_headers_returned(self):
+        status, head, body = self.send("GET", "/send/429")
+        self.assertEqual((status, body), (429, b"{}"))
+        self.assertEqual(head.get("Retry-After"), "12")
+
+    def test_redirect_not_followed(self):
+        Handler.paths.clear()
+        status, head, _body = self.send("GET", "/send/302")
+        self.assertEqual(status, 302)
+        self.assertEqual(head.get("Location"), "/ok")
+        self.assertEqual(Handler.paths, ["/send/302"])
+
+
 class RedirectTest(WinHttpCase):
     """重定向没跟、回话是 3xx 时按 HTTPError 报（code 用那个 3xx、reason 用状态行文字），不把 3xx 的正文当图片交回。
 
@@ -305,6 +466,19 @@ class RedirectTest(WinHttpCase):
         self.assertEqual(caught.exception.code, 302)
         self.assertEqual(caught.exception.reason, "Found")
         self.assertIsNotNone(caught.exception.headers)
+
+    def test_stream_redirects_off(self):
+        """stream 给 redirects=False 时一项重定向都不跟（按编号取方案用）：3xx 按 HTTPError 报，只发了一个请求，sink 什么都
+        没收到；不给时照旧跟到底。"""
+        Handler.paths.clear()
+        chunks = []
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            self.session.stream(urllib.request.Request(self.server.url("/302")), chunks.append, 10, redirects=False)
+        caught.exception.close()
+        self.assertEqual(caught.exception.code, 302)
+        self.assertEqual((Handler.paths, chunks), (["/302"], []))
+        self.assertEqual(self.session.stream(urllib.request.Request(self.server.url("/302")), chunks.append, 10),
+                         len(OK_BODY))
 
 
 class FailureTest(WinHttpCase):
@@ -400,6 +574,37 @@ class ResendTest(unittest.TestCase):
         self.assertEqual(chunks, [b"again"])
         self.assertEqual(srv.requests, ["GET /a HTTP/1.1", "GET /b HTTP/1.1", "GET /b HTTP/1.1"])
         self.assertEqual(srv.connections, 2)
+
+    def test_post_resent_with_body(self):
+        # post 同样换一条连接重发一次，重发的那一次照样带着整份正文（对局报告：服务按报告编号去重，重发不会存两份）
+        body = b"report-" * 3000  # 比一个 TCP 包大：正文分几次收到也要收全
+        for how in ("fin", "rst"):
+            got = []
+
+            def handler(srv, client, index, how=how, got=got):
+                if index == 1:  # 第一条连接：回了第一个请求，第二个请求收下了不回就关（RST 或正常关）
+                    got.append(read_with_body(srv, client))
+                    reply(client, b"first")
+                    got.append(read_with_body(srv, client))
+                    if how == "rst":
+                        client.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+                    return
+                while True:
+                    request = read_with_body(srv, client)
+                    if request is None:
+                        return
+                    got.append(request)
+                    reply(client, b"again")
+
+            with self.subTest(how=how):
+                srv = self.server(handler)
+                headers = {"Content-Type": "application/json"}
+                self.assertEqual(self.session.post(srv.url("/a"), b"first-body", headers, timeout=10), (200, b"first"))
+                self.assertEqual(self.session.post(srv.url("/b"), body, headers, timeout=10), (200, b"again"))
+                self.assertEqual(srv.requests, ["POST /a HTTP/1.1", "POST /b HTTP/1.1", "POST /b HTTP/1.1"])
+                self.assertEqual(srv.connections, 2)
+                self.assertEqual(got, [("POST /a HTTP/1.1", b"first-body"), ("POST /b HTTP/1.1", body),
+                                       ("POST /b HTTP/1.1", body)])
 
     def test_resend_only_once(self):
         # 每条连接都是收下请求不回就关：只重发一次，按网络错误报

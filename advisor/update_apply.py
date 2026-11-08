@@ -97,7 +97,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from . import fileio, paths, version
+from . import fileio, paths, update_log, version
 from .errors import EXIT_REPORTED
 
 APPLY_ARG = "--apply-update"  # 换版本程序的参数，后面接旧进程号（packaging/chip_advisor.py 里另写了一份，测试核对相同）
@@ -166,9 +166,9 @@ SLOT = re.compile(rf"{re.escape(APP)}\.(next|old|failed)(?:-(\d{{8}}-\d{{6}})(?:
 # 根目录里换版本留下、可以删的文件
 ROOT_LEFTOVERS = tuple(name + suffix for name in ROOT_FILES for suffix in (OLD_SUFFIX, NEW_SUFFIX))
 # 收尾删 update 之前，apply.log 接到程序目录 logs 里的这个文件后面（logs 是用户数据，换版本时跟着搬）；接完超过 KEPT_LOG_MAX
-# 字节时只留最后约一半（从一行的开头起）
-KEPT_LOG = "update.log"
-KEPT_LOG_MAX = 256 * 1024
+# 字节时只留最后约一半（从一行的开头起）。追加（查更新、下载）、整份重写（这里）共用 advisor/update_log.py 的锁和裁剪写法
+KEPT_LOG = update_log.KEPT_LOG
+KEPT_LOG_MAX = update_log.KEPT_LOG_MAX
 # 换版本程序两次改名以后中途退出、收尾时补搬用户数据（_finish_interrupted）时不搬的：正在运行的程序启动时读过（那时没有，用的是
 # 默认的）、之后会整份写回去的设置和方案文件、两份下载记录，搬过去也会被它盖掉
 LATE_SKIP = (*paths.USER_FILES, *paths.USER_ASSET_RECORDS)
@@ -263,6 +263,18 @@ def after_start(root: Path | str, *, wait: float | None = None) -> None:
         _after_start(Path(root), AFTER_WAIT_S if wait is None else wait)
     except Exception:  # noqa: BLE001  收不了尾下次启动再收
         pass
+
+
+def start_program(command: list[str], cwd: Path | str) -> bool:
+    """起一个程序，不等它（换了界面语言以后重开拾星助手用，advisor/ui/relaunch.py）：用换版本、起新版本同一个写法
+    （_start 的 CreateProcessW：不经过 shell、不弹黑窗口），环境变量照 _child_env（去掉给换版本程序的那几个）。起来了返回
+    True；起不来返回 False，不抛出。不是换版本的一步，不影响换版本本身的做法。"""
+    try:
+        child = _start(list(command), Path(cwd), _child_env(), quiet=False)
+    except OSError:
+        return False
+    _close(child.handle)
+    return True
 
 
 def apply_main(argv: list[str], *, app: Path | str | None = None, own_version: str | None = None) -> int:
@@ -547,36 +559,18 @@ def _retry_later(root: Path, result: dict) -> bool:
 
 def _keep_log(root: Path) -> None:
     """删 update 之前：把 update\\apply.log（最多最后 KEPT_LOG_MAX 字节）接到 app\\logs\\update.log 后面；接完超过 KEPT_LOG_MAX
-    时只留最后约一半，从一行的开头起。记录写的时候已经换掉了用户目录和账户名（_Log）。出错不管：记录只是给查问题用的。"""
+    时只留最后约一半，从一行的开头起。记录写的时候已经换掉了用户目录和账户名（_Log）。整份重写和查更新、下载的追加共用
+    update_log 的锁（新版本收尾和后台检查同时写时不丢行）。出错不管：记录只是给查问题用的。"""
     try:
-        data = _tail(root / UPDATE_DIR / LOG_NAME, KEPT_LOG_MAX)
+        data = update_log.tail(root / UPDATE_DIR / LOG_NAME, KEPT_LOG_MAX)
     except OSError:
         return
     if not data:
         return
-    target = root / APP / "logs" / KEPT_LOG
     try:
-        try:
-            kept = _tail(target, KEPT_LOG_MAX)
-        except FileNotFoundError:
-            kept = b""
-        if kept and not kept.endswith(b"\n"):
-            kept += b"\n"
-        text = kept + data
-        if len(text) > KEPT_LOG_MAX:
-            cut = text.find(b"\n", len(text) - KEPT_LOG_MAX // 2)
-            text = text[cut + 1:] if cut >= 0 else b""
-        fileio.write_bytes(target, text)
-    except OSError:
+        update_log.append(root / APP / "logs" / KEPT_LOG, data, KEPT_LOG_MAX)
+    except (OSError, ValueError):
         pass
-
-
-def _tail(path: Path, limit: int) -> bytes:
-    """文件最后 limit 字节（不到 limit 时是整个文件）。"""
-    with open(path, "rb") as f:
-        f.seek(0, os.SEEK_END)
-        f.seek(max(f.tell() - limit, 0))
-        return f.read()
 
 
 def _other_download(update: Path, result: dict) -> bool:
@@ -1364,18 +1358,17 @@ def _exit_detail(code: int | None) -> str:
 
 
 class _Log:
-    """往 update\\apply.log 追加一行（带时间、谁写的）；多行的后几行缩进。用户目录、账户名换成占位（paths.scrub_paths）。
-    写不进不管：记录只是给查问题用的。"""
+    """往 update\\apply.log 追加一行（带时间、谁写的）；多行的后几行缩进。用户目录、账户名、程序目录换成占位
+    （update_log.rows）。写不进不管：记录只是给查问题用的。"""
 
     def __init__(self, root: Path, who: str):
-        self.path = root / UPDATE_DIR / LOG_NAME
+        self.root = Path(root)
+        self.path = self.root / UPDATE_DIR / LOG_NAME
         self.who = who
 
     def __call__(self, text: str) -> None:
-        lines = paths.scrub_paths(text).replace("\r", "").split("\n")
-        rows = [f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {self.who}：{lines[0]}"] + [f"    {s}" for s in lines[1:] if s]
         try:
-            fileio.append_lines(self.path, rows, errors="backslashreplace")
+            fileio.append_lines(self.path, update_log.rows(self.who, text, self.root), errors="backslashreplace")
         except (OSError, ValueError):
             pass
 

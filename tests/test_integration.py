@@ -115,6 +115,23 @@ class LowMatchTest(unittest.TestCase):
         # 颜色读不到时挑的和 DB.match_chip 一致（两处要挑同一个）
         self.assertEqual(self.check(["飞星"], [None])[0][0], self.db.match_chip("飞星", None)[0])
 
+    def test_hant_shared_part_is_partial(self):
+        """游戏繁体中文界面上只读到共同部分：和简体一样标为没读完、按边框颜色挑，照旧带着匹配度低的提示；读全的繁体名
+        照旧不算没读完。"""
+        cases = [
+            ("飛星", "金", "金色飞星"), ("醫療箱", "蓝", "医疗箱-紧急治疗"), ("醫療箱", "金", "医疗箱-完备治疗"),
+            ("銀行卡-餘額", None, "银行卡-余额少"), ("銀行卡-餘額", "紫", "银行卡-余额多"), ("拳擊手套", "金", "拳击手套-高级"),
+        ]
+        for text, ring, want in cases:
+            with self.subTest(text=text, ring=ring):
+                names, unrecorded, partial, problems = self.check(["漢娜人偶", text], ["金", ring])
+                self.assertEqual((names, unrecorded[1], partial), (["汉娜人偶", want], False, [False, True]))
+                self.assertIn(f"第 2 个候选筹码匹配度低：识别文字「{text}」，按「{want}」计算", problems)
+        offer = ["汉娜人偶", "拳击手套-高级", "金色飞星"]
+        names, unrecorded, partial, problems = self.check([self.db.chips[n].hant for n in offer],
+                                                          [self.db.chips[n].rarity for n in offer])
+        self.assertEqual((names, partial, problems), (offer, [False] * 3, []))
+
     def test_shared_part_is_not_a_new_chip(self):
         """共同部分配上读错的边框颜色（紫色的「医疗箱」）：不判为资料库未收录，算没读完。"""
         names, unrecorded, partial, problems = self.check(["医疗箱"], ["紫"])

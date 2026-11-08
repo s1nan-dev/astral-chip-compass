@@ -25,10 +25,13 @@ from advisor import fileio, prefs, unlock  # prefs：设置的读写（替换 _w
 from advisor.data import load_db
 from advisor.session import GAME_FIELDS, Session, Settings
 from advisor.ui.overlay_parts import app as overlay_app
+from advisor.ui import lang
 from advisor.ui import settings as st
 from advisor.ui import single_instance as si
 from advisor.ui import theme
+from advisor.ui import overlay as overlay_mod
 from advisor.ui.overlay import Overlay
+from advisor.ui.overlay_parts.wording import RESTART_FAILED
 from advisor.ui.overlay_parts.app import OverlaySession, UiSettings, load_settings
 from advisor.ui.services import Services
 from tests.support import qtenv, sandbox
@@ -39,10 +42,22 @@ APP = qtenv.app()
 U = unlock
 
 # 程序自己写出的一份设置（各项都是合法的值；和 0.12.0 起写出的格式一样）
-GOOD = {"hero": "芬妮", "window_pos": [1446, 68], "manual": True, "hotkey": "Ctrl+F9",
-        "window_rel": [0.7293, 0.0431, "tr"], "collapsed_cards": ["owned"], "share_format": "text", "opaque": True,
-        "skin": theme.DEFAULT_KEY, "aux": "", "free_notice_closed": True, "lowend": True,
-        "update_auto": False, "update_checked": "2026-01-02", "update_skipped": "1.0.1"}
+GOOD = {"hero": "芬妮", "window_pos": [1446, 68],
+        "report_enabled": True, "report_install": "0123456789abcdef0123456789abcdef",
+        "report_secret": "fedcba9876543210fedcba9876543210",
+        "report_since": "2026-01-02T03:04:05",
+        "manual": True, "hotkey": "Ctrl+F9",
+        "window_rel": [0.7293, 0.0431, "tr"], "collapsed_cards": ["owned"],
+        "share_format": "text", "opaque": True,
+        "skin": theme.DEFAULT_KEY, "aux": "", "free_notice_closed": True, "hant_notice_closed": False,
+        "lowend": True, "big_cores": False, "platform": "taptap",
+        "platform_seen": "taptap", "ui_lang": lang.HANS, "lanes": {}, "update_auto": False,
+        "update_skipped": "1.0.1", "ocr_check": {}}
+
+
+def filled_lang() -> str:
+    """load_settings 给没选过的界面语言填的值：繁体界面打开（lang.HANT_ENABLED）时是这次启动的语言，关着时不填（空串）。"""
+    return lang.CURRENT if lang.HANT_ENABLED else ""
 
 
 def dump(data: dict) -> bytes:
@@ -133,9 +148,11 @@ class ReadTest(_Case):
         self.path.write_text(json.dumps({k: {"x": 1} for k in names}), encoding="utf-8")
         with self.assertLogs("advisor.prefs", level="WARNING"):
             self.assertEqual(UiSettings.load(self.path), UiSettings())
-        cases = {"opaque": 1, "free_notice_closed": 0, "manual": "true", "window_pos": [True, 2], "hero": None,
+        cases = {"opaque": 1, "free_notice_closed": 0, "hant_notice_closed": "yes", "manual": "true",
+                 "window_pos": [True, 2], "hero": None,
                  "hotkey": ["F8"], "skin": 3, "aux": 7, "share_format": 1, "collapsed_cards": "owned", "lowend": 1,
-                 "update_auto": 1, "update_checked": 20260102, "update_skipped": ["1.0.1"]}
+                 "platform": 1, "platform_seen": ["steam"],
+                 "update_auto": 1, "update_skipped": ["1.0.1"]}
         for name, value in cases.items():
             with self.subTest(name=name):
                 self.path.write_text(json.dumps({"hero": "邦妮", name: value}), encoding="utf-8")
@@ -212,11 +229,12 @@ class ReadTest(_Case):
                 self.path.write_bytes(data)
                 with self.assertLogs("advisor.fileio", level="WARNING"):
                     settings = load_settings(self.path)
-                self.assertEqual(settings, UiSettings())  # collapsed_cards 是 []：不是新用户
+                # collapsed_cards 是 []：不是新用户；界面语言没选过，按这次启动的语言（繁体界面关着时不填）
+                self.assertEqual(settings, UiSettings(ui_lang=filled_lang()))
                 self.assertFalse(self.path.exists())
                 self.assertEqual([p.read_bytes() for p in self.broken_copies()], [data])
                 self.assertEqual(settings.save(self.path), self.path)
-                self.assertEqual(UiSettings.load(self.path), UiSettings())
+                self.assertEqual(UiSettings.load(self.path), UiSettings(ui_lang=filled_lang()))
 
     def test_broken_file_and_backup(self):
         """设置文件和备份都读坏了：两份都另存（以后的保存会写新的 .bak，不能盖掉它），按默认设置。"""
@@ -232,7 +250,7 @@ class ReadTest(_Case):
         """新用户（没有设置文件）：「已有筹码」卡片默认收起；文件不在、只剩 .bak 时同样按新用户（不读备份）。"""
         self.assertEqual(load_settings(self.path).collapsed_cards, ["owned"])
         self.bak.write_bytes(dump(GOOD))
-        self.assertEqual(load_settings(self.path), UiSettings(collapsed_cards=["owned"]))
+        self.assertEqual(load_settings(self.path), UiSettings(collapsed_cards=["owned"], ui_lang=filled_lang()))
         self.assertEqual(self.bak.read_bytes(), dump(GOOD))
 
     def test_unreadable_file_not_written(self):
@@ -242,7 +260,7 @@ class ReadTest(_Case):
         with mock.patch.object(fileio, "read_with_backup", side_effect=PermissionError(13, "拒绝访问")), \
                 self.assertLogs("advisor.prefs", level="WARNING"):
             settings = load_settings(self.path)
-        self.assertEqual(settings, UiSettings())
+        self.assertEqual(settings, UiSettings(ui_lang=filled_lang()))
         settings.hero = "邦妮"
         with self.assertNoLogs("advisor", level="WARNING"), \
                 mock.patch.object(prefs, "_write_settings", wraps=prefs._write_settings) as write:
@@ -295,6 +313,56 @@ class ReadTest(_Case):
             self.assertEqual(settings.save(self.path), self.path)
         self.assertEqual(UiSettings.load(self.path).hero, "邦妮")
         self.assertEqual(self.bak.read_bytes(), bak)
+
+
+class PlatformFieldTest(_Case):
+    """游戏平台两项（platform、platform_seen）的读写：默认、读到的值、旧文件没有这两项、读到别的值（设置文件被改坏）。"""
+
+    def test_defaults(self):
+        self.assertIsNone(UiSettings().platform)  # 没选过：自动识别
+        self.assertEqual(UiSettings().platform_seen, "steam")  # 从没认出过：Steam
+
+    def test_same_values_as_capture(self):
+        """设置文件认的取值（overlay_parts/app.py 的 PLATFORMS，那里不导入 capture，单写了一份）和找窗口那一层的端名
+        相同：加了新的端只改了 capture 时，选了新的端存不进设置文件（读回来按自动识别）。"""
+        from advisor.vision import capture
+
+        self.assertEqual(overlay_app.PLATFORMS, (capture.STEAM, capture.TAPTAP, capture.BOTH))
+        self.assertEqual((overlay_app.STEAM, overlay_app.TAPTAP, overlay_app.BOTH),
+                         (capture.STEAM, capture.TAPTAP, capture.BOTH))
+
+    def test_read_and_write(self):
+        for platform, seen in ((None, "steam"), ("steam", "taptap"), ("taptap", "steam"), ("both", "steam")):
+            with self.subTest(platform=platform, seen=seen):
+                self.path.write_text(json.dumps({"platform": platform, "platform_seen": seen}), encoding="utf-8")
+                got = UiSettings.load(self.path)
+                self.assertEqual((got.platform, got.platform_seen), (platform, seen))
+                self.assertEqual(got.save(self.path), self.path)
+                again = UiSettings.load(self.path)
+                self.assertEqual((again.platform, again.platform_seen), (platform, seen))
+
+    def test_missing_fields(self):
+        """旧设置文件没有这两项：按默认（自动识别、Steam），不记警告。"""
+        self.path.write_text(json.dumps({"hero": "芬妮", "lowend": True}), encoding="utf-8")
+        with self.assertNoLogs("advisor", level="WARNING"):
+            got = UiSettings.load(self.path)
+        self.assertEqual((got.platform, got.platform_seen), (None, "steam"))
+
+    def test_bad_values(self):
+        """类型对、值不认识的按默认：platform 只认 capture 的三种，别的按自动识别；platform_seen 别的按 Steam。"""
+        for raw, want in (("bogus", None), ("", None), ("Steam", None), (1, None), (True, None), (["steam"], None),
+                          ("steam", "steam"), ("taptap", "taptap"), ("both", "both")):
+            with self.subTest(raw=raw):
+                self.path.write_text(json.dumps({"platform": raw}), encoding="utf-8")
+                with self.assertLogs("advisor.prefs", level="WARNING") if not isinstance(raw, str) else \
+                        self.assertNoLogs("advisor", level="WARNING"):
+                    self.assertEqual(UiSettings.load(self.path).platform, want)
+        for raw, want in (("bogus", "steam"), ("", "steam"), ("Steam端", "steam"), (2, "steam"), ("taptap", "taptap")):
+            with self.subTest(seen=raw):
+                self.path.write_text(json.dumps({"platform_seen": raw}), encoding="utf-8")
+                with self.assertLogs("advisor.prefs", level="WARNING") if not isinstance(raw, str) else \
+                        self.assertNoLogs("advisor", level="WARNING"):
+                    self.assertEqual(UiSettings.load(self.path).platform_seen, want)
 
 
 class OrphanBackupTest(_Case):
@@ -433,7 +501,8 @@ class SaveTest(_Case):
 
     def test_same_text_other_newlines_not_rewritten(self):
         """文件里的文字和要写的相同、只是换行不同（别的工具改过、0.12.0 写的 \\n）：照旧不重写。"""
-        text = json.dumps({"hero": "芬妮", "window_pos": None}, ensure_ascii=False, indent=1)
+        data = {k: v for k, v in asdict(Settings(hero="芬妮")).items() if k not in GAME_FIELDS}
+        text = json.dumps(data, ensure_ascii=False, indent=1)
         self.path.write_bytes(text.encode("utf-8"))  # \n 换行
         before = self.path.read_bytes()
         self.assertEqual(Settings(hero="芬妮").save(self.path), self.path)
@@ -586,6 +655,7 @@ class ExitSaveTest(unittest.TestCase):
         with mock.patch.object(main_mod, "build", return_value=(app, mock.MagicMock(), session, lock)), \
                 mock.patch.object(main_mod, "Watcher", return_value=watcher), \
                 mock.patch.object(main_mod, "Hotkey", return_value=mock.MagicMock()), \
+                mock.patch.object(main_mod, "QTimer"), \
                 mock.patch.object(main_mod, "expected_capture", return_value="window"), \
                 mock.patch.object(main_mod.Services, "load", return_value=None), \
                 mock.patch.object(si, "listen", return_value=mock.MagicMock()), \
@@ -600,7 +670,8 @@ class ExitSaveTest(unittest.TestCase):
 
     def test_saves_once_with_force(self):
         errors = capture_errors(self)
-        session = SimpleNamespace(eventlog=SimpleNamespace(recorder=mock.Mock()), save=mock.Mock())
+        session = SimpleNamespace(eventlog=SimpleNamespace(recorder=mock.Mock()), save=mock.Mock(),
+                                  settings=SimpleNamespace(big_cores=False))
         lock = threading.Lock()
         self.run_main(session, lock)
         session.save.assert_called_once_with(force=True)
@@ -610,7 +681,8 @@ class ExitSaveTest(unittest.TestCase):
 
     def test_lock_held_skips_save(self):
         errors = capture_errors(self)
-        session = SimpleNamespace(eventlog=SimpleNamespace(recorder=mock.Mock()), save=mock.Mock())
+        session = SimpleNamespace(eventlog=SimpleNamespace(recorder=mock.Mock()), save=mock.Mock(),
+                                  settings=SimpleNamespace(big_cores=False))
         lock = threading.Lock()
         lock.acquire()  # 后台识别一直占着锁
         self.addCleanup(lock.release)
@@ -673,6 +745,82 @@ class HotkeyNumberTest(_Window):
         self.assertEqual(cap.text(), "8")
         cap.set_key(None, "warn")
         self.assertEqual((cap.text(), cap.tone), ("", "warn"))
+
+
+class PlatformOverlayTest(_Window):
+    """悬浮窗上的游戏平台：启动时按设置交给找窗口那一层；设置窗口里选了以后存进设置文件、交给 capture、刷新窗口；
+    自动识别认出另一个端时更新 platform_seen，只存一次。"""
+
+    def setUp(self):
+        super().setUp()
+        from advisor.vision import capture
+
+        self.capture = capture
+        self.addCleanup(capture.set_platform, None)
+
+    def saved(self):
+        return json.loads(self.path.read_text(encoding="utf-8"))
+
+    def test_startup_uses_setting(self):
+        w = self.overlay(UiSettings(hero="凛", platform="taptap", platform_seen="taptap"))
+        self.assertEqual((w.platform, w.platform_seen), ("taptap", "taptap"))
+        self.assertEqual(self.capture.platform(), "taptap")
+        self.assertEqual(self.capture.found_platform(), None)
+        self.assertIsNone(self.overlay(UiSettings(hero="凛")).platform)
+
+    def test_set_platform(self):
+        w = self.overlay(UiSettings(hero="凛"))
+        self.addCleanup(dispose, w.dialogs.settings)
+        w.dialogs.show_settings()
+        d = w.dialogs.settings
+        d.platform_combo.setCurrentIndex(2)  # TapTap端
+        self.assertEqual((w.platform, self.capture.platform()), ("taptap", "taptap"))
+        self.assertEqual((self.saved()["platform"], d.platform_combo.currentData()), ("taptap", "taptap"))
+        # 同一个值不再存（不重写文件）
+        before = self.path.stat().st_mtime_ns
+        w.set_platform("taptap")
+        self.assertEqual(self.path.stat().st_mtime_ns, before)
+        w.set_platform("bogus")  # 别的值按自动识别
+        self.assertIsNone(w.platform)
+        self.assertIsNone(self.capture.platform())
+        self.assertEqual(self.saved()["platform"], None)
+        self.assertIsNone(d.platform_combo.currentData())
+        d.platform_combo.setCurrentIndex(1)  # Steam端
+        self.assertEqual((w.platform, self.capture.platform()), ("steam", "steam"))
+
+    def test_seen_updates_once(self):
+        from advisor.ui.winapi import GameProbe
+
+        w = self.overlay(UiSettings(hero="凛"))
+        self.addCleanup(dispose, w.dialogs.settings)
+        w.dialogs.show_settings()
+        d = w.dialogs.settings
+        w.probe = lambda: GameProbe(False, None, False, False, False)
+        with mock.patch.object(self.capture, "found_platform", return_value="taptap"), \
+                mock.patch.object(w.session, "save", wraps=w.session.save) as save:
+            w.follower.poll()
+            w.follower.poll()
+        self.assertEqual(save.call_count, 1)  # 只存一次
+        self.assertEqual((w.platform_seen, self.saved()["platform_seen"]), ("taptap", "taptap"))
+        self.assertEqual(d.platform_combo.itemText(0), "TapTap端（自动识别）")
+        self.assertIsNone(w.platform)
+
+    def test_seen_none_kept(self):
+        """自动识别还没认出过端（found_platform 为 None）：platform_seen 不动、不写文件。"""
+        w = self.overlay(UiSettings(hero="凛"))
+        with mock.patch.object(self.capture, "found_platform", return_value=None), \
+                mock.patch.object(w.session, "save", wraps=w.session.save) as save:
+            w._notice_platform_seen()
+        save.assert_not_called()
+        self.assertEqual(w.platform_seen, "steam")
+
+    def test_seen_not_updated_for_selected_platform(self):
+        w = self.overlay(UiSettings(hero="凛", platform="steam"))
+        with mock.patch.object(self.capture, "found_platform", return_value="taptap"), \
+                mock.patch.object(w.session, "save", wraps=w.session.save) as save:
+            w._notice_platform_seen()
+        save.assert_not_called()
+        self.assertEqual(w.platform_seen, "steam")
 
 
 class UnlockRecordTest(_Window):
@@ -767,6 +915,118 @@ class UnlockRecordTest(_Window):
         w = self.start("", "")
         w.records._eggs_done(w.records.tracker.open(U.WHITE))
         self.assertEqual(unlock.unseal(self.saved_aux()).skins, [U.WHITE])
+
+
+class UiLangFieldTest(_Case):
+    """界面语言一项（ui_lang）：默认没选过（空串）；旧设置文件没有这一项、写了不认识的值得按没选过，load_settings 按这次启动
+    定好的语言（lang.CURRENT）填上；填的时候不当场写文件，下一次保存设置才写进去。"""
+
+    def setUp(self):
+        super().setUp()
+        saved = lang.CURRENT
+        self.addCleanup(setattr, lang, "CURRENT", saved)
+        # 讲的是繁体界面打开以后的填法；关着时不填，见 test_not_filled_when_hant_off
+        switch = mock.patch.object(lang, "HANT_ENABLED", True)
+        switch.start()
+        self.addCleanup(switch.stop)
+
+    def test_not_filled_when_hant_off(self):
+        """繁体界面关着（lang.HANT_ENABLED）时没选过的不填：这时这次启动定的一律是简体，填进去就把繁体 Windows 上的用户
+        记成了选过简体。保存设置时也不写这一项；设置文件里已经存着的值照读到的留着、照写回去。"""
+        with mock.patch.object(lang, "HANT_ENABLED", False):
+            lang.CURRENT = lang.HANS
+            self.path.write_text(json.dumps({"hero": "芬妮"}), encoding="utf-8")
+            got = load_settings(self.path)
+            self.assertEqual(got.ui_lang, "")
+            self.assertEqual(got.save(self.path), self.path)
+            self.assertEqual(json.loads(self.path.read_text(encoding="utf-8")).get("ui_lang", ""), "")
+            self.path.write_text(json.dumps({"ui_lang": lang.HANT}), encoding="utf-8")
+            got = load_settings(self.path)
+            self.assertEqual(got.ui_lang, lang.HANT)
+            self.assertEqual(got.save(self.path), self.path)
+            self.assertEqual(json.loads(self.path.read_text(encoding="utf-8"))["ui_lang"], lang.HANT)
+
+    def test_default_and_values(self):
+        self.assertEqual(UiSettings().ui_lang, "")
+        for value in lang.LANGUAGES:
+            with self.subTest(value=value):
+                self.path.write_text(json.dumps({"ui_lang": value}), encoding="utf-8")
+                self.assertEqual(UiSettings.load(self.path).ui_lang, value)
+                self.assertEqual(load_settings(self.path).ui_lang, value)
+
+    def test_load_settings_fills_current(self):
+        """没选过、旧文件里没有这一项：load_settings 填成 lang.CURRENT（按 Windows 的显示语言定过），文件不当场重写；
+        下一次保存设置时写进去，以后不再跟着 Windows 变。"""
+        for current in lang.LANGUAGES:
+            with self.subTest(current=current):
+                lang.CURRENT = current
+                self.path.write_text(json.dumps({"hero": "芬妮"}), encoding="utf-8")
+                original = self.path.read_bytes()
+                with self.assertNoLogs("advisor", level="WARNING"):
+                    got = load_settings(self.path)
+                self.assertEqual(got.ui_lang, current)
+                self.assertEqual(self.path.read_bytes(), original)
+                self.assertEqual(got.save(self.path), self.path)
+                self.assertEqual(json.loads(self.path.read_text(encoding="utf-8"))["ui_lang"], current)
+
+    def test_bad_values(self):
+        """值不认识（空串、别的语言代号、不是文字）：读的时候按没选过，load_settings 再按这次启动的语言填上；不是文字时
+        prefs 记警告、按默认。"""
+        lang.CURRENT = lang.HANT
+        for raw in ("", "zh-TW", "繁體"):
+            with self.subTest(raw=raw):
+                self.path.write_text(json.dumps({"ui_lang": raw}), encoding="utf-8")
+                with self.assertNoLogs("advisor", level="WARNING"):
+                    got = load_settings(self.path)
+                self.assertEqual((UiSettings.load(self.path).ui_lang, got.ui_lang), ("", lang.HANT))
+        self.path.write_text(json.dumps({"ui_lang": 1}), encoding="utf-8")
+        with self.assertLogs("advisor.prefs", level="WARNING"):
+            self.assertEqual(UiSettings.load(self.path).ui_lang, "")
+        self.assertEqual(load_settings(self.path).ui_lang, lang.HANT)
+
+
+class UiLangOverlayTest(_Window):
+    """悬浮窗上的界面语言接线：选了存进设置文件、记一条识别记录、刷新开着的设置窗口；和当前相同、不认识的值什么都不做；
+    「现在重开」起得来就退出，起不来不退出、提示一次；设置窗口拿到的值里有这一项。"""
+
+    def test_set_and_save(self):
+        w = self.overlay(UiSettings(hero="芬妮", ui_lang=lang.HANS))
+        w.set_ui_lang(lang.HANT)
+        self.assertEqual(w.session.settings.ui_lang, lang.HANT)
+        self.assertEqual(json.loads(self.path.read_text(encoding="utf-8"))["ui_lang"], lang.HANT)
+        self.assertEqual(w.settings_values().ui_lang, lang.HANT)
+        w.dialogs.show_settings()
+        self.addCleanup(w.dialogs.settings.close)
+        self.assertEqual(w.dialogs.settings.lang_combo.currentData(), lang.HANT)
+        records = [e for e in w.session.recent_events(600) if e.get("kind") == "read:user"]
+        self.assertEqual([(e.get("action"), e.get("ui_lang")) for e in records], [("ui_lang", lang.HANT)])
+
+    def test_same_and_invalid_do_not_write(self):
+        w = self.overlay(UiSettings(hero="芬妮", ui_lang=lang.HANS))
+        w.set_ui_lang(lang.HANS)
+        w.set_ui_lang("zh-TW")
+        w.set_ui_lang(None)
+        self.assertEqual(w.session.settings.ui_lang, lang.HANS)
+        self.assertFalse(self.path.exists())  # 不重写设置文件
+
+    def test_restart_success(self):
+        w = self.overlay(UiSettings(hero="芬妮", ui_lang=lang.HANT))
+        quit_called = []
+        app = SimpleNamespace(quit=lambda: quit_called.append(True))
+        with mock.patch.object(overlay_mod, "QApplication", SimpleNamespace(instance=lambda: app)), \
+                mock.patch.object(overlay_mod.relaunch, "start", return_value=True) as start:
+            w.restart_app()
+        start.assert_called_once()
+        self.assertEqual(quit_called, [True])
+
+    def test_restart_failure_keeps_running(self):
+        w = self.overlay(UiSettings(hero="芬妮", ui_lang=lang.HANT))
+        with mock.patch.object(overlay_mod.relaunch, "start", return_value=False), \
+                mock.patch.object(w.tray_part, "show_from_tray"):
+            w.restart_app()
+        self.assertEqual(w.message.text, RESTART_FAILED)
+        records = [e for e in w.session.recent_events(600) if e.get("kind") == "read:user"]
+        self.assertEqual([e.get("action") for e in records], ["restart_failed"])
 
 
 if __name__ == "__main__":

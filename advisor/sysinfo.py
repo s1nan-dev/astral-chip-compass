@@ -5,8 +5,15 @@
   优先级被调低时，Windows 会降低进程的服务等级，在大小核处理器（英特尔第 12 代起的酷睿等）上把识别放到能效核、按省电
   频率跑；明确声明以后不再这样。
 - 读回本进程的省电设置和优先级类别（performance_state、priority_class）：诊断包和测试用。
+- 除了声明高性能，还能改本进程自己的优先级、能用哪些核（reset_priority、reset_affinity、use_big_cores），以及查这几样
+  现在是什么样（affinity_counts、big_core_split、lacks_avx2）：性能自检结果差时（一般、比出来排在小核上时也是），查到能替
+  玩家改的就改。只改本进程自己的设置，不动别的进程、不写注册表。性能自检比出来的只用大核的收益够不够（on_small_cores，
+  分界 BIG_CORE_GAIN_MIN）也在这里：查原因（vision/ocr_reason.py）和设置窗口「只用大核」一项都按它，设置窗口用不着导入
+  识别模块。
+- 设置窗口「只用大核」一项写的处理器名称（cpu_label）：注册表里的名称去掉 (R)、(TM) 这类商标记号。
 - 读这台电脑的配置和运行状况（cpu_info、memory_info、power_info、displays、gpus，合起来是 machine_info）：导出诊断时
-  写进诊断包，看诊断包就知道用户是什么环境；machine_lines 把结果写成人看得懂的中文几行。全部不用 WMI、不起子进程、
+  写进诊断包，看诊断包就知道用户是什么环境；machine_lines 把结果写成人看得懂的中文几行。displays 读每块屏幕的宽高、
+  缩放和刷新率（刷新率读不到时为空，例如远程桌面、虚拟显示器）。全部不用 WMI、不起子进程、
   不写注册表（WMI 在有的电脑上会卡住不返回，见 advisor/diagnostics.py 的 system_text），正常电脑上几十
   毫秒内返回。
 
@@ -21,8 +28,11 @@ from __future__ import annotations
 
 import contextlib
 import ctypes
+import math
 import os
+import re
 import struct
+import sys
 import traceback
 from ctypes import wintypes
 
@@ -53,6 +63,12 @@ PERFORMANCE_LABELS = {"high": "已声明", "auto": "未声明（由系统决定�
 # 注册表里处理器名称的位置（winreg 只读，不用 WMI）：ProcessorNameString
 CPU_NAME_KEY = r"HARDWARE\DESCRIPTION\System\CentralProcessor\0"
 CPU_NAME_VALUE = "ProcessorNameString"
+# 处理器名称里的商标记号（cpu_label 去掉）：(R)、(TM) 不分大小写，和单个字符的 ®、™
+CPU_MARKS = re.compile(r"\((?:r|tm)\)|[®™]", re.IGNORECASE)
+
+# 只用大核比不限制快这么多倍才算真有用（小核慢一两成不值得少用核）：性能自检比出来的比值（vision/ocr_check.py 的
+# big_core_gain：不限制的中位毫秒 ÷ 只用大核的中位毫秒）到了它，才算文字识别被排到了小核（on_small_cores）
+BIG_CORE_GAIN_MIN = 1.3
 
 # SYSTEM_CPU_SET_INFORMATION（winnt.h）里 Type 的取值：CPU_SET_INFORMATION_TYPE 只有 CpuSetInformation = 0
 CPU_SET_INFORMATION = 0
@@ -99,6 +115,8 @@ DISPLAY_DEVICE_MIRRORING = 0x8
 MONITORINFOF_PRIMARY = 0x1
 # GetDpiForMonitor 的 MONITOR_DPI_TYPE：只取 MDT_EFFECTIVE_DPI（当前实际生效的缩放）
 MDT_EFFECTIVE_DPI = 0
+# EnumDisplaySettingsW 的 iModeNum：当前的显示模式（wingdi.h 的 ENUM_CURRENT_SETTINGS）
+ENUM_CURRENT_SETTINGS = 0xFFFFFFFF
 # 读屏幕时本线程临时切到的 DPI 感知：DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2（按每块屏幕的缩放，伪句柄 -4）；
 # GetAwarenessFromDpiAwarenessContext 返回 DPI_AWARENESS_PER_MONITOR_AWARE（2）时本线程是按每块屏幕的缩放
 DPI_CONTEXT_PER_MONITOR_V2 = -4
@@ -138,6 +156,14 @@ class DISPLAY_DEVICEW(ctypes.Structure):
                 ("DeviceKey", ctypes.c_wchar * 128)]
 
 
+class DEVMODEW(ctypes.Structure):
+    """EnumDisplaySettingsW 写回的显示模式（wingdi.h 的 DEVMODEW，共 220 字节）：只用到 dmSize、宽高和刷新率，别的字段按
+    头文件里的位置补齐。dmDisplayFrequency 在偏移 184。"""
+    _fields_ = [("_head", ctypes.c_byte * 68), ("dmSize", wintypes.WORD), ("dmDriverExtra", wintypes.WORD),
+                ("_middle", ctypes.c_byte * 100), ("dmPelsWidth", wintypes.DWORD), ("dmPelsHeight", wintypes.DWORD),
+                ("_flags", ctypes.c_byte * 4), ("dmDisplayFrequency", wintypes.DWORD), ("_tail", ctypes.c_byte * 32)]
+
+
 class GUID(ctypes.Structure):
     """电源模式和电源计划用的 GUID（Windows 头文件里的 GUID：Data1、Data2、Data3、Data4[8]）。"""
     _fields_ = [("Data1", wintypes.DWORD), ("Data2", wintypes.WORD), ("Data3", wintypes.WORD),
@@ -158,6 +184,22 @@ if os.name == "nt":
     _kernel32.GetProcessInformation.restype = wintypes.BOOL
     _kernel32.GetPriorityClass.argtypes = [wintypes.HANDLE]
     _kernel32.GetPriorityClass.restype = wintypes.DWORD
+    _kernel32.SetPriorityClass.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    _kernel32.SetPriorityClass.restype = wintypes.BOOL
+    # 本进程能用哪几个逻辑处理器（掩码）：两个掩码各是 SIZE_T，按 64 位系统要有 64 位
+    _kernel32.GetProcessAffinityMask.argtypes = [wintypes.HANDLE, ctypes.POINTER(ctypes.c_size_t),
+                                                 ctypes.POINTER(ctypes.c_size_t)]
+    _kernel32.GetProcessAffinityMask.restype = wintypes.BOOL
+    _kernel32.SetProcessAffinityMask.argtypes = [wintypes.HANDLE, ctypes.c_size_t]
+    _kernel32.SetProcessAffinityMask.restype = wintypes.BOOL
+    try:  # Windows 10 1709 起才有；老系统上没有时 use_big_cores 一律返回 False
+        _kernel32.SetProcessDefaultCpuSets.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.ULONG),
+                                                       wintypes.ULONG]
+        _kernel32.SetProcessDefaultCpuSets.restype = wintypes.BOOL
+    except AttributeError:
+        pass
+    _kernel32.IsProcessorFeaturePresent.argtypes = [wintypes.DWORD]
+    _kernel32.IsProcessorFeaturePresent.restype = wintypes.BOOL
     # 一次拿全各逻辑处理器的效率等级（大小核分组）；先传 NULL/0 拿要的长度
     _kernel32.GetSystemCpuSetInformation.argtypes = [ctypes.c_void_p, wintypes.ULONG,
                                                      ctypes.POINTER(wintypes.ULONG), wintypes.HANDLE, wintypes.ULONG]
@@ -177,6 +219,8 @@ if os.name == "nt":
     _user32.EnumDisplayDevicesW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, ctypes.POINTER(DISPLAY_DEVICEW),
                                             wintypes.DWORD]
     _user32.EnumDisplayDevicesW.restype = wintypes.BOOL
+    _user32.EnumDisplaySettingsW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, ctypes.POINTER(DEVMODEW)]
+    _user32.EnumDisplaySettingsW.restype = wintypes.BOOL
     try:  # 读屏幕时本线程临时按每块屏幕的缩放（Windows 10 1607 起）；老系统上没有：displays 照旧读，标明没按实际缩放读
         _user32.SetThreadDpiAwarenessContext.argtypes = [ctypes.c_void_p]  # DPI_AWARENESS_CONTEXT 是句柄一类的值
         _user32.SetThreadDpiAwarenessContext.restype = ctypes.c_void_p
@@ -209,6 +253,7 @@ if os.name == "nt":
         _powrprof.PowerGetActiveScheme.restype = wintypes.DWORD
 
 _high_logged = False  # 声明高性能出过错、已经记进错误记录：之后再出错不再记
+_big_logged = False  # 改用大核出过错、已经记进错误记录：之后再出错不再记（同 _high_logged）
 
 
 def declare_high_performance() -> bool:
@@ -266,6 +311,136 @@ def priority_class() -> str | None:
     return PRIORITY_NAMES.get(value, hex(value))
 
 
+def reset_priority() -> bool:
+    """把本进程的优先级类别设回正常（NORMAL_PRIORITY_CLASS）：任务管理器的效率模式会把进程放到「低于正常」。
+    返回成没成；不是 Windows、或设不上、调用出错时返回 False。"""
+    if _kernel32 is None:
+        return False
+    try:
+        return bool(_kernel32.SetPriorityClass(_kernel32.GetCurrentProcess(), 0x20))
+    except Exception:  # noqa: BLE001  设不上不影响识别和界面
+        return False
+
+
+def affinity_counts() -> tuple[int, int] | None:
+    """本进程能用几个逻辑处理器、系统一共几个（GetProcessAffinityMask，数掩码里的 1）：后者大于前者时本进程被限制在
+    其中几个核上。读不到、任一掩码是 0（进程跨处理器组时系统返回 0）→ None。"""
+    if _kernel32 is None:
+        return None
+    try:
+        process, system = ctypes.c_size_t(), ctypes.c_size_t()
+        if not _kernel32.GetProcessAffinityMask(_kernel32.GetCurrentProcess(), ctypes.byref(process),
+                                                ctypes.byref(system)):
+            return None
+        if not process.value or not system.value:
+            return None
+        return bin(process.value).count("1"), bin(system.value).count("1")
+    except Exception:  # noqa: BLE001  读不到就不报，按 None 处理
+        return None
+
+
+def reset_affinity() -> bool:
+    """把本进程能用的核放开到系统的全部（SetProcessAffinityMask 传系统掩码）：任务管理器、别的启动方式可能把进程限制在
+    几个核上。返回成没成；读不到系统掩码、不是 Windows、设不上时返回 False。"""
+    if _kernel32 is None:
+        return False
+    try:
+        process, system = ctypes.c_size_t(), ctypes.c_size_t()
+        if not _kernel32.GetProcessAffinityMask(_kernel32.GetCurrentProcess(), ctypes.byref(process),
+                                                ctypes.byref(system)):
+            return False
+        if not system.value:
+            return False
+        return bool(_kernel32.SetProcessAffinityMask(_kernel32.GetCurrentProcess(), system.value))
+    except Exception:  # noqa: BLE001  设不上不影响识别和界面
+        return False
+
+
+def big_core_split() -> dict | None:
+    """这台电脑的大小核分组：{"big": 大核的物理核心数, "small": 小核的物理核心数, "ids": [大核的 CPU Set Id, ...]}。
+
+    效率等级（EfficiencyClass）数字大的是大核，取最大的一级当大核，其余都算小核；物理核心数按不同的 (group, core) 数。
+    没有大小核（效率等级只有一种）、读不到、逻辑处理器分成几个处理器组（group 不止一种）时为 None：处理器组各管各的
+    掩码，跨组设不了。"""
+    sets = _cpu_sets()
+    if not sets:
+        return None
+    if len({item["group"] for item in sets}) > 1:
+        return None
+    levels = {item["efficiency"] for item in sets}
+    if len(levels) < 2:
+        return None
+    top = max(levels)
+    big = [item for item in sets if item["efficiency"] == top]
+    small = [item for item in sets if item["efficiency"] != top]
+    return {"big": len({(item["group"], item["core"]) for item in big}),
+            "small": len({(item["group"], item["core"]) for item in small}),
+            "ids": [item["id"] for item in big]}
+
+
+def has_big_cores() -> bool:
+    """这台电脑能不能「只用大核」：big_core_split 分得出大小核（设置窗口里有没有这一项）。"""
+    return big_core_split() is not None
+
+
+def on_small_cores(gain) -> bool | None:
+    """性能自检比出来的只用大核的收益 gain（不限制的中位毫秒 ÷ 只用大核的中位毫秒）说明了什么：到了 BIG_CORE_GAIN_MIN 为
+    True（文字识别被排到了小核，只用大核有用）；比过、不到分界为 False（本来就在大核上，只用大核没用）；没比过（None）、
+    不是数时为 None。纯函数。"""
+    if isinstance(gain, bool) or not isinstance(gain, (int, float)) or not math.isfinite(gain):
+        return None
+    return gain >= BIG_CORE_GAIN_MIN
+
+
+def use_big_cores(on: bool) -> bool:
+    """本进程默认只用大核（SetProcessDefaultCpuSets 传大核的 CPU Set Id），on 为假时放开、让系统自己安排（传 None, 0）。
+    返回成没成；on 为真而 big_core_split() 是 None 时返回 False。设不上只记一次错误记录（同 declare_high_performance）。
+    只改本进程自己的默认处理器集合，不碰别的进程。"""
+    global _big_logged
+    if _kernel32 is None:
+        return False
+    ids = None
+    if on:
+        split = big_core_split()
+        if split is None:
+            return False
+        ids = split["ids"]
+    try:
+        if ids:
+            buffer = (wintypes.ULONG * len(ids))(*ids)
+            ok = bool(_kernel32.SetProcessDefaultCpuSets(_kernel32.GetCurrentProcess(), buffer, len(ids)))
+        else:
+            ok = bool(_kernel32.SetProcessDefaultCpuSets(_kernel32.GetCurrentProcess(), None, 0))
+        detail = "" if ok else f"SetProcessDefaultCpuSets 没有设上，错误代码 {ctypes.get_last_error()}"
+    except Exception:  # noqa: BLE001  设不上不影响识别和界面
+        ok, detail = False, "SetProcessDefaultCpuSets 出错：\n" + traceback.format_exc()
+    if not ok and not _big_logged:
+        _big_logged = True
+        log_error("改用大核出错（拾星助手仍在运行）", detail, append=True)
+    return ok
+
+
+def lacks_avx2() -> bool:
+    """确实没有 AVX2 才为真：文字识别（onnxruntime）靠它提速，没有的处理器读一次慢好几倍。
+
+    IsProcessorFeaturePresent(40) 为真 → False。否则 IsProcessorFeaturePresent(39)（AVX）为真 → True：系统认得这两个
+    编号，处理器有 AVX 没 AVX2。两个都假时分不清是处理器太老还是系统太老（老版本 Windows 不认这两个编号，一律返回假），
+    只有 Windows 11（build 22000 起）才返回 True，否则 False。出错 → False。"""
+    if _kernel32 is None:
+        return False
+    try:
+        if _kernel32.IsProcessorFeaturePresent(40):
+            return False
+        if _kernel32.IsProcessorFeaturePresent(39):
+            return True
+    except Exception:  # noqa: BLE001  查不了按有 AVX2 处理，不冤枉这台电脑
+        return False
+    try:
+        return int(sys.getwindowsversion().build) >= 22000
+    except Exception:  # noqa: BLE001  读不到系统版本按有 AVX2 处理
+        return False
+
+
 # ---------------------------------------------------------------- 电脑配置（诊断包用）
 
 
@@ -300,6 +475,16 @@ def _cpu_name() -> str | None:
     except Exception:  # noqa: BLE001  读不到就不报，按 None 处理
         return None
     return name or None
+
+
+def cpu_label() -> str | None:
+    """设置窗口「只用大核」一项写的处理器名称：注册表里的名称（_cpu_name）去掉商标记号（CPU_MARKS：(R)、(TM)、®、™），
+    连续的空白并成一个空格，例如「13th Gen Intel(R) Core(TM) i9-13980HX」写成「13th Gen Intel Core i9-13980HX」。
+    读不到、去掉以后什么都不剩 → None。只读注册表。"""
+    name = _cpu_name()
+    if not name:
+        return None
+    return " ".join(CPU_MARKS.sub(" ", name).split()) or None
 
 
 def _cpu_sets() -> list[dict] | None:
@@ -455,8 +640,9 @@ def _guid_text(guid: GUID) -> str:
 
 
 def displays() -> list | None:
-    """这台电脑的显示器（EnumDisplayMonitors + GetMonitorInfoW + GetDpiForMonitor）：每块 {width、height、scale、
-    primary}，主屏排第一。读不到 → None。
+    """这台电脑的显示器（EnumDisplayMonitors + GetMonitorInfoW + GetDpiForMonitor + EnumDisplaySettingsW）：每块
+    {width、height、scale、refresh、primary}，主屏排第一。refresh 是这块屏幕当前的刷新率（整数 Hz；读不到、或系统报 0、1
+    （硬件默认）时为 None）。
 
     读的时候本线程临时按每块屏幕的缩放运行（_per_monitor_dpi），读完切回。不是按每块屏幕的缩放运行的线程（「替代高 DPI
     缩放行为」被改过时整个进程都是这样）读到的是系统按缩放换算过的大小，缩放一律是 100%，例如 150% 缩放的 3840×2160
@@ -475,6 +661,7 @@ def displays() -> list | None:
                 item = {"width": info.rcMonitor.right - info.rcMonitor.left,
                         "height": info.rcMonitor.bottom - info.rcMonitor.top,
                         "scale": _monitor_scale(hmonitor) if exact else None,
+                        "refresh": _monitor_refresh(info.szDevice),
                         "primary": bool(info.dwFlags & MONITORINFOF_PRIMARY)}
                 if not exact:
                     item["virtualized"] = True
@@ -545,6 +732,23 @@ def _monitor_scale(hmonitor) -> int | None:
         return round(dpi_x.value / 96 * 100) or None
     except Exception:  # noqa: BLE001  读不到就不写缩放
         return None
+
+
+def _monitor_refresh(device) -> int | None:
+    """这块屏幕（MONITORINFOEXW 的 szDevice 设备名）当前的刷新率（EnumDisplaySettingsW 的 dmDisplayFrequency，整数 Hz）。
+    读不到、系统报 0 或 1（微软文档：硬件默认）时为 None。老系统、假的 user32 里没有这个函数时也是 None，不抛错。"""
+    enum = getattr(_user32, "EnumDisplaySettingsW", None)
+    if enum is None:
+        return None
+    try:
+        mode = DEVMODEW()
+        mode.dmSize = ctypes.sizeof(mode)
+        if not enum(device, ENUM_CURRENT_SETTINGS, ctypes.byref(mode)):
+            return None
+        value = int(mode.dmDisplayFrequency)
+    except Exception:  # noqa: BLE001  读不到就不写刷新率
+        return None
+    return value if value > 1 else None
 
 
 def gpus() -> list | None:
@@ -692,13 +896,15 @@ def _displays_line(items) -> str:
 
 
 def _display_text(item) -> str:
-    """一块屏幕：「3840×2160（150%，主屏）」；缩放读不到写「缩放读不到」，没能按每块屏幕的缩放读的（virtualized）另写
-    一句宽高可能是换算后的。"""
+    """一块屏幕：「3840×2160（150%，主屏，144 Hz）」；缩放读不到写「缩放读不到」，没能按每块屏幕的缩放读的
+    （virtualized）另写一句宽高可能是换算后的；刷新率读不到时不写这一项。"""
     notes = [f"{item['scale']}%" if item.get("scale") else "缩放读不到"]
     if item.get("virtualized"):
         notes.append("分辨率可能是按缩放换算后的")
     if item.get("primary"):
         notes.append("主屏")
+    if item.get("refresh"):
+        notes.append(f"{item['refresh']} Hz")
     return f"{item['width']}×{item['height']}（{'，'.join(notes)}）"
 
 

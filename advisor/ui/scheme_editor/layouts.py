@@ -124,7 +124,7 @@ def build(ed, kit=PLAIN_KIT) -> None:
 
 
 def build_mine(ed, kit, right: QVBoxLayout) -> None:
-    """我的方案的编辑区：名称、作者、目标流派（只显示）和它的说明、说明；下面是搜索行和对不上的筹码。"""
+    """我的方案的编辑区：名称、作者、目标流派（只显示）和它的说明、说明、适用地图；下面是搜索行和对不上的筹码。"""
     ed.mine_box = QWidget()
     col = QVBoxLayout(ed.mine_box)
     col.setContentsMargins(0, 0, 0, 0)
@@ -151,6 +151,7 @@ def build_mine(ed, kit, right: QVBoxLayout) -> None:
     lay.addWidget(_plain_label(NOTE_LABEL, "field"))
     lay.addWidget(ed.note_edit, 1)
     col.addWidget(row)
+    col.addWidget(ed.maps_box)
     right.addWidget(ed.mine_box)
 
     right.addWidget(ed._make_search(kit))
@@ -196,7 +197,7 @@ def build_chip_list(ed, kit, right: QVBoxLayout) -> None:
 def build_tabs(ed, kit=PILL_KIT) -> None:
     """游戏内风格的排法（side_tabs）：左上角「返回」（皮肤自己画外框时），左边白色导航栏里从上往下是角色下拉框和它的
     说明、方案页签（方案列表画成页签，_SchemeTabDelegate）、新建 / 复制 / 删除；右边深灰面板里是编辑区卡片（名称、作者、
-    说明、目标流派，标题写成橙色小标签）、搜索行、筹码列表卡片（列表上方的说明在卡片里）、软锁提示（黑底黄字、「!」
+    说明、目标流派、适用地图，标题写成橙色小标签）、搜索行、筹码列表卡片（列表上方的说明在卡片里）、软锁提示（黑底黄字、「!」
     圆标）和规则提示，最下面一行左边是删除的确认、右边「已保存」。部件的名字和默认的排法相同（别的方法按这些名字找部件）。
     一个窗口只留一个关闭按钮：自己画外框时「返回」就是关闭（close_btn 就是它），不另放「关闭」；用系统标题栏时右下角照旧
     有「关闭」。面板上直接写的说明（规则提示、对不上的筹码、删除的确认）都垫底板，导航栏上的说明垫导航栏的底色：斜带、
@@ -307,9 +308,9 @@ def build_tabs(ed, kit=PILL_KIT) -> None:
 
 
 def build_mine_tabs(ed, kit: _Kit, col: QVBoxLayout, schools=None) -> None:
-    """游戏内风格的编辑区（我的方案）：两行，第一行名称、名称的说明、作者，第二行说明、目标流派；下面复制来源和目标
-    流派的说明。每一项的标题（样式表里 #field 写成橙色小标签）在它的输入框左边。schools 给了时目标流派一栏用它建
-    （例如 _FlowTargets，它的 below 放在第二行下面），不给时为 TargetSchools。"""
+    """游戏内风格的编辑区（我的方案）：两行，第一行名称、名称的说明、作者，第二行说明、目标流派；下面复制来源，目标
+    流派的说明和适用地图并排（这一栏再放一整行就超出了矮屏幕）。每一项的标题（样式表里 #field 写成橙色小标签）在它的输入框
+    左边。schools 给了时目标流派一栏用它建（例如 _FlowTargets，它的 below 放在第二行下面），不给时为 TargetSchools。"""
     ed.mine_box = QWidget()
     box = QVBoxLayout(ed.mine_box)
     box.setContentsMargins(0, 0, 0, 0)
@@ -336,7 +337,12 @@ def build_mine_tabs(ed, kit: _Kit, col: QVBoxLayout, schools=None) -> None:
     below = getattr(ed.targets, "below", None)  # 目标流派多时挪到下面一行的说明（_FlowTargets）
     if below is not None:
         box.addWidget(below)
-    box.addWidget(ed.target_note)
+    # 适用地图和这一句说明并排：这一栏再放一整行就超出了矮屏幕，下拉框也只占一行
+    ed.maps_box.setMaximumWidth(190)  # 说明多留一点宽度，少折一行；下拉框窄，没标地图时写「通用」（MAPS_ALL_SHORT）
+    row, lay = _row(8)
+    lay.addWidget(ed.target_note, 1)
+    lay.addWidget(ed.maps_box)
+    box.addWidget(row)
     col.addWidget(ed.mine_box)
 
 # ---- 经典主题-黑（card_row）、经典主题-反色（card_column）
@@ -426,7 +432,7 @@ def game_list_side(ed, kit, col: QVBoxLayout, confirm_box: QVBoxLayout | None = 
 def build_card_row(ed, kit=GAME_KIT) -> None:
     """经典主题-黑的排法（照游戏「卡牌商店」）：顶上正中的标题页签、右上角 ×；下面一行「角色」下拉框和它的说明；再下面
     方案像卡牌横排一行（_SchemeCardDelegate），右边新建、复制、删除；最下面左边一栏靛紫网点的表单（名称、作者、说明、
-    目标流派，选中默认推荐时换成默认推荐的说明；窗口矮时在栏里上下滚动），右边是搜索行、筹码列表、软锁提示和规则提示。"""
+    目标流派、适用地图，选中默认推荐时换成默认推荐的说明；窗口矮时在栏里上下滚动），右边是搜索行、筹码列表、软锁提示和规则提示。"""
     body = game_frame(ed)
     body.setContentsMargins(26, 8, 22, 18)
     body.setSpacing(12)
@@ -478,7 +484,8 @@ def build_card_row(ed, kit=GAME_KIT) -> None:
 
 def build_mine_column(ed, kit, col: QVBoxLayout) -> None:
     """竖排的编辑区（card_row 左边一栏）：名称（右边写「最多 12 个字」）、作者、说明各占两行（标题在上、输入框在下），
-    下面复制来源、目标流派（标题单独一行，流派名的胶囊在下面一行，「按必选、推荐的筹码自动判断」再下一行）和它的说明。"""
+    下面复制来源、目标流派（标题单独一行，流派名的胶囊在下面一行，「按必选、推荐的筹码自动判断」再下一行）和它的说明、
+    适用地图。"""
     ed.mine_box = QWidget()
     box = QVBoxLayout(ed.mine_box)
     box.setContentsMargins(0, 0, 0, 0)
@@ -508,13 +515,14 @@ def build_mine_column(ed, kit, col: QVBoxLayout) -> None:
     ed.targets.hint.setWordWrap(True)
     box.addWidget(ed.targets.hint)
     box.addWidget(ed.target_note)
+    box.addWidget(ed.maps_box)
     col.addWidget(ed.mine_box)
 
 
 def build_card_column(ed, kit=GAME_KIT) -> None:
     """经典主题-反色的排法（照游戏结算界面）：顶上黑色通栏写标题、「角色」下拉框，右上角 ×；左边一列白色方案卡
     （_SchemeTileDelegate，上面一张小白卡写角色下拉框的说明，下面新建、复制、删除），右边一张大白卡片放编辑区（名称、
-    作者一行，说明、目标流派一行）、搜索行、筹码列表、软锁提示和规则提示。"""
+    作者一行，说明、目标流派一行，下面是适用地图）、搜索行、筹码列表、软锁提示和规则提示。"""
     title = _plain_label(HERO_LABEL, "railTitle")
     ed.hero_box = ed._make_hero_box()
     ed.hero_box.setObjectName("bandCombo")  # 写在黑色通栏上的下拉框（样式表另给一种底色）
@@ -579,8 +587,8 @@ def side_actions(ed, kit) -> QWidget:
 def build_side_column(ed, kit=GAME_KIT) -> None:
     """霓虹贴纸的排法：顶上一行白字黑描边的标题、右上角 ×；左边一条侧栏，从上往下是「角色」下拉框和说明、方案列表（贴纸
     卡片里，选中的一行整块星光黄，_SchemeStickerDelegate）、新建 / 复制 / 删除、名称作者说明的表单卡片（选中默认推荐时换成
-    默认推荐的说明）；右边一整列是目标流派和它的说明、搜索行、筹码列表（贴纸卡片里）、软锁提示和规则提示，最下面一行左边
-    删除的确认、右边「已保存」。目标流派属于编辑区（选中默认推荐时和左边的表单一起藏起来，_LinkedBox）。"""
+    默认推荐的说明）；右边一整列是目标流派和它的说明、适用地图、搜索行、筹码列表（贴纸卡片里）、软锁提示和规则提示，最下面
+    一行左边删除的确认、右边「已保存」。目标流派和适用地图属于编辑区（选中默认推荐时和左边的表单一起藏起来，_LinkedBox）。"""
     body = game_frame(ed)
     body.setContentsMargins(20, 0, 22, 18)
     columns = QHBoxLayout()
@@ -610,6 +618,8 @@ def build_side_column(ed, kit=GAME_KIT) -> None:
     ed.targets = TargetSchools()
     targets.addWidget(ed.targets)
     targets.addWidget(ed.target_note)
+    # 适用地图放在右边这一栏：左边侧栏只有 232 宽，再放一整行就超出了矮屏幕；这一栏的筹码列表让出这一行
+    targets.addWidget(ed.maps_box)
     ed.mine_box = _LinkedBox([targets_box])
     box = QVBoxLayout(ed.mine_box)
     box.setContentsMargins(0, 0, 0, 0)
@@ -655,7 +665,7 @@ def build_side_column(ed, kit=GAME_KIT) -> None:
 def build_tile_column(ed, kit=GAME_KIT) -> None:
     """白色海景房的排法：顶上一行标题（前面一个渐变小方块）、右上角 ×；左边一栏从上往下是「角色」下拉框和说明、一张张
     白色方案卡（选中的紫粉渐变框线，_SchemeWellDelegate）、最下面新建 / 复制 / 删除；右边是编辑区（名称、名称的说明、
-    作者一行，目标流派和它的说明，说明一行）、搜索行、筹码列表（白卡片的底，档位是滑块式的分段按钮）、软锁提示和规则提示，
+    作者一行，目标流派和它的说明，说明一行，适用地图）、搜索行、筹码列表（白卡片的底，档位是滑块式的分段按钮）、软锁提示和规则提示，
     最下面一行左边删除的确认、右边「已保存」。"""
     body = game_frame(ed)
     body.setContentsMargins(18, 0, 20, 16)
@@ -697,6 +707,7 @@ def build_tile_column(ed, kit=GAME_KIT) -> None:
     lay.addWidget(_plain_label(NOTE_LABEL, "field"))
     lay.addWidget(ed.note_edit, 1)
     box.addWidget(row)
+    box.addWidget(ed.maps_box)
     right.addWidget(ed.mine_box)
     build_default(ed, right)
     # 删除的确认放在左边一栏最下面（「删除」按钮那里，说明折行）：右边一行写不下，放在下面会把窗口撑宽
@@ -709,12 +720,12 @@ def build_tile_column(ed, kit=GAME_KIT) -> None:
 def build_tab_strip(ed, kit=GAME_KIT) -> None:
     """碳纤流光的排法：顶上一行（四色小方块、斜体粗体的标题，右上角 ×）；下面一行「角色」下拉框和它的说明；再下面方案
     列表画成一排页签（_SchemeStripDelegate：选中的那一页底下一条亮色线），右边新建、复制、删除；编辑区是两列的表单（名称、
-    作者一列，目标流派、说明一列），下面复制来源和目标流派的说明（选中默认推荐时换成默认推荐的说明）；再下面搜索行、筹码
-    列表（切角的面板里，只有它上下滚动）、软锁提示和规则提示，最下面一行左边删除的确认、右边「已保存」。按钮、搜索框、
+    作者一列，目标流派、说明一列），下面是复制来源，目标流派的说明和适用地图并排（同其他排法：放在说明后面）；再下面搜索行、
+    筹码列表（切角的面板里，只有它上下滚动）、软锁提示和规则提示，最下面一行左边删除的确认、右边「已保存」。按钮、搜索框、
     目标流派的胶囊画成切角的框（chrome.cut_corners）。部件的名字和默认的排法相同。"""
     body = game_frame(ed)
     body.setContentsMargins(22, 0, 22, 16)
-    body.setSpacing(8)
+    body.setSpacing(6)  # 比别处紧一点：编辑区多了一行适用地图，矮屏幕上才放得下
     row, lay = _row(12)
     lay.addWidget(_plain_label(HERO_LABEL, "field"))
     ed.hero_box = ed._make_hero_box()
@@ -761,7 +772,11 @@ def build_tab_strip(ed, kit=GAME_KIT) -> None:
     box.addLayout(grid)
     box.addWidget(ed.targets.below)
     box.addWidget(ed.copied_label)
-    box.addWidget(ed.target_note)
+    # 适用地图和说明并排（同其他排法：放在说明后面），这一栏再放一整行就超出了矮屏幕
+    row, lay = _row(8)
+    lay.addWidget(ed.target_note, 1)
+    lay.addWidget(ed.maps_box)
+    box.addWidget(row)
     body.addWidget(ed.mine_box)
     build_default(ed, body)
     game_list_side(ed, kit, body)

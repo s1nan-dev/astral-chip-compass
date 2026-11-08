@@ -1,0 +1,15 @@
+OpenCC 1.4.2 dictionaries (simplified Chinese to Traditional Chinese, Taiwan standard, with phrases)
+
+The character and phrase tables in data/zh_hant.json are taken from the OpenCC 1.4.2 dictionaries
+STPhrases.txt, STCharacters.txt, TWPhrases.txt, TWVariantsPhrases.txt and TWVariants.txt, from
+https://github.com/BYVoid/OpenCC (tag ver.1.4.2, data/dictionary/).
+Copyright (c) the OpenCC authors and contributors. All rights reserved.
+Licensed under the Apache License, Version 2.0 (see Apache-2.0.txt).
+
+All entries of the five dictionary files are included and combined into one JSON file. The content of the
+entries is unchanged; only their grouping and file format differ. The "names" section (game names in
+Traditional Chinese) and the "char_defaults" section (default forms of a few common characters) of that file
+are compiled by this project, not taken from OpenCC. The SHA-256 digest in that file records the game names
+it was generated from.
+
+The phrases in data/zh_hant_extra.toml are written by this project, not taken from OpenCC.

@@ -18,8 +18,9 @@ class FakeLogbook:
         self.between.append(start)
         return [r for r in self.records if str(r.get("time", "")) >= str(start)[:19]]
 
-    def record_offer(self, state, advice, offer_id):
-        self.offers.append((offer_id, tuple(e.chip.name for e in advice.evals)))
+    def record_offer(self, state, advice, offer_id, client=None):
+        item = (offer_id, tuple(e.chip.name for e in advice.evals))
+        self.offers.append(item if client is None else (*item, client))
 
     def record_pick(self, offer_id, chosen, via=None):
         self.picks.append((offer_id, chosen) if via is None else (offer_id, chosen, via))

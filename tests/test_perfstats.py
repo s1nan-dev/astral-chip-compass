@@ -78,10 +78,12 @@ class PerfStatsTest(unittest.TestCase):
         self.now = [100.0]
         self.kernel = FakeKernel()
         self._saved = (perfstats._clock, perfstats._kernel32, perfstats._counts, perfstats._since,
-                       perfstats._cpu_base, perfstats._ui_handle, perfstats._ui_handle_tried, perfstats.MAX_SAMPLES)
+                       perfstats._cpu_base, perfstats._ui_handle, perfstats._ui_handle_tried, perfstats.MAX_SAMPLES,
+                       perfstats._tallies)
         perfstats._clock = lambda: self.now[0]
         perfstats._kernel32 = self.kernel
         perfstats._counts = {}
+        perfstats._tallies = {}
         perfstats._since = None
         perfstats._cpu_base = None
         perfstats._ui_handle = None
@@ -90,7 +92,7 @@ class PerfStatsTest(unittest.TestCase):
 
     def _restore(self):
         (perfstats._clock, perfstats._kernel32, perfstats._counts, perfstats._since, perfstats._cpu_base,
-         perfstats._ui_handle, perfstats._ui_handle_tried, perfstats.MAX_SAMPLES) = self._saved
+         perfstats._ui_handle, perfstats._ui_handle_tried, perfstats.MAX_SAMPLES, perfstats._tallies) = self._saved
 
     def test_quantiles_max_sum(self):
         """分位数（最近秩法）、最大值、总和：p50 取第 ceil(0.5n) 个，p95 取第 ceil(0.95n) 个。"""
@@ -128,10 +130,28 @@ class PerfStatsTest(unittest.TestCase):
 
     def test_take_clears(self):
         perfstats.record("frame", 12.0)
+        perfstats.count("pick_grace")
         perfstats.take_period()
         got = perfstats.take_period()
         self.assertNotIn("frame", got)
         self.assertEqual([k for k in got if k != "period_s"], [])
+
+    def test_counts(self):
+        """只数次数的几样（count）归到 counts 下面（{名字: 次数}，按名字排）；一次都没数时 counts 不出现；第一次数的那一刻
+        也算这一段的开头（同 record）。"""
+        self.now[0] = 130.0
+        perfstats.count("pick_grace")
+        perfstats.count("b")
+        perfstats.count("pick_grace")
+        perfstats.record("frame", 1.0)
+        self.now[0] = 160.0
+        got = perfstats.take_period()
+        self.assertEqual(got["counts"], {"b": 1, "pick_grace": 2})
+        self.assertEqual(list(got["counts"]), ["b", "pick_grace"])
+        self.assertEqual(got["period_s"], 30.0)
+        self.assertNotIn("pick_grace", got.get("reads", {}))
+        perfstats.record("frame", 1.0)
+        self.assertNotIn("counts", perfstats.take_period())
 
     def test_period_seconds(self):
         perfstats.record("frame", 1.0)
@@ -179,6 +199,31 @@ class PerfStatsTest(unittest.TestCase):
         perfstats._kernel32 = None
         self.now[0] += 1.0
         self.assertNotIn("cpu", perfstats.take_period())
+
+    def test_cpu_ticks(self):
+        """一次取齐三项：本进程的处理器时间、整机忙的时间（总减空闲）、整机总时间。"""
+        self.kernel.values["process"] = 123
+        self.kernel.values["system"] = (1_000, 5_000)
+        self.assertEqual(perfstats.cpu_ticks(), (123, 4_000, 5_000))
+
+    def test_cpu_ticks_missing(self):
+        """不是 Windows、整机总时间为 0、某一项取不到、调用抛错时都返回 None，不往外抛。"""
+        perfstats._kernel32 = None
+        self.assertIsNone(perfstats.cpu_ticks())
+        perfstats._kernel32 = self.kernel
+        self.kernel.values["system"] = (0, 0)
+        self.assertIsNone(perfstats.cpu_ticks())
+        self.kernel.values["system"] = (1_000, 5_000)
+        self.kernel.fail.add("process")
+        self.assertIsNone(perfstats.cpu_ticks())
+        self.kernel.fail.clear()
+
+        class Boom(FakeKernel):
+            def GetSystemTimes(self, *a):
+                raise OSError("失败")
+
+        perfstats._kernel32 = Boom()
+        self.assertIsNone(perfstats.cpu_ticks())
 
     def test_never_raises(self):
         """取时钟、记一笔、取统计全都出错时不往外抛。"""

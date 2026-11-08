@@ -70,7 +70,7 @@ def records(events) -> list[dict]:
 class FakeLogbook(_FakeLogbook):
     """推荐日志的假对象（tests/support/fakes），每次推荐另记下首推：offers 里是（编号, 候选, 首推）。"""
 
-    def record_offer(self, state, advice, offer_id):
+    def record_offer(self, state, advice, offer_id, client=None):
         self.offers.append((offer_id, tuple(e.chip.name for e in advice.evals), advice.best))
 
 
@@ -124,11 +124,11 @@ class Flow(unittest.TestCase):
             mock.patch.object(pipeline, "read_chip_select", side_effect=lambda img, db, **kw: self.seen),
             mock.patch.object(pipeline, "reread_selected", return_value=None),
             mock.patch.object(pipeline, "name_strip", return_value=None),
-            mock.patch.object(pipeline, "read_hud", side_effect=lambda img, db, full=False: Hud(round=self.round)),
+            mock.patch.object(pipeline, "read_hud", side_effect=lambda img, db, full=False, **kw: Hud(round=self.round)),
             mock.patch.object(pipeline, "read_progress", side_effect=lambda img: Progress()),
             mock.patch.object(pipeline, "is_select_screen", side_effect=lambda img, db, info=None: False),
             mock.patch.object(pipeline, "read_hero", side_effect=lambda img, db: SimpleNamespace(hero=HERO)),
-            mock.patch.object(pipeline, "read_own_stars", side_effect=lambda img, who: None),
+            mock.patch.object(pipeline, "read_own_stars", side_effect=lambda img, who, **kw: None),
             mock.patch.object(pipeline, "read_players", return_value=None),
             mock.patch.object(pipeline, "read_chip_panel", side_effect=lambda img, db, **kw: None),
             mock.patch.object(pipeline, "read_pregame", return_value=Pregame()),
@@ -585,6 +585,8 @@ class HintsTest(Flow):
         "holding": lambda s, seen: s.holding,
         "another_select": lambda s, seen: s.starts_another_select(seen) if seen is not None else False,
         "round_known": lambda s, seen: s.settings.round is not None,
+        # 手上的轮次（轮次被挡住时只认一小块读到的数和它差得多就不直接交给记账，见 tests/test_pipeline.py 的 OccludedIdleTest）
+        "round_now": lambda s, seen: s.settings.round,
         # 三选一正要按关掉处理（这一帧看不看「您当前正处于隐藏UI状态」，见 tests/test_select_hidden.py）
         "select_closing": lambda s, seen: s.select.closing,
         # 三选一刚出现、还没给过推荐（读得不完整时先重读三张卡、读左上角排在后面，见 tests/test_pipeline.py 的
@@ -595,6 +597,8 @@ class HintsTest(Flow):
         # CoveredTest）；最近一次交来的读数记下了绿框选中的另一张（识别流程留下记下它用的那一帧）
         "select_told": lambda s, seen: s.select.told,
         "select_noted": lambda s, seen: s.select.noted,
+        # 已经当作不在对局里了（连着 quiet_ms 看不到对局读数，见 tests/test_pipeline.py 的 OutOfGameFlowTest）
+        "game_quiet": lambda s, seen: s.game_quiet is True,
     }
 
     def assert_matches(self, session, seen=None):

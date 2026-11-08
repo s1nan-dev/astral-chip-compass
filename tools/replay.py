@@ -31,7 +31,7 @@
       .venv\\Scripts\\python tools\\replay.py [起始角色] 截图1 截图2 ...  只回放、打印，不核对
 默认回放要识别样本：samples 里的截图和 labels.json、stars_labels.json（不随仓库发布，准备方法见
 docs/测试指南.md「准备识别样本」），缺了先说明缺哪个文件，以退出码 2 结束。五段按文件名里的拍摄时刻（第二段 HHMMSS）分，
-KNOWN 也按文件名写，都是照开发时那一批样本写的；换了自己的截图时，用第二种写法按顺序回放（有 labels.json 时照它认三选一、
+只收和这五局同一天拍的（RUN_DAY），KNOWN 也按文件名写，都是照开发时那一批样本写的；换了自己的截图时，用第二种写法按顺序回放（有 labels.json 时照它认三选一、
 替用户补录，没有时按画面认、不补录）。
 """
 from __future__ import annotations
@@ -61,9 +61,13 @@ STEP = 4.0  # 帧与帧之间的秒数
 SAME_SELECT = 40  # 两张三选一的拍摄时间相差不到这么多秒，算同一次三选一（重选、选中；样本里相差 9~30 秒）
 START_HERO = "邦妮"  # 故意设错，看能不能自动改对
 
-# 默认回放的五段：（说明，样本文件名的筛选；文件名里的拍摄时间 HHMMSS 落在哪个范围）
+# 默认回放的五段：（说明，样本文件名的筛选；文件名里的拍摄时间 HHMMSS 落在哪个范围）。五段都是同一天拍的（文件名第一段
+# RUN_DAY）；别的日子补进 samples 的单张截图（测别的识别用）不进这五段，免得按时刻落进某一局中间、被当成这一局的画面
+RUN_DAY = "20261002"
+
+
 def _between(lo: str, hi: str):
-    return lambda name: lo <= name[9:15] <= hi
+    return lambda name: name[:8] == RUN_DAY and lo <= name[9:15] <= hi
 
 
 RUNS = [
@@ -193,7 +197,7 @@ def same_select(a: Path, b: Path, labels: dict | None = None) -> bool:
 
 
 def is_chip_select(path: Path, img, labels: dict) -> bool:
-    """这张图是不是三选一。有标注时按标注（战斗画面也能通过 looks_like_overlay_screen 的预筛）。"""
+    """这张图是不是三选一。有标注时按标注（looks_like_overlay_screen 只是便宜的预筛，返回 True 不代表一定是）。"""
     scene = labels.get(path.name, {}).get("scene")
     return scene.startswith("chip_select") if scene else looks_like_overlay_screen(img)
 

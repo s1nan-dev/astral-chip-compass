@@ -519,7 +519,7 @@ class PipelineCoinsTest(unittest.TestCase):
         patches = [
             mock.patch.object(pipeline, "looks_like_overlay_screen", side_effect=lambda img: self.seen is not None),
             mock.patch.object(pipeline, "read_chip_select", side_effect=lambda img, db, **kw: self.seen),
-            mock.patch.object(pipeline, "read_hud", side_effect=lambda img, db, full: Hud(round=self.round)),
+            mock.patch.object(pipeline, "read_hud", side_effect=lambda img, db, full, **kw: Hud(round=self.round)),
             mock.patch.object(pipeline, "read_progress", return_value=Progress()),
             mock.patch.object(pipeline, "is_select_screen", return_value=False),
             mock.patch.object(pipeline, "read_hero", side_effect=lambda img, db: SimpleNamespace(hero="芬妮")),
@@ -659,7 +659,7 @@ class PipelineByNameTest(unittest.TestCase):
         patches = [
             mock.patch.object(pipeline, "looks_like_overlay_screen", side_effect=lambda img: self.seen is not None),
             mock.patch.object(pipeline, "read_chip_select", side_effect=lambda img, db, **kw: self.seen),
-            mock.patch.object(pipeline, "read_hud", side_effect=lambda img, db, full: Hud(round=self.round)),
+            mock.patch.object(pipeline, "read_hud", side_effect=lambda img, db, full, **kw: Hud(round=self.round)),
             mock.patch.object(pipeline, "read_progress", return_value=Progress()),
             mock.patch.object(pipeline, "is_select_screen", return_value=False),
             mock.patch.object(pipeline, "read_hero", side_effect=lambda img, db: SimpleNamespace(hero=self.hero)),

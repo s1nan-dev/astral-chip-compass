@@ -9,20 +9,27 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from PySide6.QtCore import QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QEvent, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFontMetrics, QIcon, QPainter, QPixmap, QValidator
 from PySide6.QtWidgets import (
+    QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QListView,
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QStyle,
+    QStyleOptionComboBox,
+    QStylePainter,
+    QVBoxLayout,
     QWidget,
 )
 
-from .. import chrome, theme
+from .. import chrome, lang, theme
 from ...data import SCHOOLS
+from ..widgets import ComboRowDelegate, draw_combo_arrow
 from .notes import (
     CLOSE_BUTTON,
     COPY_BUTTON,
@@ -34,6 +41,13 @@ from .notes import (
     LOCK_NO,
     LOCK_QUESTION,
     LOCK_YES,
+    LIST_SEP,
+    MAPS_ALL,
+    MAPS_ALL_SHORT,
+    MAPS_COUNT,
+    MAPS_HINT,
+    MAPS_LABEL,
+    MAPS_TIP_CHECKED,
     NEW_BUTTON,
     SCHOOLS_LABEL,
     TARGET_HINT,
@@ -175,7 +189,7 @@ class TargetSchools(QWidget):
         lay.addWidget(_plain_label(SCHOOLS_LABEL, "field"))
         self.pills: dict[str, QLabel] = {}
         for school in SCHOOLS:
-            pill = _plain_label(school, "schoolPill")
+            pill = _plain_label(lang.t(school), "schoolPill")
             pill.hide()
             self.pills[school] = pill
             lay.addWidget(pill)
@@ -218,6 +232,238 @@ class _FlowTargets(TargetSchools):
         if not many:
             self.below.hide()
             self.hint.show()
+
+
+class MapCombo(QComboBox):
+    """适用地图的下拉多选：下拉框上写现在标了哪几张（一张都没标写「全地图通用」；标了几张、放不下时改写张数，再放不下
+    才在末尾省略），点开列出每张地图，
+    每一行前面一个勾选标记，勾一项、取消一项都发出 toggled（地图名, 是否标上）。
+
+    点开以后勾选不收起下拉列表，点在外面或按 Esc 才收起（Qt 默认点一项就收起，这里不放行那一次）。滚轮不改勾选：滚动
+    编辑区时不会把地图勾掉（同 WheelLockedCombo）。下拉列表的每一行照悬浮窗的下拉框画（ComboRowDelegate），勾选标记占
+    左边的短条那里；皮肤写了 COMBO_ARROW 时右端的三角和别的下拉框一样自己画。
+
+    set_maps 按方案里的地图勾选；方案里有一张已经结束、不再列出来的地图时，照样补一项，免得改别的地图时把这一张悄悄
+    去掉。补的那一项只属于显示着的那一套：换显示别的方案时（set_maps 的 keep_extra 为假）拿掉，结束的地图不会被标到
+    别的方案上。"""
+
+    toggled = Signal(str, bool)
+
+    def __init__(self, names, hint: str = MAPS_HINT, parent=None, display=None):
+        super().__init__(parent)
+        self._hint = hint
+        # 显示名对照（繁体界面用繁体地图名）；itemData 一律是简体地图名，勾选、存盘按它
+        self._display = display or str
+        self._keep = False  # 这一下点（勾选、取消）不收起下拉列表
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.setMinimumContentsLength(8)
+        self.setView(QListView())  # 自己建视图，才挡得住勾选时收起；行宽也另行放宽
+        self.view().setMouseTracking(True)
+        # 装在 Qt 的下拉列表自己的事件过滤之后，先于它收到：按键、松开鼠标在它收起下拉列表之前处理
+        self.view().installEventFilter(self)
+        self.view().viewport().installEventFilter(self)
+        self.view().pressed.connect(self._row_pressed)
+        self.setItemDelegate(ComboRowDelegate(self, self.itemDelegate(), None, self._row_checked))
+        draw_combo_arrow(self)
+        for name in names:
+            self._add(str(name))
+        self._listed = tuple(self.names())  # 一直列着的（能标的地图）；其余是 set_maps 补的
+        self.setCurrentIndex(-1)
+        self._refresh()
+
+    def _add(self, name: str) -> int:
+        self.addItem(self._display(name), name)
+        return self.count() - 1
+
+    def _index_of(self, name: str) -> int:
+        for row in range(self.count()):
+            if self.itemData(row) == name:
+                return row
+        return -1
+
+    def names(self) -> tuple[str, ...]:
+        """现在列着的地图，按下拉列表的先后。"""
+        return tuple(self.itemData(row) for row in range(self.count()))
+
+    def _row_checked(self, row: int) -> bool:
+        item = self.model().item(row)
+        return item is not None and item.checkState() == Qt.CheckState.Checked
+
+    def set_checked(self, name: str, on: bool) -> None:
+        """勾上或取消一项，不发信号（set_maps 用）。"""
+        row = self._index_of(name)
+        if row >= 0:
+            self.model().item(row).setCheckState(Qt.Checked if on else Qt.Unchecked)
+
+    def _toggle_row(self, row: int) -> None:
+        name = self.itemData(row)
+        if not name or not self.isEnabled():
+            return
+        self.set_checked(str(name), not self._row_checked(row))
+        self._refresh()
+        self.view().viewport().update()
+        self.toggled.emit(str(name), self._row_checked(row))
+
+    def _row_pressed(self, index) -> None:
+        """按下鼠标就勾选（或取消）这一行。Qt 的下拉列表在松开这一下时收起（当作选中了一项）：挡住那一次（_keep），
+        松开处理完以后清掉（eventFilter），下一次点在外面、按 Esc 照常收起。"""
+        if not index.isValid():
+            return
+        self._keep = True
+        self._toggle_row(index.row())
+
+    def _clear_keep(self) -> None:
+        self._keep = False
+
+    def set_maps(self, names, keep_extra: bool = True) -> None:
+        """按方案里标的地图勾选（勾选时不发信号）；不在列表里的（已经结束的地图）补一项。keep_extra 为假时（换显示
+        别的方案），先拿掉以前补的、这一套没标的项；为真时（同一套方案改了地图）留着，刚去掉的还能再点回来。"""
+        names = tuple(names)
+        if not keep_extra:
+            for name in [n for n in self.names() if n not in self._listed and n not in names]:
+                row = self._index_of(name)
+                if row >= 0:
+                    self.removeItem(row)
+        for name in names:
+            if self._index_of(str(name)) < 0:
+                self._add(str(name))
+        for name in self.names():
+            self.set_checked(name, name in names)
+        self._refresh()
+
+    def maps(self) -> tuple[str, ...]:
+        """现在勾着的地图，按下拉列表的先后。"""
+        return tuple(name for name in self.names() if self._row_checked(self._index_of(name)))
+
+    def toggle(self, name: str) -> None:
+        """按用户点这一项处理：改勾选、发 toggled。"""
+        row = self._index_of(name)
+        if row >= 0:
+            self._toggle_row(row)
+
+    def display_text(self) -> str:
+        """下拉框上写的字的全文（放不下时画出来的是 _display_text：改写张数或末尾省略）。"""
+        return self._maps_text()
+
+    def set_enabled(self, on: bool) -> None:
+        self.setEnabled(on)
+
+    def _maps_text(self) -> str:
+        maps = [self._display(name) for name in self.maps()]
+        return LIST_SEP.join(maps) if maps else MAPS_ALL
+
+    def _display_text(self, width: int) -> str:
+        """下拉框上画的字：放得下写全；标了几张、放不下时写张数（MAPS_COUNT），张数也放不下才在末尾省略。只标了一张时
+        照旧省略地图名（前几个字比「1 张」更看得出是哪一张）。一张都没标、「全地图通用」放不下时写「通用」（MAPS_ALL_SHORT），
+        不省略成「全…」。"""
+        metrics, width = QFontMetrics(self.font()), max(width, 1)
+        text, maps = self._maps_text(), self.maps()
+        if len(maps) > 1 and metrics.horizontalAdvance(text) > width:
+            text = MAPS_COUNT.format(n=len(maps))
+        elif not maps and metrics.horizontalAdvance(text) > width:
+            text = MAPS_ALL_SHORT
+        return metrics.elidedText(text, Qt.ElideRight, width)
+
+    def _refresh(self) -> None:
+        """下拉框上的字、悬停说明（写明全标了哪几张，省略了也看得全）按现在的勾选重写。"""
+        self.setToolTip(self._tooltip())
+        self.update()
+
+    def _tooltip(self) -> str:
+        maps = [self._display(name) for name in self.maps()]
+        return self._hint + ("\n" + MAPS_TIP_CHECKED.format(maps=LIST_SEP.join(maps)) if maps else "")
+
+    def showPopup(self) -> None:
+        if self.currentIndex() < 0 and self.count():
+            self.setCurrentIndex(0)
+        widest = max((self.view().fontMetrics().horizontalAdvance(self.itemText(row))
+                      for row in range(self.count())), default=0)
+        self.view().setMinimumWidth(widest + 48)  # 勾选标记、两边的留白
+        super().showPopup()
+
+    def hidePopup(self) -> None:
+        if self._keep:  # 刚勾了一行：下拉列表留着，可以接着勾
+            self._keep = False
+            return
+        super().hidePopup()
+
+    def eventFilter(self, obj, event) -> bool:
+        view = self.view()
+        kind = event.type()
+        if obj is view.viewport() and kind == QEvent.MouseButtonRelease:
+            # 按在一行上勾了（_row_pressed）：Qt 处理这一下松开时要收起下拉列表，被 hidePopup 挡住；松开处理完以后清掉
+            # （按下以后拖到别处才松开、Qt 没去收起的也清掉）
+            QTimer.singleShot(0, self, self._clear_keep)
+            return False
+        if obj is view and kind == QEvent.ShortcutOverride and event.key() in (Qt.Key_Return, Qt.Key_Enter):
+            # 回车在 Qt 的下拉列表里是「选中这一项并收起」（在这一步做）：这里当普通按键，交给下面勾选
+            event.accept()
+            return True
+        if obj is view and kind == QEvent.KeyPress and event.key() in (Qt.Key_Space, Qt.Key_Return, Qt.Key_Enter):
+            self._toggle_row(max(view.currentIndex().row(), 0))
+            return True
+        return super().eventFilter(obj, event)
+
+    def wheelEvent(self, event) -> None:
+        event.ignore()
+
+    def keyPressEvent(self, event) -> None:
+        """空格、回车点开；下拉列表开着时，空格、回车勾选当前一行（不收起），上下键照常移动。"""
+        key = event.key()
+        if key in (Qt.Key_Space, Qt.Key_Return, Qt.Key_Enter):
+            if not self.view().isVisible():
+                self.showPopup()
+            else:
+                self._toggle_row(max(self.view().currentIndex().row(), 0))
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def paintEvent(self, event) -> None:
+        painter = QStylePainter(self)
+        option = QStyleOptionComboBox()
+        self.initStyleOption(option)
+        edit = self.style().subControlRect(QStyle.CC_ComboBox, option, QStyle.SC_ComboBoxEditField, self)
+        option.currentText = self._display_text(edit.width() - 2)
+        painter.drawComplexControl(QStyle.CC_ComboBox, option)
+        painter.drawControl(QStyle.CE_ComboBoxLabel, option)
+
+    def sizeHint(self) -> QSize:
+        hint = super().sizeHint()
+        return QSize(200, hint.height())
+
+    def minimumSizeHint(self) -> QSize:
+        hint = super().minimumSizeHint()
+        return QSize(96, hint.height())
+
+
+class MapField(QWidget):
+    """适用地图一栏：「适用地图」和右边一个下拉多选（MapCombo），只占一行。"""
+
+    toggled = Signal(str, bool)
+
+    def __init__(self, names, parent=None, display=None):
+        super().__init__(parent)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+        lay.addWidget(_plain_label(MAPS_LABEL, "field"))
+        self.combo = MapCombo(names, parent=self, display=display)
+        self.combo.toggled.connect(self.toggled.emit)
+        lay.addWidget(self.combo, 1)
+
+    def set_maps(self, names, keep_extra: bool = True) -> None:
+        """见 MapCombo.set_maps。"""
+        self.combo.set_maps(names, keep_extra)
+
+    def maps(self) -> tuple[str, ...]:
+        """现在勾着的地图，按下拉列表的先后。"""
+        return self.combo.maps()
+
+    def set_enabled(self, on: bool) -> None:
+        self.combo.setEnabled(on)
 
 
 class HintBox(QScrollArea):
@@ -348,7 +594,7 @@ class LockQuestion(QFrame):
 
 class _LinkedBox(QWidget):
     """编辑区（我的方案，mine_box）：显示、隐藏时连带 partners 一起。霓虹贴纸（side_column）把目标流派放在右边一栏的最上面，
-    它和左边侧栏里的名称、作者、说明同属编辑区：选中默认推荐时一起藏起来。"""
+    适用地图也在这个栏里，它们和左边侧栏里的名称、作者、说明同属编辑区：选中默认推荐时一起藏起来。"""
 
     def __init__(self, partners=()):
         super().__init__()

@@ -13,7 +13,7 @@ docs/使用说明.md 引用这些图（相对路径，GitHub 上也能显示）�
   菜单（TRAY_MENU）画在一起；菜单按 Qt 自己的「Fusion」样式画（离屏平台上 Windows 的几种样式要调系统的主题接口，画悬浮窗
   以后再画菜单会是全黑的）。
 - 不带个人信息：不读本机的设置和筹码方案文件；方案名、说明是固定的中性写法，作者不填；临时文件放在项目 .tmp 下新建的
-  文件夹里，画完删掉。
+  文件夹里，画完删掉。作业站的登录状态不读本机（凭据管理器那一层摘掉，同测试的沙箱）。
 - 只登记默认皮肤：截图都按默认皮肤画；设置窗口里「皮肤」一行只在登记了两套以上皮肤时显示，截图里也就没有这一行（使用说明
   不写皮肤：皮肤要解锁才有，说明里不提前透露）。
 - 离屏平台（offscreen），不弹窗口、不抢焦点、不截屏幕。屏幕按 1920×1080、两倍缩放配置（平台参数 configfile），图片按两倍
@@ -40,6 +40,7 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -64,14 +65,15 @@ ANCHOR_GAP = 5  # 引线的落点离开目标的边多远
 MARK_COLOR = "#e5484d"  # 编号圈、引线和框的颜色（和界面上的绿、橙、蓝、紫、金都分得开）
 HALO = "#ffffff"  # 引线和框外面一圈白边，压在深色的界面上也看得清
 
-# 局面（不含玩家昵称，不用游戏截图）。总览和「推荐」卡片（默认推荐）：芬妮在异变图书馆第 5 轮、1 星，已有普通瞄具，
+# 局面（不含玩家昵称，不用游戏截图）。总览和「推荐」卡片（默认推荐）：芬妮在异变图书馆第 6 轮、1 星，已有普通瞄具，
 # 升星或筹码商店的三选一
 HERO = "芬妮"
 MAP = "异变图书馆"
 # （最左格是 1 星升星时固定的蓝色，三选一的来源按升星或筹码商店）。「推荐」卡片特写要标出刷新那一行灰色的概率标签：刷新的
 # 结论和概率方向相反时不显示概率（ui.text.reroll_chance_hidden），局面要选两者方向一致、概率离一半较远的（这一局「预计
-# 不如」、刷出优于首推的概率约三成）；推荐算法改了以后照 shot_advice_card 报的错换局面
-LIVE = dict(round=5, star=1, owned=("普通瞄具",), offer=("银行卡-余额少", "星币锤", "缓冲盾牌"))
+# 不如」、刷出优于首推的概率 28%）；首推 82%，绿色、橙色的标签分别在第一行的两侧，三个候选都有理由标签；推荐算法改了以后
+# 照 shot_advice_card 报的错换局面
+LIVE = dict(round=6, star=1, owned=("普通瞄具",), offer=("银行卡-余额少", "星币锤", "大碗炖肉"))
 # 自己的方案：docs/使用说明.md 的例子「银行卡流」（同 tests/test_overlay_scenarios.py 的 SchemeScenarioTest）
 SCHEME_NAME = "银行卡流"
 SCHEME_NOTE = "以星光流派为主，治愈流派为辅"
@@ -90,8 +92,8 @@ PASTE_TIERS = {
 ONE_LINE = dict(round=5, star=2, coins=4)
 # 「已有筹码」卡片：第 7 轮、2 星时已有的 5 个筹码（三种稀有度都有）
 OWNED_CARD = dict(round=7, star=2, owned=("银行卡-余额少", "紫色飞星", "缓冲盾牌", "金色飞星", "普通瞄具"))
-# 托盘图标的菜单，同 Tray.setup_tray（None 为分隔线）
-TRAY_MENU = ("显示", "设置", "导出诊断", "使用说明", "关于", None, "退出")
+# 托盘图标的菜单（hub.ENABLED 关着时），同 Tray.setup_tray（None 为分隔线）
+TRAY_MENU = ("显示", "重置悬浮窗", "设置", "导出诊断", None, "退出")
 TRAY_ICON = 32  # 托盘图标画多大（逻辑像素）
 TRAY_STYLE = "Fusion"
 EDITOR_HEIGHT = 760  # 「编辑筹码方案」窗口按这么高的屏幕排（窗口不超过屏幕可用高度，列表在窗口里滚动）
@@ -143,6 +145,9 @@ def start_qt(work: Path):
     blank.mkdir()
     paths.assets_dir = lambda kind="": blank / kind if kind else blank
     paths.download_dir = paths.assets_dir  # 下载的识别图片（筹码图标）也指到空文件夹
+    from advisor import wincred
+
+    wincred._api = None  # 不读本机凭据管理器里作业站的登录信息（同 tests/support/sandbox.py 的 _block_credentials）
 
     from PySide6.QtGui import QFont, QFontDatabase
     from PySide6.QtWidgets import QApplication
@@ -226,9 +231,13 @@ class Context:
     def __init__(self, work: Path):
         from advisor.data import load_db
         from advisor.schemes import get_catalog
+        from advisor.ui.text import set_tip_names, tip_names
 
         self.work = work
         self.db = load_db()
+        # 同悬浮窗启动时（Overlay.__init__）：说明文字断行时筹码名、角色名和常用术语整体不拆。只画设置窗口这类不建悬浮窗的
+        # 几张时也设好，画出来和程序里实际显示的一样
+        set_tip_names(tip_names(self.db))
         self.catalog = get_catalog(self.db)
         self._live = None
         self._scheme_live = None
@@ -457,7 +466,7 @@ def shot_owned_card(ctx: Context):
 
 
 def shot_tray(ctx: Context):
-    """托盘图标和它的菜单（「显示」「设置」「导出诊断」「使用说明」「关于」「退出」）：程序图标在左，菜单在右，菜单外面描一圈边
+    """托盘图标和它的菜单（「显示」「重置悬浮窗」「设置」「导出诊断」「退出」）：程序图标在左，菜单在右，菜单外面描一圈边
     （离屏画的菜单没有阴影）。"""
     from PySide6.QtCore import QPoint, QRect, QRectF, QSize, Qt
     from PySide6.QtGui import QAction, QColor, QImage, QPainter, QPen
@@ -535,7 +544,7 @@ def shot_scheme_editor(ctx: Context):
     row = lst.row_rect("ATM机", ed)
     tiers = QRect(row.left() + int(m.button_x[0]), row.top() + (row.height() - m.button_h) // 2,
                   int(m.button_x[-1] + m.button_w - m.button_x[0]), m.button_h)
-    form = unite(*(rect_in(x, ed) for x in (ed.name_edit, ed.author_edit, ed.targets, ed.note_edit)))
+    form = unite(*(rect_in(x, ed) for x in (ed.name_edit, ed.author_edit, ed.targets, ed.note_edit, ed.maps_box)))
     marks = [Mark(1, rect_in(ed.hero_box, ed), "top"), Mark(2, rect_in(ed.scheme_list, ed), at=0.1),
              Mark(3, form, "right", box=True), Mark(4, unite(rect_in(ed.search_edit, ed), rect_in(ed.only_marked, ed)),
                                                    "right"),
@@ -574,19 +583,31 @@ def shot_scheme_share(ctx: Context):
 
 
 def shot_settings(ctx: Context):
-    """「拾星助手设置」窗口（自动模式、热键 F8、直接截取游戏窗口：没有「识别画面」一项）。"""
+    """「拾星助手设置」窗口（自动模式、热键 F8、直接截取游戏窗口：没有「识别画面」一项）。各行按先后标编号，最后一个
+    编号标最下面一行开关说明下面能点的「我的统计」几个字。
+
+    画的时候不限窗口高度：1920×1080 的屏幕放不下窗口的全部内容，按屏幕高度截断的话最下面的「隐私与数据」一组被截掉、
+    右边出滚动条。只在这一张里临时换掉 max_height（同 tests/test_settings_window.py 的做法），画完换回来。
+    「只用大核」一行只在有大小核的电脑上有，图上不画，出图的电脑有大小核时也一样。
+    """
+    from advisor import sysinfo
     from advisor.ui.overlay_parts.app import SimpleCapture
     from advisor.ui.settings import SettingsDialog, SettingsValues
 
-    dialog = SettingsDialog(SimpleCapture("window"), found=True, values=SettingsValues())
-    if "skin" in dialog.rows:
-        raise RuntimeError("设置窗口里有「皮肤」一行：只登记默认皮肤以后再画")
-    dialog.show()
-    settle()
-    marks = [Mark(i, rect_in(dialog.rows[key].row, dialog)) for i, key in
-             enumerate(("mode", "hotkey", "lowend", "opaque", "export", "update", "about"), 1)]
-    image = grab(dialog)
-    dialog.close()
+    with mock.patch.object(SettingsDialog, "max_height", lambda dialog: 5000), \
+            mock.patch.object(sysinfo, "has_big_cores", return_value=False):
+        dialog = SettingsDialog(SimpleCapture("window"), found=True, values=SettingsValues())
+        if "skin" in dialog.rows:
+            raise RuntimeError("设置窗口里有「皮肤」一行：只登记默认皮肤以后再画")
+        dialog.show()
+        settle()
+        # 「界面语言」只在繁体界面打开时有（lang.HANT_ENABLED），没有时后面的编号往前挪
+        keys = [key for key in ("platform", "mode", "hotkey", "lowend", "opaque", "ui_lang", "export", "update",
+                                "about", "report") if key in dialog.rows]
+        marks = [Mark(i, rect_in(dialog.rows[key].row, dialog)) for i, key in enumerate(keys, 1)]
+        marks.append(Mark(len(marks) + 1, rect_in(dialog.stats_link, dialog)))
+        image = grab(dialog)
+        dialog.close()
     return image, marks, None
 
 

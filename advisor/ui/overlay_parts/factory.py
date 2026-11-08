@@ -2,7 +2,7 @@
 以及悬浮窗自己画的面板（_Panel）和图标在上、字在下的按钮（IconTextButton）。"""
 from __future__ import annotations
 
-from PySide6.QtCore import QRectF, QSize, Qt
+from PySide6.QtCore import QEvent, QRectF, QSize, Qt
 from PySide6.QtGui import QColor, QIcon, QPainter, QTextDocument
 from PySide6.QtWidgets import (
     QFrame,
@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import theme
-from ..glyphs import draw_glyph, glyph_font
+from ..glyphs import ICON_BOOK, draw_glyph, glyph_font, glyph_width
 from ..text import keep_words, plain_words, tip_html, tip_paragraphs_html
 from ..theme import COMMON as C
 from ..theme import OVERLAY as O
@@ -94,6 +94,22 @@ def _fill_grid(grid: QGridLayout, widgets: list[QWidget], width: int) -> None:
     for i, w in enumerate(widgets):
         grid.addWidget(w, i // cols, i % cols)
         w.show()
+
+
+def _equal_width(buttons: list[QPushButton]) -> None:
+    """几个按钮一样宽，并且每个都不少于按它的字体写三个汉字的宽度：一个字的按钮（〔换〕〔不换〕）也好点。按钮文字以外的
+    内边距按 sizeHint().width() 减去文字本身的宽度量（各套皮肤的字号、内边距不同，不写死像素）。按钮要先放进悬浮窗，
+    按它的样式表量。"""
+    widths = []
+    for btn in buttons:
+        btn.ensurePolished()
+        fm = btn.fontMetrics()
+        natural = btn.sizeHint().width()
+        pad = max(natural - fm.horizontalAdvance(btn.text()), 0)
+        widths.append(max(natural, pad + fm.horizontalAdvance("三个字")))
+    width = max(widths, default=0)
+    for btn in buttons:
+        btn.setFixedWidth(width)
 
 
 def _row_widget(spacing: int = 6) -> tuple[QWidget, QHBoxLayout]:
@@ -390,14 +406,16 @@ class _Panel(QFrame):
 
 
 class IconTextButton(QPushButton):
-    """图标在上、字在下的按钮（「筹码方案」卡片的「编辑方案」「导入/导出」，跨两行）。底色、框线、悬停和按下的效果照样式表画
-    （悬浮窗样式表的 QPushButton 和 #iconText），图标（系统图标字体，settings.draw_glyph）和字自己画，上下居中；系统里没有图标
-    字体时只写字。按钮文字就是 text()。图标编号见 SCHEME_EDIT_ICON、SCHEME_SHARE_ICON，大小、颜色、内边距见皮肤的
-    SCHEME_TOOL_*。"""
+    """图标在上、字在下的按钮（「筹码方案」卡片的「编辑方案」「导入/导出」「作业站」，跨两行）。底色、框线、悬停和按下的效果照
+    样式表画（悬浮窗样式表的 QPushButton 和 #iconText），图标（系统图标字体，settings.draw_glyph）和字自己画：按钮文字可以
+    分几行写（text() 里的换行），每行水平居中，图标加几行字整块上下居中；系统里没有图标字体时系统图标只写字，自己画的
+    书（ICON_BOOK）照样画。按钮文字就是 text()。并排的几个按钮可以一样宽（same_width：都取其中最宽的一个）。
+    图标编号见 SCHEME_EDIT_ICON、SCHEME_SHARE_ICON、SCHEME_HUB_ICON，大小、颜色、内边距见皮肤的 SCHEME_TOOL_*。"""
 
-    def __init__(self, code: int, text: str, tip: str = ""):
+    def __init__(self, code: int | str, text: str, tip: str = ""):
         super().__init__(text)
         self.code = code
+        self.peers: tuple[IconTextButton, ...] = ()  # same_width 的一组（含自己）；为空时宽度只看自己
         self.setObjectName("iconText")
         self.setCursor(Qt.PointingHandCursor)
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)  # 撑满两行
@@ -407,19 +425,44 @@ class IconTextButton(QPushButton):
 
         chrome.cut_corners(self)  # 皮肤要切角时（碳纤流光）底画成切角的框；别的皮肤照样式表画
 
+    def lines(self) -> list[str]:
+        """按钮上的字按换行分开的几行。"""
+        return self.text().split("\n")
+
     def _icon_height(self) -> int:
-        """图标占的高度（含图标和字之间的空隙）；没有图标字体时为 0。"""
-        return O.SCHEME_TOOL_ICON_PX + O.SCHEME_TOOL_GAP if glyph_font(O.SCHEME_TOOL_ICON_PX) is not None else 0
+        """图标占的高度（含图标和字之间的空隙）；没有图标字体时为 0（自己画的书不看图标字体，照样留出这一行）。"""
+        return (O.SCHEME_TOOL_ICON_PX + O.SCHEME_TOOL_GAP
+                if self.code == ICON_BOOK or glyph_font(O.SCHEME_TOOL_ICON_PX) is not None else 0)
+
+    @staticmethod
+    def same_width(*buttons: IconTextButton) -> None:
+        """这几个按钮一样宽：每个都取其中最宽的一个的宽度（natural_width）。换皮肤、字号变了时一起重算。"""
+        for button in buttons:
+            button.peers = buttons
+            button.updateGeometry()
+
+    def natural_width(self) -> int:
+        """只按自己的字和图标算的宽度：最宽的一行字或图标，加左右内边距和框线。"""
+        self.ensurePolished()  # 字号在样式表里
+        pad_x = O.SCHEME_TOOL_PADDING[0]
+        icon_w = glyph_width(self.code, O.SCHEME_TOOL_ICON_PX)
+        return max(max(self.fontMetrics().horizontalAdvance(line) for line in self.lines()), icon_w) + 2 * pad_x + 2
 
     def sizeHint(self) -> QSize:
         self.ensurePolished()  # 字号在样式表里
-        fm = self.fontMetrics()
-        pad_x, pad_y = O.SCHEME_TOOL_PADDING
-        width = max(fm.horizontalAdvance(self.text()), O.SCHEME_TOOL_ICON_PX) + 2 * pad_x + 2
-        return QSize(width, self._icon_height() + fm.height() + 2 * pad_y + 2)
+        pad_y = O.SCHEME_TOOL_PADDING[1]
+        width = max((b.natural_width() for b in self.peers if _alive(b)), default=self.natural_width())
+        return QSize(width, self._icon_height() + self.fontMetrics().lineSpacing() * len(self.lines()) + 2 * pad_y + 2)
 
     def minimumSizeHint(self) -> QSize:
         return self.sizeHint()
+
+    def changeEvent(self, event) -> None:
+        super().changeEvent(event)
+        if event.type() in (QEvent.FontChange, QEvent.StyleChange):  # 自己的宽度变了：同一组的按钮也跟着重算
+            for peer in self.peers:
+                if peer is not self and _alive(peer):
+                    peer.updateGeometry()
 
     def paintEvent(self, event) -> None:
         p = QStylePainter(self)
@@ -431,10 +474,13 @@ class IconTextButton(QPushButton):
         fill = QColor(O.SCHEME_TOOL_COLOR if self.isEnabled() else O.SCHEME_TOOL_DISABLED)
         fm = self.fontMetrics()
         icon_h = self._icon_height()
-        top = (self.height() - icon_h - fm.height()) / 2
+        line_h = fm.lineSpacing()
+        top = (self.height() - icon_h - line_h * len(self.lines())) / 2
         if icon_h:
             draw_glyph(p, QRectF(0, top, self.width(), O.SCHEME_TOOL_ICON_PX), self.code, O.SCHEME_TOOL_ICON_PX, fill)
         p.setFont(self.font())
         p.setPen(fill)
-        p.drawText(QRectF(0, top + icon_h, self.width(), fm.height()), Qt.AlignHCenter | Qt.AlignVCenter, self.text())
+        for i, line in enumerate(self.lines()):
+            p.drawText(QRectF(0, top + icon_h + i * line_h, self.width(), line_h),
+                       Qt.AlignHCenter | Qt.AlignVCenter, line)
         p.end()

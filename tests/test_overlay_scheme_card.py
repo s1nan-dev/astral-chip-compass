@@ -18,6 +18,7 @@ from PySide6.QtCore import QPointF, Qt, QSize, QRect, Signal, QPoint  # noqa: E4
 from PySide6.QtGui import QGuiApplication, QColor, QPalette, QWheelEvent, QFont  # noqa: E402
 from PySide6.QtWidgets import QLabel, QWidget, QComboBox, QHBoxLayout  # noqa: E402
 from advisor import gamelog  # noqa: E402
+from advisor import hub  # noqa: E402
 from advisor import paths as app_paths  # noqa: E402
 from advisor import schemes as schemes_mod  # noqa: E402
 from advisor.schemes import get_catalog, LoadNotice, default_schools, SchemeStore, Scheme  # noqa: E402
@@ -32,6 +33,7 @@ from advisor.ui.overlay_parts.wording import RUNNING_BIT
 from advisor.ui.overlay_parts.wording import SCHEME_DEFAULT_TIP_TIERS
 from advisor.ui.overlay_parts.wording import SCHEMES_UNSAVED, SCHEME_BOX_TIP, HERO_UNRECORDED, SCHEME_UNRECORDED_TIP, STORAGE_FALLBACK, HERO_BOX_TIP, LIVE_TIP, CARD_KEYS, HERO_PAUSED_TIP, SCHEME_EDIT_TIP, SHARE_TIP, HERO_PENDING_TIP, SCHEMES_NOTICE, DEFAULT_REL, SCHEME_SWITCHED, HERO_AUTO_TIP
 from advisor.ui.overlay_parts.wording import ADVICE_BASIS_MANUAL_TIP, ADVICE_BASIS_TIP, SCHEME_SET
+from advisor.ui.overlay_parts.wording import HUB_BTN, HUB_TIP, SCHEME_EDIT, SHARE_BTN
 from advisor.ui.text import advice_summary, breakdown_html, advice_text
 from advisor.ui.overlay_parts.app import UiSettings, OverlaySession
 from advisor.ui.overlay_parts.geometry import live_placement
@@ -90,11 +92,12 @@ class FakeSchemeWindow(QWidget):
 class SchemeCardTest(unittest.TestCase):
     """「筹码方案」卡片和相关的界面：「识别」卡片没有角色下拉框，
     角色胶囊是状态胶囊的第二项；「识别」下面是「筹码方案」卡片（角色下拉框在上、方案下拉框在下，「编辑方案」「导入/导出」
-    两个按钮跨两行，下拉框都不加颜色，标题行不加胶囊）；方案下拉框只列当前角色的方案；切换方案后按当前三选一立即重算；编辑窗口、
+    「作业站」三个按钮跨两行，下拉框都不加颜色，标题行不加胶囊）；方案下拉框只列当前角色的方案；切换方案后按当前三选一立即重算；编辑窗口、
     导入/导出窗口的接线；方案文件和个人目录的提示；方案名、说明里的网页标记原样显示。方案文件放在项目 .tmp 下。"""
 
     def setUp(self):
         self.db = load_db()
+        self.enterContext(mock.patch.object(hub, "ENABLED", True))
         self.session = OverlaySession(self.db, UiSettings(hero="芬妮"))
         self.session.game.seen_hero = "芬妮"
         self.logbook = FakeLogbook()
@@ -174,9 +177,10 @@ class SchemeCardTest(unittest.TestCase):
             self.assertNotIn("左侧下拉框", tip)
 
     def test_scheme_card_layout(self):
-        """「筹码方案」卡片：角色下拉框在上、方案下拉框在下，等宽、左对齐；右边并排「编辑方案」「导入/导出」两个按钮，
-        高度都等于方案下拉框下沿减角色下拉框上沿（误差 ≤ 1 像素，即两个下拉框加中间的间距）；卡片在「识别」和「推荐」之间；
-        标题行除了折叠按钮不加别的部件（不加「角色 待识别」胶囊）。这一组另在 QT_SCALE_FACTOR=1.5 下跑一次。"""
+        """「筹码方案」卡片：角色下拉框在上、方案下拉框在下，等宽、左对齐；右边并排「编辑方案」「导入/导出」
+        「作业站」三个按钮，高度都等于方案下拉框下沿减角色下拉框上沿（误差 ≤ 1 像素，即两个下拉框加中间的间距）；卡片在
+        「识别」和「推荐」之间；标题行除了折叠按钮不加别的部件（不加「角色 待识别」胶囊）。这一组另在
+        QT_SCALE_FACTOR=1.5 下跑一次。"""
         w = self.window
         w.set_expanded(True)
         w.show()
@@ -185,12 +189,12 @@ class SchemeCardTest(unittest.TestCase):
         self.assertEqual((hero.left(), hero.width()), (scheme.left(), scheme.width()))
         self.assertGreater(scheme.top(), hero.bottom())  # 上下排，中间有间距
         left = hero.right()
-        for btn, text in ((w.edit_btn, "编辑方案"), (w.share_btn, "导入/导出")):
+        for btn, text in ((w.edit_btn, SCHEME_EDIT), (w.share_btn, SHARE_BTN), (w.hub_btn, HUB_BTN)):
             with self.subTest(button=text):
                 g = btn.geometry()
                 self.assertLessEqual(abs(g.height() - (scheme.bottom() - hero.top())), 1, (g, hero, scheme))
                 self.assertEqual(g.top(), hero.top())
-                self.assertGreater(g.left(), left)  # 从左到右：下拉框、「编辑方案」、「导入/导出」
+                self.assertGreater(g.left(), left)  # 从左到右：下拉框、「编辑方案」、「导入/导出」、「作业站」
                 left = g.right()
                 self.assertEqual(btn.text(), text)
                 self.assertGreaterEqual(btn.width(), btn.sizeHint().width())
@@ -269,6 +273,7 @@ class SchemeCardTest(unittest.TestCase):
                                          "未标记的筹码按角色特性计算。对局中途可以切换，当前的三选一立即重新计算。")
         self.assertEqual(tip_text(w.edit_btn.toolTip()), SCHEME_EDIT_TIP)
         self.assertEqual(tip_text(w.share_btn.toolTip()), SHARE_TIP)
+        self.assertEqual(tip_text(w.hub_btn.toolTip()), HUB_TIP)
         self.store.add(Scheme(hero="芬妮", name="推断", tiers={"缓冲盾牌": "first", "医疗箱-完备治疗": "core"}))
         self.store.add(Scheme(hero="芬妮", name="空方案"))
         # 只标了可选、不选：列进方案的流派（星光）里没有必选、推荐，推不出目标流派
@@ -1666,14 +1671,25 @@ class AdviceBasisTest(unittest.TestCase):
                          + ADVICE_BASIS_MANUAL_TIP)
 
     def test_follows_the_advice_not_the_box(self):
-        """方案下拉框此刻的值变了、推荐还没重算时（例如方案在方案文件里换了、还没有新的推荐）：照这次推荐写。"""
+        """照这次推荐写，不跟方案下拉框此刻的值：三选一关掉以后在方案下拉框里换了一套（没有三选一可重算），全部展开回看
+        上一次推荐时照上一次的写。三选一开着时这一局用的方案变了（例如方案在方案文件里换了），刷新时立即按新方案重算
+        （Overlay._follow_scheme），这段字跟着新的推荐写，不会停在旧方案上。"""
         w = self.overlay()
         w.handle(w.session.on_frame(frame(OFFER_FENNI)))
-        other = w.store.add(Scheme(hero="芬妮", name="还没重算的"))
+        other = w.store.add(Scheme(hero="芬妮", name="换过的"))
         w.store.set_current("芬妮", other.id)
         w.refresh()
-        self.assertEqual(w.scheme_box.currentText(), "还没重算的")
-        self.assertEqual(self.basis(w), "芬妮 · 默认推荐")
+        self.assertEqual(w.scheme_box.currentText(), "换过的")
+        self.assertEqual(self.basis(w), "芬妮 · 换过的")
+        w.session.on_frame(None)
+        w.handle(w.session.on_frame(None) or Event("idle"))
+        self.assertFalse(w.live_state.on)
+        index = next(i for i, (_, sid, _) in enumerate(w.scheme.items()) if sid == "")
+        w.scheme_box.setCurrentIndex(index)
+        w.scheme_box.activated.emit(index)
+        w.set_expanded(True)
+        self.assertEqual(w.scheme_box.currentText(), "默认推荐")
+        self.assertEqual(self.basis(w), "芬妮 · 换过的")
 
     def test_hidden_when_hero_pending_or_collapsed(self):
         w = self.overlay()

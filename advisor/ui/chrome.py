@@ -35,6 +35,7 @@ from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRectF, QSize, Qt
 from PySide6.QtGui import QFont, QFontMetricsF, QGuiApplication, QPainter, QPen
 from PySide6.QtWidgets import (
     QAbstractButton,
+    QAbstractScrollArea,
     QButtonGroup,
     QFrame,
     QHBoxLayout,
@@ -45,7 +46,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import decor, theme, winapi
+from . import decor, lang, theme, winapi
 from .decor import index_font, italic_title_font  # 数字字体、斜体标题字体：定义在 decor，这里再导出
 from .theme import CHROME as K
 
@@ -892,11 +893,11 @@ class WindowHead(QWidget):
 class GameButton(QPushButton):
     """经典主题-黑、反色的按钮（decor.game_button）：kind 为种类（ChromeLook.BUTTON_KINDS 的键：primary 新建、导入一类；
     secondary 复制、更改；action 复制到剪贴板、导出诊断；plain 清空；danger 删除；note_a、note_b 交替的说明按钮；dark），
-    形状按 BUTTON_SHAPE（圆角块或平行四边形）。height 含投影；icon 为系统图标编号，画在字前面（没有图标字体时不画）。
-    danger 的皮肤要求时左边一个警告标（三角或圆标，同 WarnLabel）。"""
+    形状按 BUTTON_SHAPE（圆角块或平行四边形）。height 含投影；icon 为系统图标编号或自己画的 glyphs.ICON_BOOK，画在字
+    前面（系统图标在没有图标字体时不画，自己画的书照样画）。danger 的皮肤要求时左边一个警告标（三角或圆标，同 WarnLabel）。"""
 
-    def __init__(self, text: str, kind: str = "primary", height: int = 40, px: int = 15, icon: int | None = None,
-                 min_width: int = 0, parent=None):
+    def __init__(self, text: str, kind: str = "primary", height: int = 40, px: int = 15,
+                 icon: int | str | None = None, min_width: int = 0, parent=None):
         super().__init__(text, parent)
         self.kind, self._px, self._icon, self._min_w = kind, px, icon, min_width
         self.setCursor(Qt.PointingHandCursor)
@@ -910,8 +911,10 @@ class GameButton(QPushButton):
     def _icon_w(self) -> float:
         if self._icon is None:
             return 0.0
-        from .glyphs import glyph_font
+        from .glyphs import ICON_BOOK, glyph_font, glyph_width
 
+        if self._icon == ICON_BOOK:
+            return glyph_width(self._icon, self._px) + 8.0
         return self._px + 8.0 if glyph_font(self._px) is not None else 0.0
 
     def _badge_w(self) -> float:
@@ -947,9 +950,10 @@ class GameButton(QPushButton):
                             theme.title_font(12))
             x += badge_w
         if icon_w:
-            from .glyphs import draw_glyph
+            from .glyphs import draw_glyph, glyph_width
 
-            draw_glyph(p, QRectF(x, body.top(), self._px + 2, body.height()), self._icon, self._px, decor.qc(ink))
+            draw_glyph(p, QRectF(x, body.top(), glyph_width(self._icon, self._px) + 2, body.height()), self._icon,
+                       self._px, decor.qc(ink))
             x += icon_w
         decor.outlined_text(p, QRectF(x, body.top(), body.right() - x, body.height()), text, font, ink,
                             outline or None, max(2.5, self._px * 0.22) if outline else 0.0, align=Qt.AlignLeft)
@@ -1244,8 +1248,9 @@ def _cut_kind(widget: QWidget) -> str:
 
 class CutBox(QObject):
     """切角的框（碳纤流光）：给样式表画的按钮、标签（键帽、状态标签）先画一个切角的底（decor.cut_button，颜色按种类，
-    _cut_kind），再让部件自己画字（这一套的样式表把这些部件的底和框设成透明）。只在皮肤要切角时（ChromeLook.CHAMFER）画；
-    别的皮肤照部件自己的画法，这里什么都不做。"""
+    _cut_kind），再让部件自己画字（这一套的样式表把这些部件的底和框设成透明）。滚动区（列表、多行输入框）的字画在里面的
+    视口上、由视口自己重画，这里只接着画滚动区这一层的框（QFrame）。只在皮肤要切角时（ChromeLook.CHAMFER）画；别的皮肤照
+    部件自己的画法，这里什么都不做。"""
 
     def eventFilter(self, obj, event) -> bool:
         if event.type() != QEvent.Paint or not K.CHAMFER or not isinstance(obj, QWidget):
@@ -1257,7 +1262,12 @@ class CutBox(QObject):
         decor.cut_button(p, QRectF(obj.rect()), K, _cut_kind(obj), enabled and obj.underMouse(),
                          button and obj.isDown(), enabled)
         p.end()
-        type(obj).paintEvent(obj, event)
+        if isinstance(obj, QAbstractScrollArea):
+            # 滚动区的 paintEvent 是给视口重画用的（往视口上画）：滚动区这一层重画时视口没在重画，画不上去（Qt 报「Should no
+            # longer be called」），多行输入框有键盘焦点时画光标还会让程序崩溃。Qt 自己重画这一层时也只画 QFrame 的框
+            QFrame.paintEvent(obj, event)
+        else:
+            type(obj).paintEvent(obj, event)
         return True
 
 
@@ -1290,3 +1300,6 @@ def hint_label(text: str, color: str | None = None, pt: float | None = None) -> 
     label.setStyleSheet(f".QLabel {{ color: {color or common.DIM_COLOR}; font-size: {pt or common.FONT_S}pt; "
                         f"background: transparent; }}")
     return label
+
+
+lang.localize(globals())

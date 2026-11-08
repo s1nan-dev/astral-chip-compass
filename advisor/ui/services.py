@@ -1,19 +1,21 @@
-"""悬浮窗调用的几个外部模块：推荐日志、导出诊断、识别图片下载、版本与「关于」。
+"""悬浮窗调用的几个外部模块：推荐日志、导出诊断、识别图片下载、版本与「关于」、处理器占用的采样。
 
-这些模块（advisor/logbook.py、diagnostics.py、assets.py、version.py）由发布工程负责。悬浮窗只按约定的接口调用：
+这些模块（advisor/logbook.py、diagnostics.py、assets.py、version.py、usage.py）由发布工程负责。悬浮窗只按约定的接口调用：
   logbook      record_offer(state, advice, offer_id)、record_pick(offer_id, chosen)、
                record_feedback(offer_id, reason, note)、game_count_since_calibration()、
                records_between(start, end=None) → 这段时间的推荐日志（诊断包用）、
-               record_game_over(**info) → 记下对局结束（同一局只调一次；撤销了误认的结束时，真正结束时再调一次，
-               以后一条为准）、
+               record_game_over(**info) → 记下对局结束（同一局只调一次；撤销了误认的结束时，真正结束时再调一次；
+               胜负在结束以后才定的，定了再调一次；以后一条为准）、
                current_game()、new_game()、undo_new_game(previous_game)、resumable() → 局号（新的一局、撤销、
                皮肤解锁认局用；resumable 是这次运行还没定局号时可能接上的那一局）
   diagnostics  export(frame_bgr, snapshot, events, advice_text, extra=None, capture=None) → 诊断包目录
                （extra 为 {文件名: 记录列表}，例如 {diagnostics.LOGBOOK: 推荐日志}；capture 为截取状态，写进
                version.txt 的「截取方式」一行，不传时取后台识别正在用的）；is_frozen() → 是否为发行版；
                prune_auto_reports(spare=刚存的诊断包) → 自动保存的诊断包只留最近几份（spare 一定不删）；
-               download_fallback_reason(fallback) → 发行版下载的识别图片退回程序文件夹的原因写成一句（悬浮窗记进
-               错误记录，不含路径）
+                download_fallback_reason(fallback) → 发行版下载的识别图片退回程序文件夹的原因写成一句（悬浮窗记进
+                错误记录，不含路径）
+  usage        tick(state=None) → 界面线程每分钟记一条处理器占用（只放内存）；records() → 内存里的记录（诊断包用）；
+               probe(seconds=None) → 现量本进程各线程的占用和调用栈（导出时在后台线程调用）
   assets       missing() → 缺少的图片清单；retry_items() → 点「重试」时要下载的图片；
                forget_recent(names) → 点「重试」时先去掉这几张（dir/file）近期不再自动下载的记号（在下载线程里调用）；
                download(items, progress(done, total, name), stop) → (ok, failed)；
@@ -35,7 +37,7 @@ from typing import Any
 
 from . import log_error
 
-MODULES = ("logbook", "diagnostics", "assets", "version")
+MODULES = ("logbook", "diagnostics", "assets", "version", "usage")
 
 
 # 写成静态的 import 语句（而不是 importlib 按字符串导入）：Nuitka 打包时才能发现并编进发行版
@@ -77,7 +79,13 @@ def _version():
     return version
 
 
-IMPORTERS = {"logbook": _logbook, "diagnostics": _diagnostics, "assets": _assets, "version": _version}
+def _usage():
+    from .. import usage
+    return usage
+
+
+IMPORTERS = {"logbook": _logbook, "diagnostics": _diagnostics, "assets": _assets, "version": _version,
+             "usage": _usage}
 
 
 @dataclass
@@ -86,6 +94,7 @@ class Services:
     diagnostics: Any = None
     assets: Any = None
     version: Any = None
+    usage: Any = None
 
     @classmethod
     def load(cls, names=MODULES) -> "Services":

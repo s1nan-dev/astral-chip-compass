@@ -297,7 +297,7 @@ def _confidence(used: list[Row], c_self: float) -> float:
     return round(min(c_bar, c_fill, c_self), 3)
 
 
-BAND_DARK = 45  # 三选一标题带的灰度（和 chip_select.looks_like_overlay_screen 的判断一致）
+BAND_DARK = 45  # 三选一标题带的灰度（和预筛第一段 chip_select.dark_band 的判断一致）
 BAND_SHARE = 0.6  # 横条该在的那块里，至少这么多像素是这么暗，才算被标题带盖着
 
 
@@ -421,7 +421,8 @@ def _hero_id(hero_key) -> int | None:
     if index is None:
         index = {}
         for h in _heroes_raw():
-            for name in (h.get("name"), h.get("en"), h.get("full_name"), *h.get("aliases", ())):
+            for name in (h.get("name"), h.get("en"), h.get("full_name"), h.get("hant"), h.get("hant_full_name"),
+                         *h.get("aliases", ())):
                 if name:
                     index.setdefault(_norm(name), int(h["id"]))
         templates.assets._hero_index = index
@@ -451,10 +452,13 @@ def profile_photo_hero(name: str) -> int | None:
 
 
 def _hero_photos(hero_id: int) -> list[np.ndarray]:
-    """这个角色各皮肤的 Q 版头像（BGRA）。"""
-    photos = templates.assets._photos
-    if hero_id not in photos:
-        seen, found = set(), []
+    """这个角色各皮肤的 Q 版头像（BGRA）。读图片在锁外做；存进去以后返回自己建的那一份，不回头再取一次表里的：
+    另一个识别线程这时重建缓存（清空表）也不会让这里抛 KeyError。"""
+    assets = templates.assets
+    with assets.lock:
+        found = assets._photos.get(hero_id)
+    if found is None:
+        seen, loaded = set(), []
         for folder in photo_dirs():
             if not folder.is_dir():
                 continue
@@ -464,9 +468,11 @@ def _hero_photos(hero_id: int) -> list[np.ndarray]:
                 img = io.imread(f)
                 if img is not None and img.ndim == 3 and img.shape[2] == 4:
                     seen.add(f.name)
-                    found.append(img)
-        photos[hero_id] = found
-    return photos[hero_id]
+                    loaded.append(img)
+        found = loaded
+        with assets.lock:
+            assets._photos[hero_id] = found
+    return found
 
 
 def _face(photo: np.ndarray, f: float, angle: float = 0.0, squash: float = 1.0,
@@ -491,28 +497,39 @@ def _face_templates(hero_id: int, f: float, wobble: bool = False) -> list[list[t
     """每套皮肤一组：各角度 × 各压缩的脸部模板（灰度, 掩码）。f = 工作图像素 / R。
     wobble=True 时是轮到自己行动时的那组伸缩（WOBBLE_SQUASH × WOBBLE_STRETCH，去掉平时那组已有的）。"""
     key = (hero_id, round(f, 4), wobble)
-    faces = templates.assets._faces
-    if key not in faces:
-        if len(faces) > 16:
-            faces.clear()
+    assets = templates.assets
+    with assets.lock:
+        got = assets._faces.get(key)
+    if got is None:
         if wobble:
             forms = [(a, sy, sx) for a in ANGLES for sy in WOBBLE_SQUASH for sx in WOBBLE_STRETCH
                      if not (sx == 1.0 and sy in SQUASH)]
         else:
             forms = [(a, sy, 1.0) for a in ANGLES for sy in SQUASH]
-        faces[key] = [[_face(photo, f, a, sy, sx) for a, sy, sx in forms] for photo in _hero_photos(hero_id)]
-    return faces[key]
+        # 缩模板在锁外做（两个线程同时跑时另一个线程不用等）；存进去以后返回自己建的那一份，不再从表里取一次，免得重建缓存
+        # 在这两步之间清空表、取不到（KeyError）
+        got = [[_face(photo, f, a, sy, sx) for a, sy, sx in forms] for photo in _hero_photos(hero_id)]
+        with assets.lock:
+            if len(assets._faces) > 16:
+                assets._faces.clear()
+            assets._faces[key] = got
+    return got
 
 
 def _still_faces(f: float) -> list[tuple[int, np.ndarray, np.ndarray]]:
     """全部角色、全部皮肤不转不压的脸部模板（队友的头像不摇摆）。"""
     key = round(f, 4)
-    still = templates.assets._still
-    if key not in still:
-        if len(still) > 4:
-            still.clear()
-        still[key] = [(hid, *_face(photo, f)) for hid in _all_hero_ids() for photo in _hero_photos(hid)]
-    return still[key]
+    assets = templates.assets
+    with assets.lock:
+        got = assets._still.get(key)
+    if got is None:
+        # 同 _face_templates：模板在锁外缩，存进去以后返回自己建的那一份，不再从表里取一次
+        got = [(hid, *_face(photo, f)) for hid in _all_hero_ids() for photo in _hero_photos(hid)]
+        with assets.lock:
+            if len(assets._still) > 4:
+                assets._still.clear()
+            assets._still[key] = got
+    return got
 
 
 def _face_window(gray: np.ndarray, bar_x: float, bar_y: float, f: float) -> np.ndarray | None:
@@ -556,25 +573,25 @@ def _pick_self(rows: list[Row]) -> tuple[int | None, float, float]:
 # ------------------------------------------------------------------ 入口
 
 
-def diagnose(frame_bgr, hero_key=None) -> StarsReport:
+def diagnose(frame_bgr, hero_key=None, quick: bool = False) -> StarsReport:
     """和 read_own_stars 一样，但读不出时也给出原因和各行的情况。
 
     收 Frame 或 ndarray。同一个 Frame 上按角色记下结果（见 frame.Frame），同一帧里再认同一个角色时直接用。结果还取决于
     沿用的皮肤（先只试上次认出时用的那套，见 _diagnose）：同一帧里前一次刚认出自己、记下了新的皮肤时，按新的皮肤重算
     （例如面板先认一次、读星数时再认：后一次先试刚认出的那套，把握可能更高），和每次都从头算的结果相同。
-    认不得的角色按原文分开记（原因里写着这个名字）。"""
+    认不得的角色按原文分开记（原因里写着这个名字）。quick 见 read_own_stars，和全试的分开记。"""
     frame = as_frame(frame_bgr)
     hero_id = _hero_id(hero_key)
     who = hero_id if hero_id is not None or hero_key is None else str(hero_key)
-    key = (who, templates.assets._last_skin.get(hero_id))
+    key = (who, templates.assets._last_skin.get(hero_id), bool(quick))
     got = frame._stars_diagnose.get(key)
     if got is None:
-        got = _diagnose(frame, hero_key)
+        got = _diagnose(frame, hero_key, quick)
         frame._stars_diagnose[key] = got
     return got
 
 
-def _diagnose(frame: Frame, hero_key=None) -> StarsReport:
+def _diagnose(frame: Frame, hero_key=None, quick: bool = False) -> StarsReport:
     lay, reason, u = _layout(frame)
     if lay is None:
         return StarsReport(None, reason, [], u)
@@ -596,12 +613,16 @@ def _diagnose(frame: Frame, hero_key=None) -> StarsReport:
         # 先只试上次认出时的那套皮肤，认不出再全试；平时的变形都认不出时，再按「轮到自己行动」的伸缩试一遍
         tries = [range(len(skins))]
         last_skin = templates.assets._last_skin
-        if last_skin.get(hero_id, len(skins)) < len(skins):
-            tries.insert(0, [last_skin[hero_id]])
+        # 只取一次：先查有没有、再按键取的话，另一个识别线程正好在中间重建缓存（清空这张表）时会抛 KeyError
+        skin = last_skin.get(hero_id)
+        if skin is not None and skin < len(skins):
+            tries.insert(0, [skin])
+        if quick:
+            tries = tries[:1]  # 快的那一路：只试第一组（上次认出时的那套皮肤；还没认出过时全部皮肤），不按伸缩试
         scores: list[float | None] = [None] * len(rows)
         used_skin: dict[int, int] = {}
         index = None
-        for wobble in (False, True):
+        for wobble in ((False,) if quick else (False, True)):
             forms = _face_templates(hero_id, f, wobble=True) if wobble else skins
             # 伸缩的那组模板多，只试上次认出时的那套皮肤（还没认出过时全试）
             for which in (tries[:1] if wobble else tries):
@@ -642,15 +663,18 @@ def _diagnose(frame: Frame, hero_key=None) -> StarsReport:
     return StarsReport(None, reason, rows, lay.u)
 
 
-def read_own_stars(frame_bgr: np.ndarray, hero_key=None) -> OwnStars | None:
+def read_own_stars(frame_bgr: np.ndarray, hero_key=None, quick: bool = False) -> OwnStars | None:
     """frame_bgr 是游戏窗口客户区的 BGR 图；hero_key 是自己的角色（编号、名字或别名）。
 
     返回 OwnStars：stars 星数（0~3）、confidence 把握（0~1）、row 自己是第几行等。
     画面上没有玩家列表、自己那一行被挡住、或认不出自己是哪一行时返回 None（头像认不出时可以另按本局记住的名字找，
     见 read_own_stars_by_name）。
     不按「本局记住的行」读：选转账对象等画面上玩家列表会去掉自己那一行、整体上移，那一行会变成队友。
+    quick：只走快的那一路——头像按平时的几种摇摆（只试上次认出时的那套皮肤，还没认出过时全部皮肤）认得出自己那一行时
+    照常返回，认不出时不再全部皮肤、按「轮到自己行动」的伸缩再试（那几步慢电脑上要 0.25～0.6 秒），只看「全员相同」。
+    三选一上读星数用它（推荐在等着，见 pipeline.FrameProcessor._read_stars）。
     """
-    return diagnose(frame_bgr, hero_key).result
+    return diagnose(frame_bgr, hero_key, quick).result
 
 
 def read_players(frame_bgr: np.ndarray, own_hero=None, names: bool = True) -> Players | None:

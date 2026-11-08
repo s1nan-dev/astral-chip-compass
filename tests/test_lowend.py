@@ -1,13 +1,17 @@
 """低配模式和启动时声明高性能：
 
-- 节奏：低配模式开着时 [watch] 的 idle_ms、hud_ms、coins_ms、hero_ms、unchanged_max_ms，以及三选一上补认、再读左上角之前
-  等多久（select_reread_ms、hud_retry_ms）乘 lowend_factor；
+- 节奏：低配模式开着时 [watch] 的 idle_ms、hud_ms、coins_ms、hero_ms、unchanged_max_ms，三选一上补认、再读左上角之前
+  等多久（select_reread_ms、hud_retry_ms），轮次被挡住时多久看一眼、多久完整读一次（occluded_recheck_ms、occluded_full_ms），
+  连标记都没看见时多久完整读一次（blank_full_ms），任务栏没开时多久连带读一次整块（map_block_ms），不在对局里时多久看一眼
+  选角界面（select_ms），对局中刚看见过轮次标记多久
+  以内先不判选角界面（pick_grace_ms）乘 lowend_factor；
   active_ms（三选一显示着时）、出错后等的 2 秒、没画面时重取的间隔不变。FrameProcessor.set_pace 按构造时读到的原值乘、
   不累乘，已经记下的时刻和沿用的结论不动；识别线程（Watcher）在两帧之间换，开关变了才换，下载完图片重建识别流程时照开关
   重新套上。
 - 文字识别：低配模式开着时按 chip_select.LOWEND_OCR_THREADS 个线程（use_lowend_threads），识别线程在两帧之间换：缓存的
   引擎线程数不同时丢掉、下一次识别重建，正在识别的那一帧照旧；关掉时回到 OCR_THREADS 个；核心少、算下来一样时不重建；
-  重建识别流程时不跟着换；开关没开过时不碰（测试和基准工具改的 OCR_THREADS 照旧有效）。
+  重建识别流程时不跟着换；开关没开过时不碰（测试和基准工具改的 OCR_THREADS 照旧有效）；同一进程里别处换过全进程的那一份
+  开关时，下一帧照识别线程自己的低配模式换回来。
 - 设置：UiSettings.lowend（默认关；旧文件没有这一项、读到不是 true / false 的值都按关）；Overlay.set_lowend 存盘、记一条
   用户操作、经 lowend_changed 告诉识别线程；main() 在识别线程开始以前按设置套上，并接好信号；诊断包的 overlay 段写着
   开没开。
@@ -76,14 +80,19 @@ class PaceTest(FlowBase):
 
     def paces(self) -> tuple:
         p = self.proc
-        return p.hud_s, p.hero_s, p.coins_s, p._not_select.max_s, p._not_pick.max_s, p.reread_s, p.retry_s
+        return (p.hud_s, p.hero_s, p.coins_s, p._not_select.max_s, p._not_pick.max_s, p.reread_s, p.retry_s,
+                p.occluded_s, p.occluded_full_s, p.blank_full_s, p.block_s, p.select_s, p.pick_grace_s)
 
     def test_from_original_not_cumulative(self):
-        """按构造时读到的原值乘，再套一次也不累乘；改回 1 倍时逐位是原值。"""
+        """按构造时读到的原值乘，再套一次也不累乘；改回 1 倍时逐位是原值。对局中刚看见过轮次标记多久以内先不判选角界面
+        （pick_grace_ms）也乘：读轮次的间隔跟着乘，一段读不到轮次的时间里先不判的次数和原来一样。"""
         base = self.paces()
         unchanged = WATCH["unchanged_max_ms"] / 1000
         self.assertEqual(base, (WATCH["hud_ms"] / 1000, WATCH["hero_ms"] / 1000, WATCH["coins_ms"] / 1000,
-                                unchanged, unchanged, WATCH["select_reread_ms"] / 1000, WATCH["hud_retry_ms"] / 1000))
+                                unchanged, unchanged, WATCH["select_reread_ms"] / 1000, WATCH["hud_retry_ms"] / 1000,
+                                WATCH["occluded_recheck_ms"] / 1000, WATCH["occluded_full_ms"] / 1000,
+                                WATCH["blank_full_ms"] / 1000, WATCH["map_block_ms"] / 1000,
+                                WATCH["select_ms"] / 1000, WATCH["pick_grace_ms"] / 1000))
         doubled = tuple(v * FACTOR for v in base)
         self.proc.set_pace(FACTOR)
         self.assertEqual(self.paces(), doubled)
@@ -116,8 +125,9 @@ class PaceTest(FlowBase):
         after = self.state()
         self.assertEqual(before.keys(), after.keys())
         changed = {k for k in before if before[k] is not after[k]}
-        self.assertEqual(changed, {"hud_s", "hero_s", "coins_s", "_not_select.max_s", "_not_pick.max_s",
-                                   "reread_s", "retry_s"})
+        self.assertEqual(changed, {"hud_s", "hero_s", "coins_s", "_not_select.max_s", "_not_pick.max_s", "progress_s",
+                                   "reread_s", "retry_s", "occluded_s", "occluded_full_s", "blank_full_s", "block_s",
+                                   "select_s", "pick_grace_s"})
         self.assertEqual((self.proc._last_hud, self.proc._last_hero), (0.0, 0.0))
 
     def test_hud_cadence(self):
@@ -201,14 +211,23 @@ class WatcherCase(unittest.TestCase):
         self.errors = capture_errors(self)
         self.addCleanup(lambda: self.assertEqual(self.errors.entries(), []))
         self.log: list = []
+        # 文字识别的低配开关是全进程的一份（chip_select.lowend_threads），识别线程每帧和它比：每个用例从关开始，测完换回
+        self.addCleanup(setattr, chip_select, "_lowend", chip_select._lowend)
+        chip_select._lowend = False
+
+    def _fake_threads(self, on) -> None:
+        """假的 chip_select.use_lowend_threads：记进 log（("threads", 开没开)），只改全进程的那一份开关（识别线程每帧和它比），
+        不动模块里缓存的引擎。"""
+        self.log.append(("threads", on))
+        chip_select._lowend = bool(on)
 
     def run_watcher(self, fake, lowend=None, waits=1, on_sleep=None, source=None, hotkey=False,
                     holder: dict | None = None, db=DB, real_threads=False) -> Probe:
         """跑识别线程，等够 waits 次就停。lowend 不是 None 时线程开始以前套上；holder 里放上识别线程（假的识别流程要用）。
-        文字识别的线程数（chip_select.use_lowend_threads）平时换成假的、记进 log（("threads", 开没开)），不动模块里缓存的
-        引擎；real_threads 时用真的（OcrThreadsTest 另外换掉建引擎）。"""
+        文字识别的线程数（chip_select.use_lowend_threads）平时换成假的（_fake_threads），不动模块里缓存的引擎；
+        real_threads 时用真的（OcrThreadsTest 另外换掉建引擎）。"""
         threads = contextlib.nullcontext() if real_threads else mock.patch.object(
-            chip_select, "use_lowend_threads", side_effect=lambda on: self.log.append(("threads", on)))
+            chip_select, "use_lowend_threads", side_effect=self._fake_threads)
         with mock.patch("advisor.vision.pipeline.FrameProcessor", fake), threads, \
                 mock.patch("advisor.vision.reset_caches"):  # 重建识别流程时不动真的图片缓存
             watcher = Probe(db, Session(db, Settings(hero="凛")), threading.Lock(), source=source or Source(),
@@ -297,6 +316,31 @@ class WatcherPaceTest(WatcherCase):
                                     "process"])
         self.assertEqual(watcher.sleeps, [IDLE_MS * FACTOR, IDLE_MS])
 
+    def test_threads_reapplied_after_changed_elsewhere(self):
+        """同一进程里别处把文字识别的低配开关换掉了（性能测试测完换回测之前的样子）：识别线程下一帧照自己的低配模式再换回来，
+        识别流程的节奏不重套；之后两边一样，不再调用。"""
+
+        def during(frame):
+            if frame == 1:
+                chip_select._lowend = False  # 第 1 帧中途别处换回了关
+
+        watcher = self.run_watcher(fake_processor(self.log, during=during), lowend=True, waits=3)
+        self.assertEqual(self.log, ["new", ("pace", FACTOR), ("threads", True), "process", ("threads", True), "process",
+                                    "process"])
+        self.assertTrue(chip_select._lowend)
+        self.assertEqual(watcher.sleeps, [IDLE_MS * FACTOR] * 3)
+
+    def test_threads_switched_off_after_changed_elsewhere(self):
+        """低配模式关着、别处把开关换成了开（没换回来）：识别线程下一帧换回关。"""
+
+        def during(frame):
+            if frame == 1:
+                chip_select._lowend = True
+
+        self.run_watcher(fake_processor(self.log, during=during), waits=2)
+        self.assertEqual(self.log, ["new", "process", ("threads", False), "process"])
+        self.assertFalse(chip_select._lowend)
+
     def test_processor_without_set_pace(self):
         """识别流程没有 set_pace（测试里别的假对象）：不出错，平时的间隔照样乘倍数。"""
         watcher = self.run_watcher(fake_processor(self.log, pace=False), lowend=True)
@@ -365,6 +409,27 @@ class OcrThreadsFunctionTest(OcrCase):
         self.assertIsNone(chip_select._ocr)  # 线程数不同：丢掉，下一次按 4 个重建
         self.assertEqual(chip_select._engine().threads, 4)
         self.assertEqual(self.built(), [2, 4])
+
+    def test_use_ocr_threads(self):
+        """量出来的线程数（use_ocr_threads）：换成它，缓存的引擎线程数不同才丢掉、下一次识别重建；低配模式开着时
+        照旧用 2 个，量出来的结果等关掉才生效。"""
+        self.assertEqual(chip_select._engine().threads, 4)
+        chip_select.use_ocr_threads(8)
+        self.assertEqual((chip_select.OCR_THREADS, chip_select.ocr_threads()), (8, 8))
+        self.assertIsNone(chip_select._ocr)  # 4 和 8 不同：丢掉
+        self.assertEqual(chip_select._engine().threads, 8)
+        engine = chip_select._engine()
+        chip_select.use_ocr_threads(8)  # 和现在相同：不重建
+        self.assertIs(chip_select._engine(), engine)
+        chip_select.use_lowend_threads(True)  # 低配模式开着：按 2 个建
+        self.assertEqual(chip_select._engine().threads, 2)
+        chip_select.use_ocr_threads(4)  # 低配开着时换成 4：ocr_threads 仍是 2，缓存的引擎不动
+        self.assertEqual((chip_select.OCR_THREADS, chip_select.ocr_threads()), (4, 2))
+        self.assertEqual(chip_select._engine().threads, 2)
+        chip_select.use_lowend_threads(False)  # 关掉低配模式：按量出来的 4 个重建
+        self.assertIsNone(chip_select._ocr)
+        self.assertEqual(chip_select._engine().threads, 4)
+        self.assertEqual(self.built(), [4, 8, 2, 4])
 
     def test_same_count_kept(self):
         """开关没变、或核心少算下来一样：缓存的引擎不动。"""
@@ -561,12 +626,15 @@ class MainTest(unittest.TestCase):
 
         def build(**kwargs):
             order.append("build")
-            return (app, window, SimpleNamespace(eventlog=SimpleNamespace(recorder=None), save=lambda force=False: None),
+            return (app, window,
+                    SimpleNamespace(eventlog=SimpleNamespace(recorder=None), save=lambda force=False: None,
+                                    settings=SimpleNamespace(big_cores=False, lowend=lowend)),
                     threading.Lock())
 
         with mock.patch.object(app_mod, "build", side_effect=build), \
                 mock.patch.object(app_mod, "Watcher", return_value=watcher), \
                 mock.patch.object(app_mod, "Hotkey", return_value=hotkey), \
+                mock.patch.object(app_mod, "QTimer"), \
                 mock.patch.object(app_mod, "expected_capture", return_value="window"), \
                 mock.patch.object(app_mod.Services, "load", return_value=None), \
                 mock.patch.object(si, "listen", listen), \

@@ -13,6 +13,7 @@ import copy
 import json
 import logging
 import os
+import re
 import threading
 import time
 import traceback
@@ -20,6 +21,7 @@ import types
 import typing
 import weakref
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 from . import errors, fileio, paths
@@ -28,6 +30,35 @@ log = logging.getLogger(__name__)
 
 # 对局状态：存 state.json 时不写、读 state.json 时不沿用（启动时一律重新识别）
 GAME_FIELDS = ("owned", "star", "star_read", "round", "map", "source", "map_source", "map_confidence", "difficulty")
+
+# 对局报告的四项（全程序一份，两张悬浮窗共用）：开关、本机编号、随机值、这次打开开关的时刻。本机编号和随机值都是 32 位
+# 小写十六进制，只在开着时才有；关掉就删掉（再打开换新的）。本机编号写进报告、只用来数人数；随机值只用来算报告编号，
+# 不写进报告、不带进诊断包、不写进错误记录。时刻按本地时间存成 ISO 文字，只到秒。
+REPORT_ENABLED_FIELD = "report_enabled"
+REPORT_INSTALL_FIELD = "report_install"
+REPORT_SECRET_FIELD = "report_secret"
+REPORT_SINCE_FIELD = "report_since"
+_INSTALL = re.compile(r"[0-9a-f]{32}")
+
+
+def valid_install(value) -> bool:
+    """本机编号合不合格式（32 位小写十六进制）。手改坏了的、别的工具写的都算没有。"""
+    return isinstance(value, str) and bool(_INSTALL.fullmatch(value))
+
+
+def valid_secret(value) -> bool:
+    """随机值合不合格式（同本机编号：32 位小写十六进制）。手改坏了的、别的工具写的都算没有。"""
+    return valid_install(value)
+
+
+def install_time(value) -> datetime | None:
+    """设置文件里的打开时刻（本地时间、不带时区）→ datetime；读不了时为 None。"""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
 
 
 @dataclass
@@ -46,6 +77,14 @@ class Settings:
     map_confidence: str | None = None  # 见 advisor.session 的 CONFIDENCE_LABEL
     # 本局难度：NORMAL 普通 / HARD 困难及以上；None 为本局还没判定（按困难及以上计算）。按三选一的概率行判定
     difficulty: str | None = None
+    # 对局报告（「帮助拾星助手改善推荐准确度」，全程序一份，不是每张悬浮窗各一份）：开着时每局结束存一份报告；本机编号
+    # 只用来数人数，和电脑硬件无关（game_report.new_install），关掉就删掉；随机值只用来算报告编号（game_report.new_secret），
+    # 不写进报告、不带进诊断包、不写进错误记录，和本机编号一起生成、一起删；report_since 是这次打开开关的时刻，只拼这以后
+    # 的局。启动时由 overlay_parts/reporting.py 的 Reporting.ensure 理成能用的样子（创建设置对象时不生成、不写文件）
+    report_enabled: bool = True
+    report_install: str = ""
+    report_secret: str = ""
+    report_since: str = ""
 
     @classmethod
     def load(cls, path: Path) -> "Settings":

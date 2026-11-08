@@ -1,6 +1,7 @@
 """推荐引擎：给三个候选筹码打分，算前瞻和刷新的期望，输出百分比和理由。
 
-总分 = 游戏内置推荐分 × official.scale + 适配分（玩家思路或自动层、组合、队友、难度、收入折算）+ 推荐流派分 + 前瞻分。
+总分 = 适配分（玩家思路或自动层、组合、队友、难度、收入折算）+ 推荐流派分 + 前瞻分。游戏内置推荐分不计入总分
+（official.scale 为 0），公式留着只用来判断游戏的推荐角标（Scorer.official_raw）。
 推荐流派分：属于推荐流派的筹码加分；角色自动层写了 keep_schools（推荐流派都要尽量保住，或只保其中几个）时，选择后会让
 要保的流派本局再也进不全的其他流派筹码扣分（parts._keep_schools_part；只保几个时没列出的推荐流派也算其他流派，扣分可按
 角色写 keep_schools_penalty），已进入其他流派、要保的流派已经进不全时，已进入的那个流派按推荐流派加分
@@ -15,10 +16,10 @@
 剩余三选一次数（context.PicksLeft）：剩余升星 + 任务和筹码商店（按 rules.toml [picks] end_round 收窄；3 星以后、轮次已知时
 不低于 late_rate 那个下限）+ 循环往复给的额外那次（已拿循环往复、那一次还没给时，State.endless_pending）。额外那次不占任务和
 筹码商店的份额：给了以后（这一次就是它、或它选到的筹码在已有筹码里，State.endless_given）不算进已经有过的次数。
-之后的三选一（前瞻、刷新、开套预判、美工刀预判、治愈来源折算）按职业分值累加选最左格的职业筹码池（pool.slot_dists 的 class_owned）。
-前瞻、美工刀预判、治愈来源折算和开套预判看的之后几次三选一按次数分开算（context.split_picks）：剩下的升星一定会来，先算满，
+之后的三选一（前瞻、刷新、开套预判、美工刀预判、治愈来源的提前加分和折算）按职业分值累加选最左格的职业筹码池（pool.slot_dists 的 class_owned）。
+前瞻、美工刀预判、治愈来源的提前加分和折算、开套预判看的之后几次三选一按次数分开算（context.split_picks）：剩下的升星一定会来，先算满，
 按下一星的升星；循环往复那一次还没给时接着算，按任务来源（context.endless_sources）；其余是任务和筹码商店，按两者在一局里的
-占比混合（context.mixed_sources）。3 星以后不再升星。
+占比混合（context.mixed_sources），任务按地图资料里任务自带的等级拆成几项、筹码商店按当前星数。3 星以后不再升星。
 同系列筹码（data/series.toml）同时出现时：被严格上位替代的低一级不参与比较（推荐度为 0），同系列的候选之间写对比行；
 只在这一次三选一里调整，各候选的分值、前瞻和刷新的期望照常计算（advice.mark_series）。不算上位替代的两张总分接近时
 （rules.toml [advice] series_near）稀有度高的一张排在前面，只对调两张的推荐度和先后（advice.series_near）。
@@ -47,15 +48,16 @@
 """
 # 以下都是对外的名字（各模块里定义，这里统一导出）
 from ..pool import tie_key  # 比较总分、百分比时用的键（定义在 pool，刷新的概率也用它；其他模块从 engine 取）
-from .advice import (CORE_LEAD, LOW_NOTE, NEED_LEAD, NEED_ORIGIN, NORMAL_NOTE, SERIES_NEAR_TIP, STARLIGHT_NO_USE,
-                     STARLIGHT_USES, Advice, ChipEval, map_note, mutator_notes)
+from .advice import (CORE_LEAD, LOOKAHEAD_MIN, LOW_NOTE, NEED_LEAD, NEED_ORIGIN, NORMAL_NOTE, SERIES_NEAR_TIP,
+                     STARLIGHT_NO_USE, STARLIGHT_USES, Advice, ChipEval, map_note, mutator_notes)
 from .advice_text import (BOT_MARK, CHAIN_NOTE, CHANCE_OVER, CHANCE_UNDER, DESC_LIMIT, PERCENT_OVER, PERCENT_UNDER,
                           PLACE_LOCKED, PLACE_LOCKED_TEXT, PLACE_MARKED, PLACE_STRAYED, PLACE_TIER, PLACE_UNMARKED,
                           PLACE_UNMARKED_TEXT, PLAYER_HEAD, REROLL, REROLL_P, REROLL_P_TOP, REROLL_SLOT, SCHEME_TIER_WORD,
                           SHORT_LIMIT, SPARE_NOTE, SUPERSEDED, UNREAD_NOTE, chance_text, compare_text, percent_text,
                           place_text, reroll_cost_note, reroll_counts, rival_word, shown_int, shown_percent_texts,
                           shown_percents)
-from .chances import HEAL_DISCOUNT_ORIGIN, HEAL_DISCOUNT_REASON, HEAL_DISCOUNT_SHORT
+from .chances import (HEAL_ADVANCE_ORIGIN, HEAL_ADVANCE_REASON, HEAL_ADVANCE_SHORT, HEAL_DISCOUNT_ORIGIN,
+                      HEAL_DISCOUNT_REASON, HEAL_DISCOUNT_SHORT)
 from .context import (REROLL_MARGIN, Cache, PicksLeft, Plan, hero_classes, hero_tendency, plan_of, pool_and_dists,
                       reward_rounds_left)
 from .lookahead import (CLASS_SHIFT_REASON, CLASS_SHIFT_SHOP_REASON, CLASS_SHIFT_SHOP_SHORT, CLASS_SHIFT_SHORT,

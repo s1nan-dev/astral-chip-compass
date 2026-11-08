@@ -1,4 +1,4 @@
-"""识别事件的先后和分派：事件的序号（认出晚到的旧事件），以及按种类交给 EventRouter 的处理（EventHandlers，15 种事件各自的
+"""识别事件的先后和分派：事件的序号（认出晚到的旧事件），以及按种类交给 EventRouter 的处理（EventHandlers，16 种事件各自的
 处理函数）。事件种类的名字在 state.py。
 
 这里是编排：处理函数写三选一显示期间的状态（state.LiveState）、一次性提示（state.Message）、提示行的状态（NoticeModel），调用
@@ -12,10 +12,10 @@ import copy
 from contextlib import contextmanager
 from datetime import datetime
 
-from .. import log_error
+from .. import lang, log_error, names
 from ...engine import REROLL, place_text
 from ...session import split_extra
-from ..text import Bit, option_name, unreadable_slots
+from ..text import Bit, unreadable_slots
 # 事件种类在 state.py（watcher、推荐卡片等也要用，不为几个常量导入这里）；分派按这些名字
 from .state import (
     EV_ADVICE,
@@ -31,6 +31,7 @@ from .state import (
     EV_PICK_REVERTED,
     EV_PICKED,
     EV_REFRESHING,
+    EV_STATUS,
     EV_UNREADABLE,
     EV_UNRECORDED_GAIN,
     EVENT_KINDS,
@@ -54,18 +55,21 @@ def _seq(ev) -> int:
 
 
 class EventHandlers:
-    """15 种识别事件各自的处理函数（on_ 加事件种类）；EventRouter 按种类调用。"""
+    """16 种识别事件各自的处理函数（on_ 加事件种类）；EventRouter 按种类调用。"""
 
     def __init__(self, *, db, session, lock, live, message, notice_model, advice, owned, offers, eggs, notices,
-                 flash, waiting_text, newgame_notice, refresh):
+                 flash, waiting_text, newgame_notice, refresh, report_game=None):
         # 服务：资料库、Session 和它的锁
         self.db, self.session, self.lock = db, session, lock
         # 写的显示状态：三选一显示期间的状态、一次性提示、提示行的状态
         self.live, self.message, self.notice_model = live, message, notice_model
         # 调用的部件：推荐卡片、已有筹码卡片、推荐日志、皮肤解锁的计数、提示行
         self.advice, self.owned, self.offers, self.eggs, self.notices = advice, owned, offers, eggs, notices
-        # 外壳的回调：过一会儿收起的一次性提示、带「撤销」的新一局提示开始计时、等待提示、刷新
+        # 外壳的回调：过一会儿收起的一次性提示、带「撤销」的新一局提示开始计时、等待提示、刷新，以及拼这一局的对局报告
+        # （report_game(局号, 胜负定了没有)：定了马上在后台拼，没定的先等，见 reporting.Reporting.game_over）
         self.flash, self.waiting_text, self.newgame_notice, self.refresh = flash, waiting_text, newgame_notice, refresh
+        self.report_game = report_game
+        self.report_waiting: str | None = None  # 结束了、胜负还没定的那一局（推荐日志的局号）：定了或下一局开始时拼
 
     def on_advice(self, ev, was_live: bool, was_kind: str):
         before = self.offers.offer_id
@@ -91,8 +95,9 @@ class EventHandlers:
         if not was_live:
             self.live.seq += 1
         self.live.on, self.live.kind, self.live.hero_needed = True, EV_UNREADABLE, False
+        # 三选一显示期间的几项（LiveState.bits）直接放进状态胶囊和摘要：建的时候就按界面语言写
         self.live.bits = {"candidates": Bit(
-            f"第 {'、'.join(str(i + 1) for i in slots)} 个无法识别", "候选筹码", "warn", "candidates",
+            lang.t(f"第 {'、'.join(str(i + 1) for i in slots)} 个无法识别"), lang.t("候选筹码"), "warn", "candidates",
         )}
         self.message.say("", "advice")
         self.advice.shown_ev = ev
@@ -110,8 +115,8 @@ class EventHandlers:
             self.live.seq += 1
         self.live.on, self.live.kind, self.live.hero_needed = True, EV_HERO_NEEDED, True
         self.live.bits = {
-            "hero": Bit("待识别", "角色", "warn", "hero"),
-            "paused_advice": Bit("推荐已暂停", tone="warn", key="paused_advice"),
+            "hero": Bit(lang.t("待识别"), lang.t("角色"), "warn", "hero"),
+            "paused_advice": Bit(lang.t("推荐已暂停"), tone="warn", key="paused_advice"),
         }
         self.message.say("", "advice")
         self.advice.shown_ev = ev
@@ -132,7 +137,7 @@ class EventHandlers:
         self.advice.set_pick(ev.chip, offer_id, best)
         self.close_live()
         # 一次性提示：过一会儿收起，一行显示时回到「上一次推荐」的摘要
-        self.flash(f"已记录选择：{ev.chip}。等待下一次筹码三选一", "advice")
+        self.flash(lang.t(f"已记录选择：{names.chip_in(self.db, ev.chip)}。等待下一次筹码三选一"), "advice")
 
     def on_missed_pick(self, ev, was_live: bool, was_kind: str):
         kind_now = EV_PICK_REVERTED if self.live.reverted_chip else EV_MISSED_PICK
@@ -163,7 +168,26 @@ class EventHandlers:
             self.message.say(self.waiting_text(), "advice")
         self.log_game_over()
 
+    def on_status(self, ev, was_live: bool, was_kind: str):
+        """状态变了（难度胶囊、不支持的情况等，也包括本局已结束以后胜负定了或改了：读到奖励画面、又读到结算画面）：本局
+        已结束时照 log_game_over 补记对局结束、拼报告（没有新的结束内容时什么都不做）。显示由处理完的那次刷新管。
+
+        cause 为 rejoined（主菜单结束的那一局断线以后又连回来了，Session 撤回了那次结束）：悬浮窗回到结束之前的样子，口径同
+        撤销房间等画面结束以后开的新一局（Overlay.undo_new_game）：「查看筹码」面板的提示按 Session 放回；「对局已结束，等待
+        下一局开始…」换回等三选一的那一句（三选一显示着时不动）；推荐日志里记过的那条对局结束不再挡着去重
+        （OfferLog.end_revoked），这一局真正结束时再记一条、以后一条为准，对局报告到时候重拼、覆盖同一份。不另加提示，
+        也不存诊断包（不是误判）。"""
+        if getattr(ev, "cause", "") == "rejoined":
+            with self.lock:
+                self.notice_model.panel_prompt = bool(self.session.panel_prompt_active)
+            self.notice_model.panel_tab = None
+            self.offers.end_revoked()
+            if not self.live.on:
+                self.message.say(self.waiting_text(), "advice")
+        self.log_game_over()
+
     def on_newgame(self, ev, was_live: bool, was_kind: str):
+        self.settle_report()  # 上一局的胜负没等到：不再等，按推荐日志里现有的拼（在推荐日志换到新的一局之前）
         restore = None
         notices = self.notice_model
         if self.live.on and 0 < _seq(ev) < _seq(self.advice.shown_ev):
@@ -195,7 +219,7 @@ class EventHandlers:
             # 看不到轮次、星数、地图。房间等画面结束的局之后按对局画面、三选一判出的新一局可以撤销（undo），和对局中途
             # 判定的一样走上面的提示行
             notices.newgame_why = None
-            self.flash(NEWGAME_TEXT.format(why=why), "recog")
+            self.flash(lang.t(NEWGAME_TEXT.format(why=why)), "recog")
         self.offers.new_game()  # 告诉推荐日志新的一局开始了（撤销时接回原来那一局）
         self.notices.check_calibration()
         return restore
@@ -223,12 +247,13 @@ class EventHandlers:
             text += PANEL_UNKNOWN.format(n=unknown)
         fixes = self.apply_pick_fixes(getattr(ev, "fixes", None) or [])
         if fixes:
-            text += PANEL_FIXED.format(fixes="；".join(f"{option_name(a)} → {option_name(b)}" for a, b in fixes))
+            text += PANEL_FIXED.format(fixes="；".join(
+                f"{names.chip_in(self.db, a)} → {names.chip_in(self.db, b)}" for a, b in fixes))
         # 面板上有图标、但不一定真的持有的筹码（「大铜锣」，chips.md 第七节）：照原文提示
         doubtful = [p for p in (getattr(ev, "problems", None) or []) if "可能为无效图标" in p]
         if doubtful:
             text += "。⚠ " + "；".join(doubtful)
-        self.flash(text, "owned")
+        self.flash(lang.t(text), "owned")
 
     def on_panel_tab(self, ev, was_live: bool, was_kind: str):
         self.notice_model.panel_tab = int(getattr(ev, "count", 0) or 0) or None
@@ -236,7 +261,7 @@ class EventHandlers:
     def on_map_read(self, ev, was_live: bool, was_kind: str):
         name = getattr(ev, "map", None) or self.session.settings.map
         if name:
-            self.flash(MAP_READ.format(map=name), "recog")
+            self.flash(lang.t(MAP_READ.format(map=names.map_in(self.db, name))), "recog")
 
     def apply_pick_fixes(self, fixes) -> list[tuple[str, str]]:
         """「查看筹码」面板改正了三选一的选择记录：推荐日志里那一次三选一改记成面板上的筹码（OfferLog），
@@ -250,18 +275,39 @@ class EventHandlers:
         return done
 
     def log_game_over(self) -> None:
-        """推荐日志记下对局结束（OfferLog.game_over）：session.game_over_info（依据、地图、难度、轮次、进度上限），
-        另加星数、进度条当前格和已有筹码（以后校准用：实际在第几轮结束）。按 session.games 去重：同一局的结束（结算画面
-        读到好几次等）只记一次。撤销了房间等画面结束以后开的新一局时，那次结束是误认的，这一局真正结束时再记一条，同一局
-        以后一条为准（见 Overlay.undo_new_game）。"""
+        """推荐日志记下对局结束（OfferLog.game_over）：session.game_over_info（依据、地图、难度、轮次、进度上限、胜负和
+        依据），另加星数、进度条当前格和已有筹码（以后校准用：实际在第几轮结束）。按 session.games 和胜负去重：同一局的结束
+        （结算画面读到好几次等）只记一次；胜负是结束以后才定的（读到奖励画面），定了再记一条。撤销了房间等画面结束以后开的
+        新一局时，那次结束是误认的，这一局真正结束时再记一条。同一局都以后一条为准（见 Overlay.undo_new_game）。
+
+        记了一条以后拼这一局的对局报告（report_game）：胜负定了（session.result_settled）马上拼；没定的告诉它先等，记下这一局
+        （report_waiting），之后定了（这里再走一次，没有新的一条也拼）、下一局开始（settle_report）时拼。一局只发一份，
+        要带上最终的胜负。"""
         with self.lock:
             s = self.session
             info = s.game_over_info
             games = s.games
+            settled = bool(s.result_settled) if info else False
             if info:
                 info = {**info, "star": s.settings.star if s.settings.star_read else None,
                         "progress": s.game.progress, "owned": list(s.settings.owned)}
-        self.offers.game_over(info, games)
+        logged = self.offers.game_over(info, games)
+        if not callable(self.report_game):
+            return
+        if logged:
+            game = self.offers.game_id()
+            if game:
+                self.report_game(game, settled)
+                self.report_waiting = None if settled else game
+        elif settled and self.report_waiting is not None:
+            game, self.report_waiting = self.report_waiting, None
+            self.report_game(game, True)
+
+    def settle_report(self) -> None:
+        """不再等上一局的胜负（下一局开始了）：还在等的那一局按推荐日志里现有的拼。"""
+        if self.report_waiting is not None and callable(self.report_game):
+            game, self.report_waiting = self.report_waiting, None
+            self.report_game(game, True)
 
     def close_live(self) -> None:
         """三选一界面关闭：推荐卡片收起推荐（全部展开时显示上一次推荐），改正栏关闭。"""
@@ -335,7 +381,7 @@ class EventRouter:
     """
 
     def __init__(self, *, db, session, lock, live, message, notice_model, advice, owned, offers, eggs, notices,
-                 flash, waiting_text, newgame_notice, refresh, receive, batch):
+                 flash, waiting_text, newgame_notice, refresh, receive, batch, report_game=None):
         self.session, self.lock, self.live, self.advice = session, lock, live, advice
         self.refresh = refresh
         # 一次性的操作结果提示（改正栏随候选变化而关闭）：显示 FLASH_MS 后自动收起
@@ -348,7 +394,7 @@ class EventRouter:
         handlers = self.handlers = EventHandlers(
             db=db, session=session, lock=lock, live=live, message=message, notice_model=notice_model, advice=advice,
             owned=owned, offers=offers, eggs=eggs, notices=notices, flash=flash, waiting_text=waiting_text,
-            newgame_notice=newgame_notice, refresh=refresh)
+            newgame_notice=newgame_notice, refresh=refresh, report_game=report_game)
         self.map = {
             EV_ADVICE: handlers.on_advice,
             EV_UNREADABLE: handlers.on_unreadable,
@@ -359,6 +405,7 @@ class EventRouter:
             EV_PICK_REVERTED: handlers.on_pick_reverted,
             EV_UNRECORDED_GAIN: handlers.on_unrecorded_gain,
             EV_GAME_OVER: handlers.on_game_over,
+            EV_STATUS: handlers.on_status,
             EV_NEWGAME: handlers.on_newgame,
             EV_IDLE: handlers.on_idle,
             EV_PANEL_PROMPT: handlers.on_panel_prompt,
@@ -447,7 +494,13 @@ class EventRouter:
         if handler is not None:
             restore = handler(ev, was_live, was_kind)
         if outdated:
-            self.flash("候选筹码已变化，改正栏已关闭", "advice")
+            self.flash(lang.t("候选筹码已变化，改正栏已关闭"), "advice")
         self.refresh()
         if restore is not None:
             self.handle(restore)
+
+
+# REROLL 当事件字典的键（记进识别记录的推荐度和总分），也是引擎给的首推名，不转
+HANT_KEEP = ("REROLL",)
+
+lang.localize(globals())

@@ -27,6 +27,7 @@ from advisor.ui.text import tip_paragraphs_html  # noqa: E402
 from advisor.ui.widgets import chip_icon  # noqa: E402
 from advisor.ui import widgets as ui_widgets  # noqa: E402
 from tests.support import sandbox  # noqa: E402
+from tests.support.errors import capture_errors  # noqa: E402
 from tests.support.fakes import FakeLogbook  # noqa: E402
 from tests.support.waits import wait_until  # noqa: E402
 from tests.support.overlay_cases import APP, FakeHotkey, FakeRecorder, FakeWatcher, PROJECT, button, buttons, capture_state, frame, probe, shown, tip_text
@@ -44,14 +45,18 @@ class OverlayServicesTest(unittest.TestCase):
         self.extras = []  # 每次导出的 extra（另外写进诊断包的记录，例如推荐日志）
         self.unreads = []  # 每次导出另带的三选一读不全时的那一帧（select_unreadable；没带时为 None）
         self.shots = []  # 每次导出另带的记下选中项用的那一帧、不采用的那一帧（select_picked、select_covered）
+        self.finishes = []  # 每次导出另带的对局中途像一局打完的那一帧（finish_look）
+        self.lanes = []  # 每次导出带的另一张悬浮窗的画面和识别记录（lanes；没带时为 None）
         self.downloads = []
 
         def export(frame_bgr, snapshot, events, advice_text_, extra=None, auto=False, select_unreadable=None,
-                   select_picked=None, select_covered=None):
+                   select_picked=None, select_covered=None, finish_look=None, lanes=None):
             self.exports.append((frame_bgr, snapshot, events, advice_text_))
             self.extras.append(extra)
             self.unreads.append(select_unreadable)
             self.shots.append((select_picked, select_covered))
+            self.finishes.append(finish_look)
+            self.lanes.append(lanes)
             return str(PROJECT / "reports" / "20261002-120000")
 
         self.missing = ["heroes/a.png", "heroes/b.png"]
@@ -161,10 +166,10 @@ class OverlayServicesTest(unittest.TestCase):
         self.session.on_frame(None)
         w.handle(self.session.on_frame(None))
         button(w.missed, "大背包").click()
-        self.assertEqual(self.logbook.picks, [(offer, "大背包")])
+        self.assertEqual(self.logbook.picks, [(offer, "大背包", "supplement")])
 
     def test_question_when_best_not_picked(self):
-        """没选首推：「推荐」卡片显示「已选：X」和「未选择「首推」的原因？」加三个原因按钮（一行显示时也显示）；
+        """没选首推：「推荐」卡片显示「已选：X」和「未选择「首推」的原因？」加四个原因按钮（一行显示时也显示）；
         点一个记入推荐日志，这一行换成「已记录：X」；下一次三选一出现时消失。"""
         w = self.window
         offer = ["标靶", "大背包", "缓冲盾牌"]
@@ -181,7 +186,7 @@ class OverlayServicesTest(unittest.TestCase):
         self.assertIn(f"未选择「{best_name}」的原因？", advice)
         self.assertIn(f"已选：{other}", advice)
         self.assertEqual([b.text() for b in w.reason_buttons], list(FEEDBACK_REASONS))
-        self.assertEqual(FEEDBACK_REASONS, ("照顾队友", "地图因素", "推荐有误"))
+        self.assertEqual(FEEDBACK_REASONS, ("照顾队友", "地图因素", "推荐有误", "想试别的玩法"))
         self.assertFalse(any(b.isHidden() for b in w.reason_buttons))
         w.reason_buttons[2].click()
         self.assertEqual(self.logbook.feedback, [(offer_id, "推荐有误", "")])
@@ -246,6 +251,73 @@ class OverlayServicesTest(unittest.TestCase):
         open_folder.assert_called_once_with(str(folder))
         reveal.assert_not_called()
 
+    def test_export_usage_probe_and_records(self):
+        """导出诊断时：先在后台线程里现量一小段（usage.probe，早于读识别记录），写进 state.json 的 usage_probe；内存里
+        每分钟那条占用记录（usage.records）经 extra 写成 usage.jsonl。"""
+        order = []
+        records = [{"at": "2026-11-07T15:00:00", "s": 60.0}]
+        self.services.usage = SimpleNamespace(
+            probe=lambda seconds=None: (order.append("probe"), {"thread_count": 2, "threads": []})[1],
+            records=lambda: (order.append("records"), records)[1],
+        )
+        self.services.diagnostics.USAGE = "usage.jsonl"
+        self.session.recent_events = lambda seconds: (order.append("events"), [])[1]
+        self.window.export_diagnostics()
+        self.assertEqual(order[0], "probe")
+        self.assertIn("events", order)
+        self.assertEqual(self.exports[0][1]["usage_probe"], {"thread_count": 2, "threads": []})
+        self.assertEqual(self.extras[0], {"usage.jsonl": records, "stats.jsonl": []})
+        self.assertEqual(self.exports[0][1]["stats_scope"],
+                         {"hours": 12.0, "since": None, "segments": 0, "lines": 0, "source": "none"})
+
+    def test_export_without_usage_still_works(self):
+        """没有占用模块、或 probe 返回 None 时照常导出：不带 usage_probe，也不带 usage.jsonl。"""
+        self.window.export_diagnostics()
+        self.assertEqual(len(self.exports), 1)
+        self.assertNotIn("usage_probe", self.exports[0][1])
+        self.window.background.export_done(None)
+        self.services.usage = SimpleNamespace(probe=lambda seconds=None: None, records=lambda: [])
+        self.window.export_diagnostics()
+        self.assertNotIn("usage_probe", self.exports[1][1])
+        self.assertEqual(self.extras[1] or {}, {"stats.jsonl": []})
+
+    def test_undo_does_not_probe_usage(self):
+        """撤销误判时自动保存的诊断包要快、最多留 20 份：不现量、不带每分钟的记录。"""
+        calls = []
+        self.services.usage = SimpleNamespace(probe=lambda *a, **k: calls.append("probe"),
+                                              records=lambda: calls.append("records"))
+        self.window.background.save_undo_record({}, [], "")
+        self.assertEqual(calls, [])
+        self.assertEqual(len(self.exports), 1)
+        self.assertTrue(self.exports[0][1]["reason"].startswith("撤销新的一局的判定"))
+
+    def test_feedback_reasons_match_logbook(self):
+        """界面上给出的原因和写进推荐日志的原因一字不差；校准时不算推荐不准的那一个（FEEDBACK_TRY）两边也一样，而且在原因里。"""
+        from advisor import logbook
+        from advisor.ui.overlay_parts.wording import FEEDBACK_TRY
+
+        self.assertEqual(FEEDBACK_REASONS, logbook.FEEDBACK_REASONS)
+        self.assertEqual(FEEDBACK_TRY, logbook.FEEDBACK_TRY)
+        self.assertIn(FEEDBACK_TRY, FEEDBACK_REASONS)
+        self.assertIn(logbook.FEEDBACK_TRY, logbook.FEEDBACK_REASONS)
+
+    def test_reason_tips(self):
+        """原因按钮的悬停说明：「想试别的玩法」写不算推荐不准的那一句（FEEDBACK_TRY_TIP），其余照 FEEDBACK_TIP 填原因；
+        「×」写不选原因、收起这一问。"""
+        from advisor.ui.overlay_parts.wording import (FEEDBACK_DISMISS, FEEDBACK_DISMISS_TIP, FEEDBACK_TIP, FEEDBACK_TRY,
+                                                      FEEDBACK_TRY_TIP)
+
+        w = self.window
+        tips = {b.text(): tip_text(b.toolTip()) for b in w.reason_buttons}
+        self.assertEqual(list(tips), list(FEEDBACK_REASONS))
+        for reason, tip in tips.items():
+            with self.subTest(reason=reason):
+                want = FEEDBACK_TRY_TIP if reason == FEEDBACK_TRY else FEEDBACK_TIP.format(reason=reason)
+                self.assertEqual(tip, want)
+        self.assertIn("不算作推荐不准", tips[FEEDBACK_TRY])
+        self.assertEqual(w.feedback_dismiss.text(), FEEDBACK_DISMISS)
+        self.assertEqual(tip_text(w.feedback_dismiss.toolTip()), FEEDBACK_DISMISS_TIP)
+
     def test_question_line_collapses(self):
         """一行显示时「已选：X」「未选择「首推」的原因？」那一块只挂 QUESTION_LINE_MS（20 秒）：到点不点就收起，这一次不记原因；
         全部展开时照旧显示（挂到下一次三选一），点了照常记。到点以后再收回一行也不再出现。"""
@@ -275,6 +347,110 @@ class OverlayServicesTest(unittest.TestCase):
         w.set_expanded(True)
         w.reason_buttons[0].click()
         self.assertEqual(self.logbook.feedback, [(offer_id, "照顾队友", "")])
+
+    def test_dismiss_question_line(self):
+        """一行显示时要问原因，点问句右边的「×」：「已选」和问原因这一块马上收起，卡片回到一行；
+        推荐日志没有这一次的 feedback，识别记录里有 dismiss_feedback；过多久都不再出现，也不出现「已记录」。
+        和 20 秒不点就收起的不同：之后全部展开也不再问（只写「已选：X」）。"""
+        from advisor.ui.overlay_parts.wording import QUESTION_LINE_MS
+
+        w = self.window
+        offer = ["标靶", "大背包", "缓冲盾牌"]
+        w.handle(self.session.on_frame(frame(offer)))
+        other = next(n for n in offer if n != w.advice.last_ev.advice.best)
+        self.pick(offer, other)
+        self.assertFalse(w.expanded)
+        self.assertFalse(w.question.isHidden())
+        self.assertFalse(w.feedback_dismiss.isHidden())
+        w.feedback_dismiss.click()
+        self.assertTrue(w.question.isHidden())
+        self.assertTrue(w.picked_label.isHidden())
+        self.assertTrue(w.advice_card.isHidden())
+        self.assertEqual(w.advice.question_state(), None)
+        self.assertEqual(self.logbook.feedback, [])
+        users = [e for e in self.session.recent_events(600) if e["kind"] == "read:user"]
+        self.assertEqual([e["action"] for e in users].count("dismiss_feedback"), 1)
+        self.assertNotIn("已记录", shown(w, w.advice_card))
+        w.advice.dismiss_feedback()  # 再点一次也不变，不再记一条
+        self.assertEqual(self.logbook.feedback, [])
+        users = [e for e in self.session.recent_events(600) if e["kind"] == "read:user"]
+        self.assertEqual([e["action"] for e in users].count("dismiss_feedback"), 1)
+        w.advice.ask_until -= QUESTION_LINE_MS / 1000 + 1  # 过了 20 秒
+        w.refresh()
+        self.assertTrue(w.advice_card.isHidden())
+        w.set_expanded(True)
+        self.assertTrue(w.question.isHidden())
+        self.assertTrue(all(b.isHidden() for b in w.reason_buttons))
+        self.assertTrue(w.feedback_dismiss.isHidden())
+        advice = shown(w, w.advice_card)
+        self.assertIn(f"已选：{other}", advice)
+        self.assertNotIn("的原因？", advice)
+
+    def test_dismiss_expanded_keeps_picked(self):
+        """全部展开时点「×」：问原因这一块不见了，「已选：X」照旧显示。"""
+        w = self.window
+        offer = ["标靶", "大背包", "缓冲盾牌"]
+        w.handle(self.session.on_frame(frame(offer)))
+        other = next(n for n in offer if n != w.advice.last_ev.advice.best)
+        self.pick(offer, other)
+        w.set_expanded(True)
+        self.assertFalse(w.question.isHidden())
+        w.feedback_dismiss.click()
+        self.assertTrue(w.question.isHidden())
+        self.assertFalse(w.picked_label.isHidden())
+        self.assertIn(f"已选：{other}", shown(w, w.advice_card))
+        self.assertEqual(self.logbook.feedback, [])
+
+    def test_dismiss_stops_later_feedback_and_new_pick_asks_again(self):
+        """点了「×」以后再调 submit_feedback 也不记录；下一次三选一选的又不是首推时照常再问。"""
+        w = self.window
+        offer = ["标靶", "大背包", "缓冲盾牌"]
+        w.handle(self.session.on_frame(frame(offer)))
+        other = next(n for n in offer if n != w.advice.last_ev.advice.best)
+        self.pick(offer, other)
+        w.feedback_dismiss.click()
+        w.advice.submit_feedback("照顾队友")
+        self.assertEqual(self.logbook.feedback, [])
+        self.assertIsNone(w.advice.question_state())
+        w.handle(self.session.on_frame(frame(["书签", "标记喷罐", "鹰眼瞄具"])))
+        second = ["书签", "标记喷罐", "鹰眼瞄具"]
+        other2 = next(n for n in second if n != w.advice.last_ev.advice.best)
+        self.pick(second, other2)
+        self.assertEqual(w.advice.question_state(), "ask")
+        self.assertFalse(w.question.isHidden())
+        self.assertFalse(w.feedback_dismiss.isHidden())
+        w.feedback_dismiss.click()  # 第二次照样能收起
+        self.assertTrue(w.question.isHidden())
+
+    def test_dismiss_hidden_after_recorded(self):
+        """已记录原因以后「×」不显示；调 dismiss_feedback() 不改变什么。"""
+        w = self.window
+        offer = ["标靶", "大背包", "缓冲盾牌"]
+        w.handle(self.session.on_frame(frame(offer)))
+        offer_id = self.logbook.offers[0][0]
+        other = next(n for n in offer if n != w.advice.last_ev.advice.best)
+        self.pick(offer, other)
+        w.set_expanded(True)
+        w.reason_buttons[0].click()
+        self.assertEqual(w.advice.question_state(), "done")
+        self.assertTrue(w.feedback_dismiss.isHidden())
+        w.advice.dismiss_feedback()
+        self.assertEqual(w.advice.question_state(), "done")
+        self.assertEqual(self.logbook.feedback, [(offer_id, "照顾队友", "")])
+
+    def test_feedback_try_other_school(self):
+        """点「想试别的玩法」：记进推荐日志，这一行换成「已记录：想试别的玩法」。"""
+        w = self.window
+        offer = ["标靶", "大背包", "缓冲盾牌"]
+        w.handle(self.session.on_frame(frame(offer)))
+        offer_id = self.logbook.offers[0][0]
+        other = next(n for n in offer if n != w.advice.last_ev.advice.best)
+        self.pick(offer, other)
+        self.assertEqual(w.reason_buttons[-1].text(), "想试别的玩法")
+        w.reason_buttons[-1].click()
+        self.assertEqual(self.logbook.feedback, [(offer_id, "想试别的玩法", "")])
+        w.set_expanded(True)
+        self.assertIn("已记录：想试别的玩法", shown(w, w.advice_card))
 
     def test_no_question_when_best_picked(self):
         """选的就是首推：不出现任何反馈入口（没有「不认同」按钮）。"""
@@ -330,13 +506,18 @@ class OverlayServicesTest(unittest.TestCase):
         self.assertIn(f"已按面板改正选择记录：{wrong} → {right}", w.message.text)
 
     def test_feedback_without_logbook(self):
+        """没有推荐日志（第二张悬浮窗）：不问未选择首推的原因，点了也记不下来。"""
         w = Overlay(self.db, self.session, threading.Lock())  # 没有推荐日志模块
         offer = ["标靶", "大背包", "缓冲盾牌"]
         w.handle(self.session.on_frame(frame(offer)))
         other = next(n for n in offer if n != w.advice.last_ev.advice.best)
         self.pick(offer, other, window=w)
+        self.assertIsNone(w.advice.question_state())
+        before = w.message.text
         w.advice.submit_feedback("照顾队友")
-        self.assertIn("推荐日志不可用，本次反馈未记录", w.status.status_text())
+        self.assertEqual(w.advice.feedback_done, "")
+        self.assertEqual(w.message.text, before)
+        self.assertNotIn("推荐日志不可用", w.status.status_text())
 
     def test_calibration_reminder(self):
         w = self.window
@@ -441,7 +622,8 @@ class OverlayServicesTest(unittest.TestCase):
         self.assertRegex(events[1]["rows"][0]["name"], r"^名字#[0-9a-f]{6}$")
         self.assertNotIn("某玩家", repr(events))
         self.assertEqual(self.logbook.between, ["2026-10-03T13:00:01.000"])
-        self.assertEqual(self.extras[0], {"logbook.jsonl": [{"t": "pick", "time": "2026-10-03T13:00:05"}]})
+        self.assertEqual(self.extras[0], {"logbook.jsonl": [{"t": "pick", "time": "2026-10-03T13:00:05"}],
+                                          "stats.jsonl": []})
         self.assertEqual(self.exports[0][1]["export_scope"]["source"], "recent_events")
 
     def test_export_whole_game_from_recorder(self):
@@ -452,12 +634,13 @@ class OverlayServicesTest(unittest.TestCase):
         self.session.recent_events = lambda seconds: self.fail("有识别记录器时不应退回最近的识别事件")
         self.logbook.records = [{"t": "offer", "time": "2026-10-03T12:45:00", "offer_id": "a"}]
         self.window.export_diagnostics()
-        self.assertEqual(recorder.calls, ["flush", "collect"])
+        self.assertEqual(recorder.calls, ["flush", "collect", "collect_stats"])
         _, snapshot, events, _ = self.exports[0]
         self.assertEqual(events, FakeRecorder.SEGMENTS)
         self.assertEqual(snapshot["export_scope"], FakeRecorder.SCOPE)
         self.assertEqual(self.logbook.between, [FakeRecorder.SCOPE["since"]])
-        self.assertEqual(self.extras[0], {"logbook.jsonl": self.logbook.records})
+        self.assertEqual(self.extras[0], {"logbook.jsonl": self.logbook.records, "stats.jsonl": FakeRecorder.STATS})
+        self.assertEqual(snapshot["stats_scope"], FakeRecorder.STATS_SCOPE)
         self.window.dialogs.show_settings()  # 「导出诊断」按钮在设置窗口里
         self.addCleanup(self.window.dialogs.settings.close)
         export_btn = self.window.dialogs.settings.export_btn
@@ -468,14 +651,84 @@ class OverlayServicesTest(unittest.TestCase):
         self.assertIn("本局和上一局的识别记录与推荐日志", EXPORT_TIP)
         self.assertIn("对局结束后再点击也可以", EXPORT_TIP)
 
+    def test_export_stats_reader_records_scope(self):
+        """导出诊断时另读最近 12 小时的统计记录（stats_reader），经 extra 写成 stats.jsonl，范围写进 state.json 的
+        stats_scope。"""
+        recorder = FakeRecorder()
+        self.session.eventlog.recorder = recorder
+        self.window.export_diagnostics()
+        self.assertEqual(recorder.calls, ["flush", "collect", "collect_stats"])
+        self.assertEqual(self.extras[0]["stats.jsonl"], FakeRecorder.STATS)
+        self.assertEqual(self.exports[0][1]["stats_scope"], FakeRecorder.STATS_SCOPE)
+
+    def test_export_stats_error_keeps_package(self):
+        """统计记录读不出来：错误记录里有一条，诊断包照常导出，不带 stats.jsonl，stats_scope 里写着 error。"""
+        log = capture_errors(self)
+        recorder = FakeRecorder()
+
+        def broken(hours=12.0):
+            raise OSError("读不出来")
+
+        recorder.collect_stats = broken
+        self.session.eventlog.recorder = recorder
+        self.window.export_diagnostics()
+        self.assertEqual(len(self.exports), 1)
+        self.assertEqual(self.exports[0][1]["stats_scope"]["error"], "OSError: 读不出来")
+        self.assertNotIn("stats.jsonl", self.extras[0] or {})
+        titles = [title for title, _ in log.entries()]
+        self.assertTrue(any("统计记录" in title for title in titles), titles)
+
+    def test_undo_does_not_carry_stats(self):
+        """撤销误判时自动保存的那一份要快：不读统计记录，也不带 stats.jsonl。"""
+        recorder = FakeRecorder()
+        calls = []
+
+        def collect_stats(hours=12.0):
+            calls.append("stats")
+            return [], {}
+
+        recorder.collect_stats = collect_stats
+        self.session.eventlog.recorder = recorder
+        self.session.set_owned(["书签"])
+        self.window.handle(self.session._auto_new_game("star", None, "星数由 2 星变为 0 星"))
+        self.window.notices.buttons("newgame")[0].click()
+        self.assertEqual(calls, [])
+        self.assertNotIn("stats.jsonl", self.extras[0] or {})
+        self.assertNotIn("stats_scope", self.exports[0][1])
+
+    def test_export_lane_stats_read_in_background(self):
+        """另一张的统计记录同样在后台那一步里读（先攒着 run_background 时还没读），原样交给诊断包的 lanes，
+        范围写进 state.json 的 lanes.<端名>.stats_scope。"""
+        calls = []
+        lane_events = [{"time": "2026-10-03T13:00:07.000", "kind": "read:hud", "round": 1}]
+        lane_stats = [{"time": "2026-10-03T13:00:07.000", "kind": "recog_stats", "period_s": 60.0}]
+        lane_stats_scope = {"hours": 12.0, "since": "2026-10-03T13:00:07.000", "segments": 1, "lines": 1}
+
+        def read():
+            return lane_events, {"segments": [], "since": "2026-10-03T13:00:07.000"}
+
+        def read_stats():
+            calls.append("stats")
+            return lane_stats, lane_stats_scope
+
+        w = self.window
+        pending = []
+        w.run_background = pending.append
+        w.background.export_diagnostics(lanes={"taptap": {"frame": None, "read": read, "stats": read_stats}})
+        self.assertEqual(calls, [])
+        pending[0]()
+        self.assertEqual(calls, ["stats"])
+        self.assertEqual(self.lanes[0]["taptap"]["stats"], lane_stats)
+        self.assertEqual(self.exports[0][1]["lanes"]["taptap"]["stats_scope"], lane_stats_scope)
+
     def test_export_without_logbook_interface(self):
-        """推荐日志模块没有 records_between（旧版）时不带 extra，诊断包照常导出。"""
+        """推荐日志模块没有 records_between（旧版）时不带推荐日志，统计记录照带，诊断包照常导出。"""
         w = self.window
         w.services = Services(logbook=SimpleNamespace(), diagnostics=self.services.diagnostics)
         self.session.eventlog.recorder = FakeRecorder()
         w.export_diagnostics()
         self.assertEqual(len(self.exports), 1)
-        self.assertIsNone(self.extras[0])
+        self.assertEqual(self.extras[0], {"stats.jsonl": FakeRecorder.STATS})
 
     def test_undo_record_uses_recorder(self):
         """撤销误判的新一局：自动保存的诊断包用同一份收集（撤销前的两段，含刚判定的新一局那一段）和推荐日志。"""
@@ -550,29 +803,130 @@ class OverlayServicesTest(unittest.TestCase):
         self.assertEqual((self.exports[-1][0], self.unreads[-1]), (None, None))  # 自动保存的：不含截图
 
     def test_export_carries_select_shots(self):
-        """后台识别留着记下选中项用的那一帧、被临时盖住而没有采用的那一帧（Watcher.pick_shot、covered_shot，悬浮窗的
-        pick_source、covered_source 现取）：「导出诊断」把它们交给诊断包另存（select_picked、select_covered）；还没有、取的时候
-        出错、没接上的那一张不带，其余照常。撤销误判时自动保存的那一份不带。"""
+        """后台识别留着记下选中项用的那一帧、被临时盖住而没有采用的那一帧、对局中途像一局打完的那一帧（Watcher.pick_shot、
+        covered_shot、finish_shot，悬浮窗的 pick_source、covered_source、finish_source 现取）：「导出诊断」把它们交给诊断包
+        另存（select_picked、select_covered、finish_look）；还没有、取的时候出错、没接上的那一张不带，其余照常。撤销误判时
+        自动保存的那一份不带。"""
         w = self.window
         picked = (datetime(2026, 1, 2, 12, 0, 1), "记下选中的那一帧", {"slot": 1, "chip": "标靶"})
         covered = (datetime(2026, 1, 2, 12, 0, 2), "被盖住的那一帧", {"slots": [2]})
-        w.pick_source, w.covered_source = (lambda: picked), (lambda: covered)
+        finish = (datetime(2026, 1, 2, 12, 0, 3), "对局中途像打完的一帧", {"look": "coral"})
+        w.pick_source, w.covered_source, w.finish_source = (lambda: picked), (lambda: covered), (lambda: finish)
         w.export_diagnostics()
         self.assertEqual(self.shots, [(picked, covered)])
+        self.assertEqual(self.finishes, [finish])
         self.assertIsNone(self.unreads[-1])
 
         def broken():
             raise RuntimeError("取不到")
 
-        w.pick_source, w.covered_source = broken, None
+        w.pick_source, w.covered_source, w.finish_source = broken, None, broken
         w.export_diagnostics()
         self.assertEqual(self.shots[-1], (None, None))
-        w.pick_source = lambda: picked
+        self.assertIsNone(self.finishes[-1])
+        w.pick_source, w.finish_source = lambda: picked, lambda: finish
         self.session.set_owned(["书签"])
         w.handle(self.session._auto_new_game("star", None, "星数由 2 星变为 0 星"))
         w.notices.buttons("newgame")[0].click()
         self.assertEqual(len(self.exports), 3)
         self.assertEqual(self.shots[-1], (None, None))  # 自动保存的：不含截图
+        self.assertIsNone(self.finishes[-1])
+
+    def test_export_lanes_read_in_background(self):
+        """另一张悬浮窗的识别记录在后台那一步里读（先攒着 run_background 时还没读），画面和识别记录原样交给
+        diagnostics.export 的 lanes；它的导出范围写进 state.json 的 lanes.<端名>.export_scope。第一张的识别记录、推荐日志、
+        导出范围照旧。"""
+        recorder = FakeRecorder()
+        self.session.eventlog.recorder = recorder
+        self.logbook.records = [{"t": "pick", "time": "2026-10-03T13:00:05"}]
+        calls = []
+        lane_events = [{"time": "2026-10-03T13:00:07.000", "kind": "read:hud", "round": 1}]
+        lane_scope = {"segments": [{"file": "20261003-130000.jsonl"}], "since": "2026-10-03T13:00:07.000"}
+
+        def read():
+            calls.append("read")
+            return lane_events, lane_scope
+
+        w = self.window
+        pending = []
+        w.run_background = pending.append
+        w.background.export_diagnostics(lanes={"taptap": {"frame": "第二张画面", "read": read}})
+        self.assertEqual(calls, [])  # 还在界面线程里：没读
+        pending[0]()
+        self.assertEqual(calls, ["read"])
+        _, snapshot, events, _ = self.exports[0]
+        self.assertEqual(events, FakeRecorder.SEGMENTS)
+        self.assertEqual(self.lanes[0], {"taptap": {"frame": "第二张画面", "events": lane_events, "stats": []}})
+        self.assertEqual(snapshot["lanes"]["taptap"]["export_scope"], lane_scope)
+        self.assertEqual(snapshot["lanes"]["taptap"]["stats_scope"],
+                         {"hours": 12.0, "since": None, "segments": 0, "lines": 0, "source": "none"})
+        self.assertEqual(snapshot["export_scope"], FakeRecorder.SCOPE)
+        self.assertEqual(self.extras[0], {"logbook.jsonl": self.logbook.records, "stats.jsonl": FakeRecorder.STATS})
+        self.assertEqual(self.logbook.between, [FakeRecorder.SCOPE["since"]])
+
+    def test_export_lane_read_error_keeps_package(self):
+        """另一张的识别记录读不出来：错误记录里有一条，诊断包照常导出，这一端的识别记录为空、export_scope 带 error；
+        read 为 None 时当成空的、不报错。"""
+        log = capture_errors(self)
+
+        def broken():
+            raise OSError("读不出来")
+
+        w = self.window
+        w.background.export_diagnostics(lanes={"taptap": {"frame": None, "read": broken}})
+        self.assertEqual(len(self.exports), 1)
+        _, snapshot, _, _ = self.exports[0]
+        self.assertEqual(self.lanes[0], {"taptap": {"frame": None, "events": [], "stats": []}})
+        self.assertEqual(snapshot["lanes"]["taptap"]["export_scope"],
+                         {"segments": [], "since": None, "error": "OSError: 读不出来"})
+        titles = [title for title, _ in log.entries()]
+        self.assertTrue(any("第二张" in title and "识别记录" in title for title in titles), titles)
+
+        log.clear()
+        w.background.export_diagnostics(lanes={"taptap": {"frame": None, "read": None}})
+        self.assertEqual(len(self.exports), 2)
+        self.assertEqual(self.lanes[-1], {"taptap": {"frame": None, "events": [], "stats": []}})
+        self.assertEqual(self.exports[-1][1]["lanes"]["taptap"]["export_scope"],
+                         {"segments": [], "since": None})
+        self.assertEqual(log.entries(), [])
+
+    def test_export_without_lanes_unchanged(self):
+        """不给另一张悬浮窗的东西（只有一张时）：diagnostics.export 收到的参数和现在一样，不带 lanes。"""
+        w = self.window
+        w.background.export_diagnostics()
+        self.assertEqual(len(self.exports), 1)
+        self.assertIsNone(self.lanes[0])
+        w.background.export_diagnostics(lanes={})
+        self.assertIsNone(self.lanes[-1])
+
+    def test_events_reader_and_current_frame(self):
+        """events_reader 在界面线程里当场取好记录器和界面处理过的事件：之后换掉记录器、再往界面的事件里加，读的还是那一份；
+        current_frame 有画面时返回它，没接上、取的时候出错时返回 None。"""
+        bg = self.window.background
+        recorder = FakeRecorder()
+        self.session.eventlog.recorder = recorder
+        read = bg.events_reader()
+        self.session.eventlog.recorder = None
+        self.assertEqual(read(), (FakeRecorder.SEGMENTS, FakeRecorder.SCOPE))
+        self.assertEqual(recorder.calls, ["flush", "collect"])
+
+        self.session.recent_events = lambda seconds: []
+        bg.live.recent.append({"kind": "before", "time": "2026-10-03T13:00:01.000"})
+        read = bg.events_reader()
+        bg.live.recent.append({"kind": "after", "time": "2026-10-03T13:00:02.000"})
+        self.assertEqual(read()[0], [{"kind": "before", "time": "2026-10-03T13:00:01.000"}])
+
+        self.assertEqual(bg.current_frame(), "画面")
+        with mock.patch.object(bg, "frame_source", return_value=None):
+            self.assertIsNone(bg.current_frame())
+        with mock.patch.object(bg, "frame_source", side_effect=RuntimeError("取不到")):
+            self.assertIsNone(bg.current_frame())
+
+        def broken():
+            raise OSError("取不到")
+
+        with mock.patch.object(bg, "frame_source", return_value=broken):
+            self.assertIsNone(bg.current_frame())
 
     def test_export_unavailable(self):
         w = Overlay(self.db, self.session, threading.Lock())
@@ -850,10 +1204,12 @@ class OverlayServicesTest(unittest.TestCase):
                 self.assertEqual(toast_position(size, missing, screens, avail), corner)
 
     def test_tray_menu(self):
-        """托盘菜单：「显示」「设置」「导出诊断」「使用说明」「关于」，隔一条线「退出」。「设置」「导出诊断」先把收在托盘里的
-        悬浮窗显示出来（同「显示」），再打开设置窗口、导出诊断（结果照旧写在悬浮窗上）。"""
+        """托盘菜单：「显示」「重置悬浮窗」「设置」「导出诊断」「打开作业站」，隔一条线「退出」。「设置」「导出诊断」先把
+        收在托盘里的悬浮窗显示出来（同「显示」），再打开设置窗口、导出诊断（结果照旧写在悬浮窗上）；「打开作业站」打开首页。"""
         from PySide6.QtWidgets import QSystemTrayIcon
 
+        from advisor import hub
+        self.enterContext(mock.patch.object(hub, "ENABLED", True))
         w = self.window
         icon = SimpleNamespace(setContextMenu=lambda m: None, activated=SimpleNamespace(connect=lambda f: None),
                                setToolTip=lambda t: None, show=lambda: None)
@@ -864,22 +1220,27 @@ class OverlayServicesTest(unittest.TestCase):
         self.addCleanup(setattr, w.tray_part, "tray", None)
         actions = w.tray_part.menu.actions()
         self.assertEqual([a.text() if not a.isSeparator() else None for a in actions],
-                         ["显示", "设置", "导出诊断", "使用说明", "关于", None, "退出"])
+                         ["显示", "重置悬浮窗", "设置", "导出诊断", "打开作业站", None, "退出"])
         w.hide()
-        actions[1].trigger()  # 设置
+        actions[2].trigger()  # 设置
         self.assertFalse(w.isHidden())
         self.assertTrue(w.dialogs.settings.isVisible())
         w.dialogs.settings.close()
         w.hide()
-        actions[2].trigger()  # 导出诊断
+        actions[3].trigger()  # 导出诊断
         self.assertFalse(w.isHidden())
         self.assertEqual(len(self.exports), 1)
         self.assertIn("已导出诊断包：", w.notice_model.texts()["export"])
         w.hide()
+        opened = []
+        w.open_url = lambda url: opened.append(url) or True
+        actions[4].trigger()  # 打开作业站
+        self.assertEqual(opened, ["https://astral-chip-compass.com/app/"])
+        self.assertTrue(w.isHidden())  # 打开网址不显示悬浮窗
 
     def test_open_manual(self):
-        """托盘菜单的「使用说明」：用系统默认的程序打开（不显示悬浮窗）；文件不在时显示悬浮窗、提示重新解压；系统打不开时
-        提示去文件夹里直接打开。识别记录记一条 manual。"""
+        """悬浮窗打开使用说明（open_manual）：用系统默认的程序打开（不显示悬浮窗）；文件不在时显示悬浮窗、提示重新解压；
+        系统打不开时提示去文件夹里直接打开。识别记录记一条 manual。"""
         from advisor.ui import overlay as overlay_mod
 
         w = self.window
@@ -890,18 +1251,18 @@ class OverlayServicesTest(unittest.TestCase):
         with mock.patch.object(app_paths, "manual_path", return_value=page), \
                 mock.patch.object(overlay_mod, "open_with_system", side_effect=lambda p: opened.append(p) or True):
             w.hide()
-            w.tray_part.open_manual()
+            w.open_manual()
             self.assertEqual(opened, [page])
             self.assertTrue(w.isHidden())  # 打开了：不显示悬浮窗
         missing = folder / "不在" / "使用说明.html"
         with mock.patch.object(app_paths, "manual_path", return_value=missing), \
                 mock.patch.object(overlay_mod, "open_with_system", side_effect=AssertionError("不该打开")):
-            w.tray_part.open_manual()
+            w.open_manual()
         self.assertFalse(w.isHidden())
         self.assertEqual(w.message.text, "找不到「使用说明.html」：请把拾星助手的压缩包整个重新解压。")
         with mock.patch.object(app_paths, "manual_path", return_value=page), \
                 mock.patch.object(overlay_mod, "open_with_system", return_value=False):
-            w.tray_part.open_manual()
+            w.open_manual()
         self.assertEqual(w.message.text, "无法打开「使用说明.html」：请在拾星助手的文件夹中直接双击打开它。")
         records = [(e.get("ok"), e.get("missing")) for e in self.session.recent_events(600)
                    if e.get("kind") == "read:user" and e.get("action") == "manual"]
@@ -912,7 +1273,7 @@ class OverlayServicesTest(unittest.TestCase):
         """「使用说明」打开哪一个：发行版是程序文件夹（解压出来的那一层）里的「使用说明.html」，文件名和打包时生成的同一个；
         开发版是项目里的原稿 docs/使用说明.md（开发版没有生成好的网页）。"""
         source = (PROJECT / "tools" / "build_release.py").read_text(encoding="utf-8")
-        self.assertIn("MANUAL_NAME = paths.MANUAL_NAME", source)  # 打包生成的和托盘菜单打开的是同一个文件名
+        self.assertIn("MANUAL_NAME = paths.MANUAL_NAME", source)  # 打包生成的和悬浮窗打开的（open_manual）是同一个文件名
         self.assertEqual(app_paths.MANUAL_NAME, "使用说明.html")
         self.assertEqual(app_paths.manual_path(), app_paths.app_dir() / "docs" / "使用说明.md")
         self.assertTrue(app_paths.manual_path().is_file())

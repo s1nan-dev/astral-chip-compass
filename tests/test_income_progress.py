@@ -6,6 +6,7 @@
 - 银行卡-余额多，第 6 轮、当前格第 9 格：−80.4（分母也按进度条算时是 −67；不领先时 −53.6）；
 - 小猪存钱罐，第 6 轮、第 9 格：−24（分母也按进度条算时是 −18.75）；第 9 轮、第 14 格：−39（同上是 −36）。
 """
+import dataclasses
 import unittest
 
 from advisor.data import load_db
@@ -22,7 +23,12 @@ def income(db, chip: str, rnd: int, progress: int | None) -> float:
 class IncomeProgressTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.db = load_db()
+        # 纯收入筹码的正分只有内置分，现在没有可折的分；这一组查折算算法，用内置分和刷新代价都按原来的资料库副本
+        db = load_db()
+        rules = {k: dict(v) if isinstance(v, dict) else v for k, v in db.rules.items()}
+        rules["official"]["scale"] = 0.5
+        rules["reroll_cost"]["gain"] = 18
+        cls.db = dataclasses.replace(db, rules=rules)
 
     def test_leading_progress_deducts_more(self):
         cases = (("银行卡-余额多", 6, 9, -80.4), ("小猪存钱罐", 6, 9, -24.0), ("小猪存钱罐", 9, 14, -39.0))

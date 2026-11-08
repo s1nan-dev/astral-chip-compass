@@ -57,7 +57,7 @@ from PySide6.QtGui import QColor, QImage, QImageReader, QLinearGradient, QPainte
 
 from .. import fileio, paths, unlock
 from ..version import VERSION
-from . import PREVIEW_ARG, theme
+from . import PREVIEW_ARG, lang, theme
 
 log = logging.getLogger(__name__)
 
@@ -433,10 +433,10 @@ def _start_child(keys) -> tuple[subprocess.Popen, int | None]:
     """起画 keys 这几套的子进程，放进作业对象（见上），返回 (子进程, 作业句柄；放不进时为 None)。先挂起着起，放进作业以后
     再恢复：不先挂起的话，开发版里启动器再起的真正的解释器可能赶在放进作业之前起来，就不在作业里。放不进作业时照常恢复、
     照常画；挂起着起的恢复不了（照理不会）时结束它，照常另起一个（不放进作业）。起不了时同 Popen 抛 OSError、ValueError。
-    子进程的环境变量照抄本进程的，另带上这次运行决定好的下载的识别图片的位置（paths.child_environ）：子进程只读那一处，
-    画缩略图用的筹码图标和主程序看到的是同一批。"""
+    子进程的环境变量照抄本进程的，另带上这个进程的界面语言（lang.child_env：子进程照它定界面文字）和这次运行决定好的下载的
+    识别图片的位置（paths.child_environ）：子进程只读那一处，画缩略图用的筹码图标和主程序看到的是同一批。"""
     command = child_command(keys)
-    options = dict(cwd=str(paths.app_dir()), env=paths.child_environ(), stdin=subprocess.DEVNULL,
+    options = dict(cwd=str(paths.app_dir()), env=lang.child_env(paths.child_environ()), stdin=subprocess.DEVNULL,
                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, **_spawn_options())
     try:
         job = _new_job()

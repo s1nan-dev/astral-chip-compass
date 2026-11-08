@@ -90,9 +90,11 @@ class Replayer:
 
     def fork(self) -> "Replayer":
         new = copy.copy(self)
-        # 资料库、锁共用；快速盯绿框那一份交换（PickWatch）里的条件变量也共用：锁拷不了，回放时也没有盯绿框的线程
+        # 资料库、锁共用；快速盯绿框那一份交换（PickWatch）里的条件变量也共用：锁拷不了，回放时也没有盯绿框的线程。识别图片
+        # （templates.assets，全程序一份，自带一把锁）也共用，同两张悬浮窗的识别流程
         cond = self.proc.pick_watch._cond
-        memo = {id(self.db): self.db, id(self.proc.lock): self.proc.lock, id(cond): cond}
+        memo = {id(self.db): self.db, id(self.proc.lock): self.proc.lock, id(cond): cond,
+                id(self.proc.assets): self.proc.assets}
         new.session, new.proc = copy.deepcopy((self.session, self.proc), memo)
         new._bind([self.clock[0]])
         return new

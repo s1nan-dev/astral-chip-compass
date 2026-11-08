@@ -318,15 +318,20 @@ class NightmareTest(Base):
     def test_others_unchanged(self):
         # 噩梦及以上只改摩托头盔-高级：其他生存类筹码、非生存类筹码的全部分项和分不出困难还是噩梦（困难及以上）时相同；
         # 和读不到难度时比，只差「难度」的整句：前面多「难度待识别，按困难及以上计算：」、后半句主语写「这几档难度」，
-        # 分值和短句相同
+        # 分值和短句相同。之后任务三选一的等级另按难度那一列取（噩梦及以上按噩梦那一列，context.task_level_column），
+        # 所以放在各难度任务等级相同的地图上比
         chips = ("摩托头盔-中级", "摩托头盔-一般", "医疗箱-完备治疗", "安全气囊", "标靶", "额外电池")
+        same = "森秋幻境"
+        self.assertEqual(len({tuple(v) for v in self.db.map_info[same].task_levels.values()}), 1)
         for hero in ("阿尔", "美咲", "茉莉", "凛"):
             for chip in chips:
                 with self.subTest(hero=hero, chip=chip):
-                    plain = Scorer(self.db, State(hero=hero, round=5, difficulty_level=LEVEL_HARD_PLUS)).parts(chip, (), 5)
-                    night = Scorer(self.db, State(hero=hero, round=5, difficulty_level=LEVEL_NIGHTMARE)).parts(chip, (), 5)
+                    plain = Scorer(self.db, State(hero=hero, round=5, map=same,
+                                                  difficulty_level=LEVEL_HARD_PLUS)).parts(chip, (), 5)
+                    night = Scorer(self.db, State(hero=hero, round=5, map=same,
+                                                  difficulty_level=LEVEL_NIGHTMARE)).parts(chip, (), 5)
                     self.assertEqual(night, plain)
-                    unknown = Scorer(self.db, State(hero=hero, round=5)).parts(chip, (), 5)
+                    unknown = Scorer(self.db, State(hero=hero, round=5, map=same)).parts(chip, (), 5)
                     self.assertEqual([dataclasses.replace(p, reason=as_known_difficulty(p.reason)) for p in unknown], plain)
                     for p in unknown:
                         self.assertEqual(p.reason.startswith(UNKNOWN_DIFFICULTY_LEAD), p.label == "难度")

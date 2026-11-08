@@ -89,18 +89,20 @@ def build_probes(scorer, st, offer, rarity) -> list:
     # 美工刀、治愈来源、配套筹码的概率（各自的缓存 memo.knife、memo.heal、memo.partner）：按候选地图平均的一次
     # （地图参数为 None），以及每张候选地图各一次（分项里的预判、刷新和前瞻按地图算时就这样调用）。
     # 治愈来源的概率在推荐里按各把美工刀分别算，这里也按第一个候选和各把美工刀分别查；配套筹码取开套流派
-    # （[charge_build] school）里除已有和自己以外的筹码，和推荐里的算法一样有机会达到推荐线（概率不为 0）
+    # （[school_build] schools）里的筹码，除已有和自己以外的都算，和推荐里的算法一样有机会达到推荐线（概率不为 0）
     cfg = heal_knife(scorer)
     owned_set = frozenset(owned)
     knives = [k for k in cfg["knives"] if k in db.chips and k not in owned_set] if cfg is not None else []
     heal_names = list(dict.fromkeys((*recorded[:1], *knives)))
-    school = (db.rules.get("charge_build") or {}).get("school")
-    partners = frozenset(n for n, c in db.chips.items() if school and c.school == school) - owned_set - set(recorded[:1])
+    # 预判美工刀时假设选了的治愈来源（knife_chance 按「已有筹码 + 它」给美工刀打分）
+    heal_source = next((h for h in cfg["layers"] if h not in owned_set), next(iter(cfg["layers"]))) if cfg else ""
+    schools = (db.rules.get("school_build") or {}).get("schools", ())
+    partners = frozenset(n for n, c in db.chips.items() if c.school in schools) - owned_set - set(recorded[:1])
     partners = partners or frozenset(recorded[1:2]) or frozenset(recorded[:1])
     for m in dict.fromkeys((None, *scorer.maps)):  # 没有候选地图时 maps 是 (None,)，不重复
         tag = "" if m is None else f":{m!r}"
         if cfg is not None:
-            probes.append((f"knife_chance{tag}", lambda m=m: repr(knife_chance(scorer, owned_set, cfg, m))))
+            probes.append((f"knife_chance{tag}", lambda m=m: repr(knife_chance(scorer, heal_source, owned_set, cfg, m))))
         for j, name in enumerate(heal_names):
             probes.append((f"heal_chance:{j}{tag}", lambda n=name, m=m: repr(heal_chance(scorer, n, owned_set, m))))
         if recorded:

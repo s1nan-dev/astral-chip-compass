@@ -1,6 +1,7 @@
 """悬浮窗的位置和窗口层次：跟着游戏窗口走、拖动、前台状态（WindowFollower），独立窗口的打开先后和层次（WindowStack），
-以及系统托盘图标（Tray：菜单「显示」「设置」「导出诊断」「使用说明」「关于」「退出」，单击或双击显示悬浮窗，再次启动时的
-回应，第一次收到托盘时贴着托盘图标的小提示框）。
+以及系统托盘图标（Tray：菜单「显示」「重置悬浮窗」「设置」「导出诊断」「打开作业站」「退出」，hub.ENABLED 为 False
+时没有「打开作业站」；单击或双击显示悬浮窗，再次启动时的回应，第一次收到托盘时贴着托盘图标的小提示框）。托盘菜单里
+没有「使用说明」「关于」：「关于拾星助手」在设置窗口里，使用说明是程序文件夹里的「使用说明.html」。
 
 三个部件都不拿着悬浮窗：悬浮窗这个窗口的位置、大小、句柄、显示与否，模式、截取方式和后台线程都经外壳给的回调取；计时器、
 托盘图标仍挂在悬浮窗上（外壳给的 later、make_timer、make_icon：悬浮窗删掉时一起停）。
@@ -13,21 +14,24 @@ from __future__ import annotations
 import traceback
 from weakref import WeakKeyDictionary
 
-from PySide6.QtCore import QEvent, QObject, QPoint, QRect, Qt, QTimer
+from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QGuiApplication
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
-from ... import perfstats
-from .. import log_error
+from ... import hub, perfstats
+from .. import lang, log_error
 from ..tray_toast import TrayToast
 from .factory import _alive, _set_tip
-from .geometry import (WindowPlan, _window_gone_texts, corner_point, fit_on_any_screen, fit_rect, live_placement,
-                       logical_rect, overlay_position, probe_state, valid_rel, window_plan)
+from .geometry import (WindowPlan, _window_gone_texts, beside, corner_point, fit_on_any_screen, fit_rect,
+                       live_placement, logical_rect, overlay_position, probe_state, valid_rel, window_plan)
 from .wording import (DEFAULT_REL, NO_GAME, POLL_MS, SETTLE_MAX_TICKS, SETTLE_MS, SETTLE_TICKS, TRAY_TOAST,
                       TRAY_TOAST_TITLE)
 
 # 数界面线程的定时器晚了多少用：不含电脑睡眠、休眠的时间（perfstats.unbiased_clock；测试换成假时钟）
 clock = perfstats.unbiased_clock
+
+# 第二张悬浮窗的 ×：只藏这一张（保留识别）。第一张有系统托盘时仍是收到托盘，没有托盘时退出程序
+LANE_CLOSE_TIP = "隐藏这张悬浮窗（识别继续进行；在托盘图标的菜单中选择「显示」可以再打开）"
 
 # 独立窗口（设置、关于、编辑方案、导入/导出、皮肤）上做的记号：已经装在它上面看它显示、要藏起来（WindowStack.show_window）
 _FOLLOW_PROP = "accFollowsOverlay"
@@ -40,7 +44,8 @@ class WindowFollower:
     def __init__(self, *, anchor, session, lock, live, message, say, waiting_text, capture_method, manual, refresh,
                  fit_height, foreground_state, frame_geometry, move_window, window_width, window_height,
                  window_position, window_id, window_visible, screens, probe, watcher, hotkey_thread, native, make_timer,
-                 flush_records, update_settings, cancel_settle, relayer) -> None:
+                 flush_records, update_settings, cancel_settle, relayer, notice_platform, companion_activity,
+                 companion_rect, companion_fixed, yields, restack) -> None:
         # 服务：Session 和它的锁（记下的位置、识别记录）；只读的显示状态：三选一显示期间的状态（live）、一次性提示（message）
         self.session, self.lock, self.live, self.message = session, lock, live, message
         # 外壳的回调：一次性提示、等待提示、实际的截取方式、是不是手动模式、刷新、重算高度、六种前台状态
@@ -58,6 +63,16 @@ class WindowFollower:
         # 不再退回关窗口时临时置顶的那一轮、开着的独立窗口照悬浮窗现在的层次设一遍
         self.make_timer, self.flush_records, self.update_settings = make_timer, flush_records, update_settings
         self.cancel_settle, self.relayer = cancel_settle, relayer
+        # 自动识别时认出的端变了（游戏平台设置的下拉框第一项照它写）：每次看完游戏窗口交给外壳
+        self.notice_platform = notice_platform
+        # 同时识别时另一张悬浮窗的前台状态（window_plan 的 companion；只有一张时返回 None）：找不到游戏窗口时按它决定
+        # 置不置顶，另一张的游戏切走时也按它决定放不放到前台窗口下面
+        self.companion_activity = companion_activity
+        # 同时识别时另一张悬浮窗的摆放和先后（只有一张时都不起作用）：它现在的外框（companion_rect，逻辑坐标；藏着时
+        # 为 None）、它被拖动过没有（companion_fixed）、这张没拖动过时要不要让着它（yields，第二张为真）、把游戏窗口
+        # 在前台的那张排到上面（restack，Lanes.restack）
+        self.companion_rect, self.companion_fixed = companion_rect, companion_fixed
+        self.yields, self.restack = yields, restack
         # 前台状态和窗口层次（window_plan）。activity 是前台状态判断的结果：game / own / background / minimized / nogame
         # （probe_state），None 为还没看过（测试、预览）；covered：其他程序在前台时别的窗口已经连续几次盖住悬浮窗；
         # layer：已经设好的层次（层次, 插在哪个窗口下面）
@@ -68,6 +83,7 @@ class WindowFollower:
         self.cover_below: int | None = None
         self.cover_class = ""
         self.game_class = ""
+        self.game_title = ""
         self.game_hwnd: int | None = None
         self.drag_from: QPoint | None = None
         self.press_at = QPoint()  # 按下左键的位置（屏幕坐标）：移动超过系统的拖动距离才算拖动
@@ -147,20 +163,31 @@ class WindowFollower:
         """悬浮窗应在的位置：有游戏窗口时按相对位置，没有时按固定角；都没有时为 None。
 
         没有拖动过、三选一界面显示着时，在默认位置和游戏窗口外侧等几处里挑挡住三选一最少的（live_placement）。
+        同时识别时，没拖动过的那张还避开另一张悬浮窗：三选一时按 avoid 算进挡住的代价；不是三选一时算出的位置和它
+        相交就挪到它旁边（beside）。让不让看 yields / companion_fixed：第二张一直让着第一张；第一张只在第二张被拖动过
+        （位置固定）时避开它，没拖动过的第二张会自己让开，免得两张来回躲。
         """
         w, h = self.window_width(), self.window_height()
         screens = self.screens()
+        other = None if self.rel_custom else self.companion_rect()
+        avoid = [other] if other is not None and (self.yields() or self.companion_fixed()) else []
         if self.game_rect is not None:
             g = self.game_rect
             if self.live.on and not self.rel_custom:
-                return live_placement(g, (w, h), self.rel, screens)
-            return overlay_position(g, (w, h), self.rel, self.default_rel, screens, self.live.on)
-        if self.anchor_abs is None:
-            return None
-        corner = self.corner
-        ax, ay = self.anchor_abs.x(), self.anchor_abs.y()
-        pos = QPoint(ax - (w if corner[1] == "r" else 0), ay - (h if corner[0] == "b" else 0))
-        return fit_on_any_screen(pos, (w, h), screens)
+                return live_placement(g, (w, h), self.rel, screens, avoid)
+            pos = overlay_position(g, (w, h), self.rel, self.default_rel, screens, self.live.on, avoid)
+        else:
+            if self.anchor_abs is None:
+                return None
+            corner = self.corner
+            ax, ay = self.anchor_abs.x(), self.anchor_abs.y()
+            pos = fit_on_any_screen(QPoint(ax - (w if corner[1] == "r" else 0), ay - (h if corner[0] == "b" else 0)),
+                                    (w, h), screens)
+        if other is not None and self.yields() and QRect(pos, QSize(w, h)).intersects(other):
+            moved = beside(other, (w, h), screens)
+            if moved is not None:
+                return moved
+        return pos
 
     def reposition(self) -> None:
         if self.drag_from is not None:
@@ -199,6 +226,8 @@ class WindowFollower:
             target = QPoint(screen.right() - self.window_width() - 20, screen.top() + 80)
         self.move_window(target)
         self.remember_anchor()
+        if self.yields():
+            self.reposition()  # 第一次建出来时就和另一张叠在一起：按 target_position 挪开
 
     def update_game(self, info) -> None:
         """游戏窗口的位置变了（移动、改大小、最小化后还原）：跟着移动。游戏窗口换了（游戏重启）时请后台识别下次取帧前
@@ -220,6 +249,7 @@ class WindowFollower:
                     retry()
             self.game_hwnd = hwnd
             self.game_class = getattr(info, "game_class", "") or self.game_class
+            self.game_title = getattr(info, "game_title", "") or self.game_title
 
     def poll(self) -> None:
         """定时器：看游戏窗口的位置和前台状态。查看出错时（Win32 调用失败等）这一次不算数：位置和前台状态照上一次的，
@@ -240,6 +270,9 @@ class WindowFollower:
             log_error("查看游戏窗口的位置和前台状态出错（拾星助手仍在运行）", traceback.format_exc(), append=True)
             return
         self.update_game(info)
+        if self.yields() and not self.rel_custom and self.companion_rect() is not None:
+            self.reposition()  # 另一张被拖走、自动让开、变高变矮时跟着挪（reposition 在拖动时自己会跳过）
+        self.notice_platform()
         self.update_activity(info)
 
     def cover_hwnd(self) -> int | None:
@@ -259,6 +292,10 @@ class WindowFollower:
         game_class = getattr(info, "game_class", "") if info is not None else ""
         if game_class:
             self.game_class = game_class  # 识别记录用；找不到游戏窗口时沿用上一次的
+        game_title = getattr(info, "game_title", "") if info is not None else ""
+        if game_title:
+            self.game_title = game_title  # 同上；三个版本的类名一样，只有标题分得出是哪个客户端
+        notice = getattr(info, "notice", "") if info is not None else ""
         before = self.activity
         # 后台识别取不到画面时发来的提示（找不到游戏窗口、游戏窗口已最小化）：游戏窗口又看得到了（游戏或本程序在前台、
         # 游戏在别的程序后面）就过时了，收起。识别线程可能抢在这里看到最小化之前发来，也可能在看到还原之后才送到，所以
@@ -270,12 +307,22 @@ class WindowFollower:
             if state in ("background", "minimized", "nogame"):
                 self.flush_records()  # 识别记录写盘（含刚记下的 pause）
             if state == "nogame":
-                self.say(NO_GAME)
-            elif stale or (before == "nogame" and self.message.text == NO_GAME):
+                self.say(lang.t(notice or NO_GAME))
+            elif stale or (before == "nogame" and self.message.text in _window_gone_texts()):
                 self.say("" if self.live.on else self.waiting_text())
             if state == "nogame" or before == "nogame":
                 self.update_settings()
             self.refresh()
+            self.restack()  # 切到 game 时层次可能没变（都是 top），不经过 apply_layer 那一次
+        elif state == "nogame":
+            # 一直是找不到游戏窗口：这一句变了（在设置里改了游戏平台，或者另一个端开了、关了）时换成新的。只换悬浮窗上
+            # 正显示着的这几种找不到窗口的提示，别的提示（一次性的操作结果等）不盖掉
+            text = lang.t(notice or NO_GAME)
+            if text != self.message.text and self.message.text in _window_gone_texts():
+                self.say(text)
+                self.refresh()
+            elif self.update_plan():
+                self.refresh()
         elif stale:
             self.say("" if self.live.on else self.waiting_text())
             self.refresh()
@@ -288,7 +335,8 @@ class WindowFollower:
         if self.activity is None:
             self.plan = None
             return False
-        plan = window_plan(self.activity, self.capture_method(), self.manual(), self.live.on, self.covered)
+        plan = window_plan(self.activity, self.capture_method(), self.manual(), self.live.on, self.covered,
+                           self.companion_activity())
         old, self.plan = self.plan, plan
         if self.watcher() is not None and (old is None or (old.paused, old.why) != (plan.paused, plan.why)):
             # 细节（最小化 / 找不到游戏窗口 / 截取屏幕时切出）写进识别记录的 pause（Watcher.set_paused）
@@ -328,14 +376,21 @@ class WindowFollower:
                     winapi.set_topmost(hwnd, True)
             else:
                 winapi.set_topmost(hwnd, False)
+                # 取消置顶会把窗口放到普通窗口的最上面：刚切到的程序在它下面，会被它盖着。原来是置顶的、现在因为找不到
+                # 游戏窗口退回不置顶、另一张的游戏又切到了后台或最小化时，再放到前台窗口的正下方。从托盘「显示」回来
+                # 是从 front 算起的，那时玩家正要看它，不退到后面去。
+                if (before is not None and before[0] == "top" and self.activity == "nogame"
+                        and self.companion_activity() in ("background", "minimized")):
+                    winapi.step_behind_foreground(hwnd)
         except Exception:  # noqa: BLE001  调用出错时照常显示
             log_error("调整悬浮窗的窗口层次出错（拾星助手仍在运行）", traceback.format_exc(), append=True)
         if layer != "front":  # 开着的独立窗口跟着悬浮窗，设在它上面（点托盘图标时摆好的先后不打乱）
             self.relayer()
+        self.restack()  # 两张都置顶时，游戏窗口在前台的那张排到上面
 
     def log_layer(self) -> None:
-        """窗口层次的变化写进识别记录（layer）：前台状态、层次，盖住悬浮窗的窗口和游戏窗口的类名（只在本机，导出诊断时
-        才带上）。不写窗口标题。"""
+        """窗口层次的变化写进识别记录（layer）：前台状态、层次，盖住悬浮窗的窗口和游戏窗口的类名，以及找到游戏窗口时对上
+        的是哪个标题（分得出是哪个客户端；只在本机，导出诊断时才带上）。不读、不写别的窗口的标题。"""
         if self.layer is None:
             return
         data = {"state": self.foreground_state(), "layer": self.layer[0]}
@@ -343,6 +398,8 @@ class WindowFollower:
             data["cover_class"] = self.cover_class
         if self.game_class:
             data["game_class"] = self.game_class
+        if self.game_title:
+            data["game_title"] = self.game_title
         try:
             with self.lock:
                 self.session.log_state("layer", **data)
@@ -542,56 +599,70 @@ class WindowStack(QObject):
 class Tray:
     """系统托盘的图标、菜单和几个入口。托盘图标建出来挂在悬浮窗下面（外壳给的 make_icon）。"""
 
-    def __init__(self, *, close_btn, make_icon, show_about, show_settings, export_diagnostics, open_manual, show_window,
-                 raise_window, hide_window, window_hidden, window_id, native, relaunch_ack, open_windows, mark_layer,
-                 reset_layer, refresh, trace_user):
+    def __init__(self, *, close_btn, make_icon, show_settings, export_diagnostics, open_hub, reset_overlay,
+                 show_window, raise_window, hide_window, window_hidden, window_id, native, relaunch_ack, open_windows,
+                 mark_layer, reset_layer, refresh, trace_user, fallback="quit"):
         # 控件：标题栏的 ×（有托盘时悬停说明改写成「收到系统托盘」）
         self.close_btn = close_btn
-        # 外壳的回调：建托盘图标；菜单里的几项：打开「关于」窗口、打开「拾星助手设置」窗口（同底栏的「设置」）、导出诊断（同
-        # 设置窗口里的「导出诊断」）、打开使用说明；悬浮窗这个窗口的显示、放到最上面、藏起来、藏着没有、窗口句柄；是否调用
-        # Win32 改窗口层次（native()）、再次启动时回应新启动的那个（relaunch_ack()，没接上时为 None），这两样悬浮窗建好以后
-        # 才接上，每次现取；开着的独立窗口和记下它们的层次（WindowStack）；放到最前面以后按当前状态重设层次（跟随游戏窗口的
-        # 部件，返回要不要重画）；刷新、记识别记录
-        self.make_icon, self.show_about = make_icon, show_about
-        self.show_settings, self.export_diagnostics, self.open_manual = show_settings, export_diagnostics, open_manual
+        # 外壳的回调：建托盘图标；菜单里的几项：打开「拾星助手设置」窗口（同底栏的「设置」）、导出诊断（同
+        # 设置窗口里的「导出诊断」）、打开作业站首页、重置悬浮窗（Overlay.reset_overlay）；悬浮窗这个窗口的显示、放到最上面、
+        # 藏起来、藏着没有、窗口句柄；是否调用 Win32 改窗口层次（native()）、再次启动时回应新启动的那个（relaunch_ack()，
+        # 没接上时为 None），这两样悬浮窗建好以后才接上，每次现取；开着的独立窗口和记下它们的层次（WindowStack）；放到最前面
+        # 以后按当前状态重设层次（跟随游戏窗口的部件，返回要不要重画）；刷新、记识别记录
+        self.make_icon = make_icon
+        self.show_settings, self.export_diagnostics, self.open_hub = show_settings, export_diagnostics, open_hub
+        self.reset_overlay = reset_overlay
         self.show_window, self.raise_window, self.hide_window = show_window, raise_window, hide_window
         self.window_hidden, self.window_id = window_hidden, window_id
         self.native, self.relaunch_ack = native, relaunch_ack
         self.open_windows, self.mark_layer, self.reset_layer = open_windows, mark_layer, reset_layer
         self.refresh, self.trace_user = refresh, trace_user
+        # 没有系统托盘时按 × 做什么：quit 退出程序（第一张）；hide 只藏这一张（第二张）
+        self.fallback = fallback
+        # 托盘「显示」时另外要显示的窗口（第二张）：调用这一个对象的方法（show_more()）
+        self.show_more = None
         self.tray: QSystemTrayIcon | None = None  # 托盘图标（setup_tray 建；系统没有托盘时为 None）
         self.menu: QMenu | None = None  # 托盘图标的菜单（没有父对象，留着引用免得被回收）
         self.told = False  # 第一次收到托盘时提示过了
         self.toast: TrayToast | None = None  # 收到托盘时的小提示框（第一次要弹时才建）
 
     def setup_tray(self) -> bool:
-        """系统托盘图标：菜单「显示」「设置」「导出诊断」「使用说明」「关于」，隔一条线「退出」；单击或双击图标显示悬浮窗。"""
+        """系统托盘图标：菜单「显示」「重置悬浮窗」「设置」「导出诊断」「打开作业站」，隔一条线「退出」；单击或双击图标
+        显示悬浮窗。hub.ENABLED 为 False 时跳过「打开作业站」。"""
         if not QSystemTrayIcon.isSystemTrayAvailable():
             return False
         tray = self.make_icon()
         menu = QMenu()
-        for text, slot in (("显示", self.show_from_tray), ("设置", self.menu_settings), ("导出诊断", self.menu_export),
-                           ("使用说明", self.open_manual), ("关于", self.show_about)):
-            action = QAction(text, menu)
+        items = [("显示", self.show_from_tray), ("重置悬浮窗", self.menu_reset), ("设置", self.menu_settings),
+                 ("导出诊断", self.menu_export)]
+        if hub.ENABLED:
+            items.append(("打开作业站", self.open_hub))
+        for text, slot in items:
+            action = QAction(lang.t(text), menu)
             action.triggered.connect(lambda _=False, fn=slot: fn())
             menu.addAction(action)
         menu.addSeparator()
-        quit_action = QAction("退出", menu)
+        quit_action = QAction(lang.t("退出"), menu)
         quit_action.triggered.connect(QApplication.instance().quit)
         menu.addAction(quit_action)
         tray.setContextMenu(menu)
         tray.activated.connect(self.tray_activated)
-        tray.setToolTip("拾星助手")
+        tray.setToolTip(lang.t("拾星助手"))
         tray.show()
         self.menu = menu
         self.tray = tray
-        _set_tip(self.close_btn, "收到系统托盘（识别继续进行；在托盘图标的菜单中选择「退出」可退出拾星助手）")
+        _set_tip(self.close_btn, lang.t("收到系统托盘（识别继续进行；在托盘图标的菜单中选择「退出」可退出拾星助手）"))
         QApplication.instance().setQuitOnLastWindowClosed(False)
         return True
 
     def tray_activated(self, reason) -> None:
         if reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick):
             self.show_from_tray()
+
+    def menu_reset(self) -> None:
+        """托盘菜单的「重置悬浮窗」：全部展开、清掉卡片单独收起的记录，显示出来放到最前面，再放到主显示器正中，
+        当作用户拖到了那里（Overlay.reset_overlay）。"""
+        self.reset_overlay()
 
     def menu_settings(self) -> None:
         """托盘菜单的「设置」：和底栏的「设置」按钮一样打开「拾星助手设置」窗口。悬浮窗收在托盘里时先显示出来（同「显示」）：
@@ -638,6 +709,8 @@ class Tray:
         # 收到托盘后窗口句柄可能重建、显示时 Qt 又设了置顶：从刚放到的最前面（front）算起，按当前状态重设窗口层次
         if self.reset_layer():
             self.refresh()
+        if callable(self.show_more):
+            self.show_more()
 
     def on_relaunch(self) -> None:
         """再次启动拾星助手时（新启动的那个发现已有一个在运行，见 single_instance）：和点击托盘图标一样显示悬浮窗（收到托盘
@@ -654,13 +727,13 @@ class Tray:
         self.trace_user("relaunch", hidden=hidden)
 
     def close_clicked(self) -> None:
-        """×：有系统托盘时收到托盘，没有时退出。每次运行第一次收到托盘时贴着托盘图标弹一个小提示框（TrayToast，约 4 秒后
-        消失；told 不存盘）：不用 Windows 的系统通知（showMessage），系统通知会放提示音。"""
-        if self.tray is None:
+        """×：有系统托盘时收到托盘；没有托盘时第一张退出程序、第二张只藏这一张。每次运行第一次收到托盘时贴着托盘图标
+        弹一个小提示框（TrayToast，约 4 秒后消失；told 不存盘）：不用 Windows 的系统通知（showMessage），系统通知会放提示音。"""
+        if self.tray is None and self.fallback == "quit":
             QApplication.instance().quit()
             return
         self.hide_window()
-        if not self.told:
+        if self.tray is not None and not self.told:
             self.told = True
             self.show_toast(TRAY_TOAST_TITLE, TRAY_TOAST)
 
@@ -675,3 +748,6 @@ class Tray:
             self.toast.popup(title, text, icon if isinstance(icon, QRect) else None)
         except Exception:  # noqa: BLE001  提示框弹不出来时照常收到托盘
             log_error("显示收到托盘的提示出错（拾星助手仍在运行）", traceback.format_exc(), append=True)
+
+
+lang.localize(globals())

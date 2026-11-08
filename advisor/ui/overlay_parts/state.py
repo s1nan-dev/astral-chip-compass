@@ -14,6 +14,9 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Protocol
 
+from .. import lang
+from ..text import SCHEME_DEFAULT
+
 # Session 发来的事件种类（session.Event.kind，各种的含义见那里；识别流程 vision/pipeline.py 另发 status）。事件分派
 # （dispatch.EventRouter）按这些名字分派，不在 EVENT_KINDS 里的只刷新、记进错误记录（Session 加了新的种类、悬浮窗还没跟上时
 # 查得出来）；tests/test_overlay_robustness.py 核对 Session 和识别流程发的种类都在这里
@@ -107,13 +110,22 @@ class SettingsAPI(Protocol):
     manual: bool
     opaque: bool
     lowend: bool
+    big_cores: bool  # 只用大核（有大小核的电脑上设置窗口的那一项）
+    ocr_check: dict  # 文字识别线程数的自检记录（OcrCheck 读写）
+    platform: str | None
+    platform_seen: str
+    ui_lang: str
     skin: str
     share_format: str
     free_notice_closed: bool
+    hant_notice_closed: bool
     aux: str
     update_auto: bool
-    update_checked: str
     update_skipped: str
+    report_enabled: bool
+    report_install: str
+    report_secret: str
+    report_since: str
 
 
 class GameAPI(Protocol):
@@ -133,6 +145,7 @@ class GameAPI(Protocol):
     unrecorded: int
     result_read: bool
     game_over: bool
+    map_scheme_off: bool  # 这一局不再按地图自动换方案（诊断包里写）
 
 
 class EventLogAPI(Protocol):
@@ -148,7 +161,11 @@ class SessionAPI(Protocol):
     game: GameAPI
     eventlog: EventLogAPI
     games: int  # 判过几次新的一局
-    scheme_for: object  # 按角色取正在用的筹码方案（悬浮窗接上方案存储时设置）
+    hant_game: bool  # 这次运行里认出游戏是繁体中文（三选一读到的标题）
+    game_quiet: bool  # 连着一阵子看不到对局里的读数（中途退出、回到了大厅等），当作不在对局里了
+    has_game_state: bool  # 有这一局的对局状态（性能自检据此判断在不在对局里）
+    scheme_for: object  # 按角色取保存的筹码方案（悬浮窗接上方案存储时设置）
+    schemes_of: object  # 按角色取这个角色的全部方案（先后同方案下拉框；同上）
     # 用户改正的候选筹码（OverlaySession）：第几个候选 →（识别到的原文, 改正后的名字）、最近一帧实际套用了的、最近一次三选一
     # 的识别结果（原样）和套用了改正以后的
     fixes: dict
@@ -175,6 +192,8 @@ class SessionAPI(Protocol):
     @property
     def game_over_info(self) -> dict | None: ...
     @property
+    def result_settled(self) -> bool: ...  # 本局已结束、胜负定了：这时才拼对局报告（dispatch 的 log_game_over）
+    @property
     def holding(self) -> bool: ...
 
     # 识别线程交来的画面、手动改正和重算（返回要处理的推荐类事件，没有时为 None）
@@ -194,6 +213,10 @@ class SessionAPI(Protocol):
     def skip_panel(self) -> None: ...
     def undo_new_game(self) -> bool: ...
     def save(self, *, force: bool = False) -> None: ...
+    # 筹码方案：这一局用哪套（SchemeChoice：保存的、实际用的、按哪张地图换的），这一局不再按地图换，刚按地图换了的那一次
+    def scheme_choice(self, hero: str | None = None) -> object: ...
+    def stop_map_scheme(self) -> bool: ...
+    def take_map_switch(self) -> object: ...
     # 刷新时读的（take_view）
     def next_star_cost(self) -> int | None: ...
     def take_ledger(self) -> list[dict]: ...
@@ -242,19 +265,59 @@ class SessionView:
     games: int = 0  # 局数（Session.games）
     unrecorded: object = 0  # 待补录的筹码数（Session.unrecorded）
     result_read: bool = False  # 这一局认出过结算画面（皮肤解锁用）
+    # 界面是简体、认出游戏是繁体中文、设置里还没选繁體（选了等重开的不再提示）、这条提示也还没关过：标题栏下方问一次
+    # （对局进行中先不显示，见 notices.NoticeView.update）
+    hant_notice: bool = False
+    # 连着一阵子看不到对局里的读数（Session.game_quiet：中途退出、回到了大厅等，这一局的状态还留着）：对局中先不显示的提示
+    # 按不在对局里算（Overlay._playing）
+    game_quiet: bool = False
     # 皮肤解锁用的星币拆账（Session.take_ledger 取走的几段）。「取走」式的读，只在这里取；开发版不取（皮肤全部解锁、不计数），
     # 为 None
     ledger: list | None = None
+    # 筹码方案（Session.scheme_choice）：scheme 是这一局实际用的方案（推荐按它算，方案下拉框选中它），saved_scheme 是保存的
+    # 方案（方案存储里这个角色上次用的那套，手动换方案改的就是它），都是 schemes.Scheme，默认推荐、没有方案存储、角色资料库
+    # 未收录时为 None；scheme_map 是按哪张地图换上的 scheme（不是保存的那套时），没换时为 None。scheme_read 为假：这几项没
+    # 读到（读出错，或整份快照是默认值），这一轮不拿它们判断方案换没换。「本局按地图换用了……」那一行照 map_switched、
+    # scheme_name、saved_scheme_name 画
+    scheme: object = None
+    saved_scheme: object = None
+    scheme_map: str | None = None
+    scheme_read: bool = False
+    # 这一局刚按地图换上、还没告诉过用户的那一次（Session.take_map_switch 取走的 SchemeChoice），没有时为 None。「取走」式的读，
+    # 只在悬浮窗刷新开头取（take_view 的 switch），别处取的快照里一律为 None
+    map_switch: object = None
     read_error: str = ""  # 取快照时读出错的调用栈（take_view 按读不到算的那几项；悬浮窗记进错误记录）
 
+    @property
+    def map_switched(self) -> bool:
+        """这一局按地图换着方案（实际用的不是保存的那套）：「筹码方案」卡片里「本局按地图换用了……」那一行显示与否。"""
+        return self.scheme_map is not None
 
-def take_view(session: SessionAPI, *, ledger: bool = False) -> SessionView:
+    @property
+    def scheme_name(self) -> str:
+        """这一局实际用的方案的名字（按地图换着时就是换成的那套）；默认推荐写 text.SCHEME_DEFAULT。"""
+        return scheme_name(self.scheme)
+
+    @property
+    def saved_scheme_name(self) -> str:
+        """保存的方案的名字（「换回原来的」换回的那套）；默认推荐写 text.SCHEME_DEFAULT。"""
+        return scheme_name(self.saved_scheme)
+
+
+def scheme_name(scheme) -> str:
+    """一套方案在界面上的名字：我的方案写方案名，默认推荐（None）写 text.SCHEME_DEFAULT。照旧是原文（不转繁体）：
+    用到它的提示行显示时整句转一次（NoticeView），这里再转，方案名就转了两次。"""
+    return scheme.name if scheme is not None else SCHEME_DEFAULT
+
+
+def take_view(session: SessionAPI, *, ledger: bool = False, switch: bool = False) -> SessionView:
     """从 Session 取一份快照。要在 Session 的锁里调用（refresh 开头）。ledger：同时取走皮肤解锁用的星币拆账（只在 refresh
-    这一个地方取，开发版不取）。算升星花费出错时只写星币数，出的错放在 cost_error。
+    这一个地方取，开发版不取）。switch：同时取走刚按地图换了的那一次方案（Session.take_map_switch，同样只在 refresh 开头取）。
+    算升星花费出错时只写星币数，出的错放在 cost_error。
 
     读的时候出错（不只是没有这一项），按读不到算的范围和各块分开读时一样：「对局状态」那一组（_game_state）任何一项出错，
-    这一组都按读不到算；角色、轮次、星数、地图、已有筹码和其余几项各自读，一项出错只有这一项按读不到算。出的错放在
-    read_error（悬浮窗记进错误记录），这一轮照常画。"""
+    这一组都按读不到算；角色、轮次、星数、地图、已有筹码、筹码方案（Session.scheme_choice 一次取齐：实际用的、保存的、按哪张
+    地图换的）和其余几项各自读，一项出错只有这一项按读不到算。出的错放在 read_error（悬浮窗记进错误记录），这一轮照常画。"""
     errors: list[str] = []
 
     def item(read, default):
@@ -271,6 +334,11 @@ def take_view(session: SessionAPI, *, ledger: bool = False) -> SessionView:
         errors.append(traceback.format_exc())
         game = {}
     info = item(lambda: session.game_over_info, None)
+    # 繁体界面关着（lang.HANT_ENABLED）时没得换，认出繁体游戏也不问
+    hant_notice = item(lambda: lang.HANT_ENABLED and bool(session.hant_game) and not lang.is_hant()
+                       and s.ui_lang != lang.HANT and not s.hant_notice_closed, False)
+    choice = item(lambda: session.scheme_choice(), None)
+    news = item(lambda: session.take_map_switch(), None) if switch and choice is not None else None
     return SessionView(
         hero=item(lambda: s.hero, ""), round=item(lambda: s.round, None), star=item(lambda: s.star, 0),
         star_read=item(lambda: s.star_read, False), map=item(lambda: s.map, None),
@@ -281,6 +349,10 @@ def take_view(session: SessionAPI, *, ledger: bool = False) -> SessionView:
         progress_cap=item(lambda: session.game.progress_cap, None),
         teammates=item(lambda: tuple(session.game.teammates or []), ()),
         games=item(lambda: session.games, 0), unrecorded=item(lambda: session.game.unrecorded, 0),
+        hant_notice=hant_notice, game_quiet=item(lambda: session.game_quiet is True, False),
+        scheme=choice.used if choice is not None else None,
+        saved_scheme=choice.saved if choice is not None else None,
+        scheme_map=choice.map if choice is not None else None, scheme_read=choice is not None, map_switch=news,
         read_error="\n".join(errors),
         **game,
     )

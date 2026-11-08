@@ -11,6 +11,9 @@
 import ctypes
 import importlib.util
 import json
+import os
+import subprocess
+import sys
 import threading
 import unittest
 from ctypes import wintypes
@@ -28,7 +31,7 @@ from PySide6.QtWidgets import QAbstractButton, QApplication, QWidget  # noqa: E4
 from advisor import paths  # noqa: E402
 from advisor.data import HERO_GROUPS, load_db  # noqa: E402
 from advisor.schemes import Scheme, SchemeStore, StaleChip, Tiers, get_catalog, school_of  # noqa: E402
-from advisor.ui import about, chrome, decor, theme, widgets, winapi  # noqa: E402
+from advisor.ui import about, chrome, decor, lang, theme, widgets, winapi  # noqa: E402
 from advisor.ui.overlay_parts import app as overlay_app
 from advisor.ui.overlay_parts import wording
 from advisor.ui import overlay as ov  # noqa: E402
@@ -316,6 +319,27 @@ class FontTest(Case):
         self.assertEqual(missing, [], "收字规则里有、子集里没有：重做子集（tools/make_font_subset.py）")
         self.assertNotIn(RARE, text)
 
+    def test_hant_subset_covers_hant_text(self):
+        """繁体界面装的是繁体子集（ACCHeadingTC-Heavy.otf）：收字规则（tools/make_font_subset.py 的 collect_text_hant）收的
+        汉字子集里都有（简体子集的字、界面文字转成繁体以后的字、资料库里的游戏繁体名和其余名字都在里面）。"""
+        self._switch_to_hant()
+        text = subset_tool().collect_text_hant()
+        raw = QRawFont.fromFont(QFont("ACC Heading"))
+        self.assertTrue(raw.isValid())
+        cjk = [ch for ch in text if "\u4e00" <= ch <= "\u9fff"]
+        missing = [ch for ch in cjk if not raw.supportsCharacter(ord(ch))]
+        self.assertEqual(missing, [], "收字规则里有、繁体子集里没有：重做子集（tools/make_font_subset.py）")
+        self.assertNotIn(RARE, text)
+
+    def _switch_to_hant(self):
+        """换成繁体界面并装上这套皮肤的字体（装的是繁体子集）；跑完撤掉，换回简体、装回简体子集。"""
+        self.addCleanup(theme.load_fonts, theme.CLASSIC_WHITE)  # 清理按登记的倒序：撤掉、换回简体，再装回简体子集
+        self.addCleanup(setattr, lang, "CURRENT", lang.CURRENT)
+        self.addCleanup(theme.unload_fonts)
+        theme.unload_fonts()
+        lang.CURRENT = lang.HANT
+        self.assertIn("ACC Heading", theme.load_fonts(theme.CLASSIC_WHITE))
+
     def test_outside_subset_falls_back(self):
         """子集外的字（例如用户自己起的方案名里的生僻字）不出方块：退到别的字体，字形不是 0；替代字体先找正文字体（微软雅黑）。"""
         raw = QRawFont.fromFont(QFont("ACC Heading"))
@@ -452,20 +476,95 @@ class SwitchTest(Case):
 # ------------------------------------------------------------ 设置窗口、「返回」和 Esc、拖动
 
 
+HANT_TABS_SCRIPT = r"""
+import json
+import os
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from advisor.ui import lang
+
+lang.CURRENT = lang.HANT
+
+from PySide6.QtWidgets import QApplication
+
+app = QApplication.instance() or QApplication(["acc-test"])
+
+from advisor.ui import theme
+
+theme.set_skin(theme.CLASSIC_WHITE_KEY)
+
+from advisor.ui.settings import SettingsDialog
+
+dialog = SettingsDialog()
+dialog.show()
+for _ in range(3):
+    app.processEvents()
+look = theme.CHROME
+font = theme.title_font(look.TAB_PX)
+rows = []
+for name, tab in dialog.tabs.items():
+    for on in (False, True):
+        tab.setChecked(on)
+        width = min(look.TAB_SIZE[1] if on else look.TAB_SIZE[0], tab.width() - (look.TAB_SHIFT if on else 14))
+        rows.append([name, on, tab._elided(font, width)])
+dialog.close()
+print(json.dumps(rows, ensure_ascii=False))
+"""
+
+
 class SettingsPagesTest(Case):
+    def test_tabs_not_elided(self):
+        """左侧页签的排法：四个页签选中、没选中时都写得下页签的字（不出现「…」）。选中时页签往右突出，能放字的宽度最小。"""
+        theme.set_skin(KEY)
+        d = st.SettingsDialog(SimpleCapture("window"))
+        self.addCleanup(dispose, d)
+        d.show()
+        settle()
+        look = theme.CHROME
+        font = theme.title_font(look.TAB_PX)
+        self.assertEqual(len(d.tabs), 4)
+        for name, tab in d.tabs.items():
+            for on in (False, True):
+                with self.subTest(tab=name, on=on):
+                    tab.setChecked(on)
+                    width = min(look.TAB_SIZE[1] if on else look.TAB_SIZE[0],
+                                tab.width() - (look.TAB_SHIFT if on else 14))
+                    shown = tab._elided(font, width)
+                    self.assertEqual(shown, tab.text())
+                    self.assertNotIn("…", shown)
+
+    def test_tabs_not_elided_hant(self):
+        """繁体界面（子进程里先定语言再导入）：四个页签同样是两个字，选中、没选中都不省略。"""
+        env = dict(os.environ)
+        env["QT_QPA_PLATFORM"] = "offscreen"
+        env.pop(lang.ENV, None)
+        result = subprocess.run([sys.executable, "-B", "-c", HANT_TABS_SCRIPT], cwd=PROJECT, env=env,
+                                capture_output=True, text=True, encoding="utf-8", timeout=180)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        rows = json.loads(result.stdout.strip().splitlines()[-1])
+        self.assertEqual({name for name, _, _ in rows},
+                         {lang.to_hant(name) for name in (st.TAB_RECOG, st.TAB_LOOK, st.TAB_ABOUT, st.TAB_PRIVACY)})
+        self.assertEqual(len(rows), 8)
+        for name, on, shown in rows:
+            with self.subTest(tab=name, on=on):
+                self.assertEqual(shown, name)
+                self.assertNotIn("…", shown)
+
     def test_three_pages_and_notes(self):
-        """设置窗口分「识别」「外观」「关于」三页，点页签切过去；每一项在它那一页上。「关于」页的「说明」卡片里四个按钮，
-        点了打开「关于」窗口、停在对应的那一节（这一节的标题在正文最上面）。"""
+        """设置窗口分「识别」「外观」「关于」「隐私」四页，点页签切过去；每一项在它那一页上，「隐私」页开关那张卡片的说明
+        下面是能点的「我的统计」。「关于」页的「说明」卡片里四个按钮，点了打开「关于」窗口、停在对应的那一节（这一节的标题在
+        正文最上面）。"""
         theme.set_skin(KEY)
         w = self.overlay(services=Services.load(("version",)))
         w.dialogs.show_settings()
         d = w.dialogs.settings
         settle()
         self.assertEqual(d.layout_name(), "side_tabs")
-        self.assertEqual(list(d.tabs), [st.TAB_RECOG, st.TAB_LOOK, st.TAB_ABOUT])
+        self.assertEqual(list(d.tabs), [st.TAB_RECOG, st.TAB_LOOK, st.TAB_ABOUT, st.TAB_PRIVACY])
         stack = d.page.findChild(st.QStackedWidget, "sidePages")
-        pages = {st.TAB_RECOG: ("mode", "hotkey", "lowend"), st.TAB_LOOK: ("skin", "opaque"),
-                 st.TAB_ABOUT: ("export", "update")}
+        pages = {st.TAB_RECOG: ("platform", "mode", "hotkey", "lowend"), st.TAB_LOOK: ("skin", "opaque"),
+                 st.TAB_ABOUT: ("export", "update"), st.TAB_PRIVACY: ("report",)}
         self.assertNotIn("capture", d.rows)  # 直接截取时没有「识别画面」
         for i, (tab, keys) in enumerate(pages.items()):
             with self.subTest(tab=tab):
@@ -475,6 +574,9 @@ class SettingsPagesTest(Case):
                 for key in keys:
                     self.assertTrue(stack.currentWidget().isAncestorOf(d.rows[key].row), key)
                     self.assertTrue(d.rows[key].row.isVisible(), key)
+        # 「隐私」一页：开关那张卡片里，说明下面是能点的「我的统计」
+        self.assertTrue(d.rows["report"].row.isAncestorOf(d.stats_link))
+        self.assertTrue(d.stats_link.isVisible())
         self.assertIsNone(d.about_row)  # 没有整行可点的「关于」，用「说明」里的按钮
         buttons = [b for b in d.page.findChildren(chrome.PillButton) if b.objectName() == "noteButton"]
         self.assertEqual([b.text() for b in buttons], list(st.NOTE_SECTIONS))

@@ -17,11 +17,13 @@ from advisor.data import load_db  # noqa: E402
 from advisor.engine import shown_percents, advise  # noqa: E402
 from advisor.pool import State  # noqa: E402
 from advisor.session import Event, GAME_FIELDS  # noqa: E402
+from advisor.ui import lang, theme
 from advisor.ui.overlay import Overlay
-from advisor.ui.overlay_parts.wording import MAP_AUTO, LIVE_TIP, CARD_KEYS, RUNNING_TIP, CAPTURE_SCREEN_TIP, PAUSED_MIN_TIP, EXPAND_ALL_TIP, CAPTURE_NOTICE, SETTINGS_TIP, CAPTURE_TIP, MANUAL_SWITCHED, PAUSED_TIP
+from advisor.ui.overlay_parts.wording import MAP_AUTO, LIVE_TIP, CARD_KEYS, RUNNING_TIP, CAPTURE_SCREEN_TIP, PAUSED_MIN_TIP, EXPAND_ALL_TIP, CAPTURE_NOTICE, SETTINGS_TIP, SETTINGS_TIP_HANT, CAPTURE_TIP, MANUAL_SWITCHED, PAUSED_TIP
 from advisor.ui.overlay_parts.app import UiSettings, OverlaySession
 from advisor.ui.hotkey import startup_busy_text  # noqa: E402
 from advisor.ui.services import Services  # noqa: E402
+from advisor.vision import capture  # noqa: E402
 from advisor.ui.text import tip_html, DIM_COLOR, tip_lines, option_views, tip_paragraphs_html, FONT_XL, FONT_M, FONT_L, PERCENT_TIP, TIP_LINE, FONT_S, SOFT_COLOR  # noqa: E402
 from advisor.ui.widgets import chip_icon, TaggedText, FlowLayout, Pill, MapPill, ChipGrid, Separator  # noqa: E402
 from tests.support import sandbox  # noqa: E402
@@ -591,9 +593,10 @@ class FoldButtonsTest(unittest.TestCase):
         w = self.window
         w.set_expanded(True)
         self.assertEqual([b.text() for b in buttons(w.toolbar)], ["设置"])
-        self.assertEqual(tip_text(w.settings_btn.toolTip()), SETTINGS_TIP)
-        self.assertEqual(SETTINGS_TIP, "打开「拾星助手设置」窗口：识别模式、识别热键、低配模式、悬浮窗背景、导出诊断、"
-                                       "检查更新、关于拾星助手")
+        # 悬停说明跟着繁体界面的总开关（lang.HANT_ENABLED）：打开时写「界面语言」，关着时不写
+        self.assertEqual(tip_text(w.settings_btn.toolTip()), SETTINGS_TIP_HANT if lang.HANT_ENABLED else SETTINGS_TIP)
+        self.assertEqual(SETTINGS_TIP, "打开「拾星助手设置」窗口：游戏平台、识别模式、识别热键、低配模式、悬浮窗背景、"
+                                       "导出诊断、检查更新、关于拾星助手")
         self.assertFalse(hasattr(w, "collapse_btn"))
         texts = [b.text() for b in buttons(w)]
         for old in ("收起", "展开"):
@@ -866,6 +869,135 @@ class WidgetsTest(unittest.TestCase):
                             Qt.NoModifier, Qt.ScrollUpdate, False)
         APP.sendEvent(pill, event)
         self.assertEqual(pill.currentIndex(), 0)
+
+
+class LaneTagLayoutTest(unittest.TestCase):
+    """标题栏最左边的端标签（同时识别时才有）：一行显示和全部展开都在这一行最左边，不把标题栏撑高、不和摘要或标题
+    重叠；摘要能用的宽度少掉标签的宽加一个间距；标题在正中的皮肤标题仍在正中；开发版的长标题也放得下。"""
+
+    TIP = "这张悬浮窗跟的是「Steam端」的游戏窗口。"
+
+    def setUp(self):
+        self.old_skin = theme.current_key()
+        self.addCleanup(theme.set_skin, self.old_skin)
+        self.db = load_db()
+
+    def make(self, dev: bool = False) -> Overlay:
+        session = OverlaySession(self.db, UiSettings(hero="凛"))
+        session.game.seen_hero = "凛"
+        window = Overlay(self.db, session, threading.Lock(), services=Services(), dev_label=dev)
+        self.addCleanup(window.hide)
+        return window
+
+    @staticmethod
+    def settle() -> None:
+        for _ in range(6):
+            APP.processEvents()
+
+    def shown(self, w: Overlay, full: bool = False) -> Overlay:
+        w.set_expanded(full)
+        w.set_lane_tag("Steam", self.TIP)
+        w.show()
+        self.settle()
+        return w
+
+    def test_summary_width_reduced_by_tag(self):
+        """只有一张时标签藏着，_summary_width 和没有标签时一样；显示标签以后正好少掉标签的宽加一个间距。"""
+        w = self.shown(self.make())
+        w.set_lane_tag("")
+        self.settle()
+        self.assertTrue(w.lane_tag.isHidden())
+        plain = w._summary_width()
+        visible = [b for b in (w.quick_add, w.toggle_btn, w.close_btn) if not b.isHidden()]
+        self.assertEqual(plain, max(w._content_width()
+                                    - sum(b.sizeHint().width() + w.head.spacing() for b in visible) - 4, 60))
+        w.set_lane_tag("Steam", self.TIP)
+        self.settle()
+        self.assertFalse(w.lane_tag.isHidden())
+        self.assertEqual(w._summary_width(), plain - w.lane_tag.sizeHint().width() - w.head.spacing())
+
+    def test_every_skin_line_and_full(self):
+        """七套皮肤、一行显示和全部展开：标签都在最左边，不和摘要或标题重叠，标题栏这一行不比没有标签时高；
+        标题在正中的皮肤标题仍在正中。"""
+        for skin in theme.skins():
+            for full in (False, True):
+                with self.subTest(skin=skin.key, full=full):
+                    theme.set_skin(skin.key)
+                    w = self.shown(self.make(), full)
+                    tag = w.lane_tag
+                    self.assertFalse(tag.isHidden())
+                    self.assertTrue(tag.isVisibleTo(w))
+                    other = w.title if full else w.summary
+                    self.assertTrue(other.isVisibleTo(w))
+                    self.assertLess(tag.geometry().left(), other.geometry().left())
+                    self.assertTrue(other.geometry().intersected(tag.geometry()).isEmpty(),
+                                    (tag.geometry(), other.geometry()))
+                    tagged = w.head.geometry().height()
+                    if full and theme.OVERLAY.TITLE_CENTER:
+                        self.assertLessEqual(
+                            abs(w.title.geometry().center().x() - w.head.geometry().center().x()), 2)
+                    w.set_lane_tag("")
+                    self.settle()
+                    self.assertLessEqual(tagged, w.head.geometry().height(), skin.key)
+
+    def test_tag_follows_head_align(self):
+        """HEAD_ALIGN 为 bottom 的皮肤（标题页签比按钮高）：标签和右边的按钮一样靠下，不飘到面板顶边外面；换到上下居中
+        的皮肤时对齐跟着变回来。"""
+        for full in (False, True):
+            with self.subTest(full=full):
+                theme.set_skin(theme.CLASSIC_BLACK_KEY)
+                self.assertEqual(theme.OVERLAY.HEAD_ALIGN, "bottom")
+                w = self.shown(self.make(), full)
+                self.assertEqual(w.head.itemAt(w.head.indexOf(w.lane_tag)).alignment(), Qt.AlignBottom)
+                self.assertEqual(w.lane_tag.geometry().bottom(), w.toggle_btn.geometry().bottom())
+                theme.set_skin(theme.DEFAULT_KEY)
+                self.settle()
+                self.assertEqual(theme.OVERLAY.HEAD_ALIGN, "")
+                self.assertEqual(w.head.itemAt(w.head.indexOf(w.lane_tag)).alignment(), Qt.AlignmentFlag(0))
+
+    def test_dev_label_fits_with_tag(self):
+        """开发版的长标题（「拾星助手 开发版」）加上标签也放得下、不和标签重叠。"""
+        for skin in theme.skins():
+            with self.subTest(skin=skin.key):
+                theme.set_skin(skin.key)
+                w = self.shown(self.make(dev=True), full=True)
+                self.assertEqual(w.title.text(), "拾星助手 开发版")
+                self.assertGreaterEqual(w.title.width(), w.title.sizeHint().width())
+                self.assertTrue(w.title.geometry().intersected(w.lane_tag.geometry()).isEmpty())
+                self.assertLessEqual(w.head.geometry().height(), w.head.sizeHint().height())
+
+    def test_skin_change_updates_widths(self):
+        """换皮肤以后标签的宽、能用的摘要宽度跟着变。"""
+        theme.set_skin(theme.DEFAULT_KEY)
+        w = self.shown(self.make())
+        default = (w.lane_tag.sizeHint().width(), w._summary_width())
+        theme.set_skin(theme.CLASSIC_BLACK_KEY)
+        self.settle()
+        self.assertEqual(w.lane_tag.text(), "Steam")  # 换皮肤以后标签还在
+        self.assertFalse(w.lane_tag.isHidden())
+        other = (w.lane_tag.sizeHint().width(), w._summary_width())
+        self.assertNotEqual(default, other)
+        self.assertEqual(other[1], max(w._content_width()
+                                       - sum(b.sizeHint().width() + w.head.spacing()
+                                             for b in (w.lane_tag, w.quick_add, w.toggle_btn, w.close_btn)
+                                             if not b.isHidden()) - 4, 60))
+
+    def test_not_found_texts_not_elided(self):
+        """七套皮肤、一行显示：两个端的「未找到……游戏窗口」加上标签以后都不被省略。"""
+        for skin in theme.skins():
+            with self.subTest(skin=skin.key):
+                theme.set_skin(skin.key)
+                w = self.shown(self.make())
+                for name in (capture.PLATFORM_NAMES[capture.STEAM], capture.PLATFORM_NAMES[capture.TAPTAP]):
+                    text = capture.NOT_FOUND_ONE.format(name=name)
+                    w.message.say(text, "advice")
+                    w.refresh()
+                    self.settle()
+                    self.assertIn(text, w.status.summary_plain, skin.key)
+                    self.assertNotIn("elide", w.status.summary_shrink, (skin.key, w.status.summary_plain))
+                    fm = w.summary.fontMetrics()
+                    self.assertLessEqual(fm.horizontalAdvance(w.status.summary_plain),
+                                         w.summary.contentsRect().width() + 1, (skin.key, name))
 
 
 if __name__ == "__main__":

@@ -7,13 +7,15 @@
 """
 from __future__ import annotations
 
+import dataclasses
+
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFontMetrics
 
 from ... import engine
 from ...data import CLASSES
 from ...engine import hero_classes
-from .. import theme
+from .. import lang, names, theme
 from ..hotkey import HOTKEY_PLACE
 from ..text import SUMMARY_SEP, Bit, coins_bit, coins_tip, difficulty_bit, difficulty_tip, rich
 from ..theme import COMMON as C
@@ -184,18 +186,29 @@ def class_value(db, hero: str, owned: list[str]) -> str:
     """「卡牌」；没有达到门槛的职业时写倾向：「无 · 倾向 攻击 80」。"""
     classes = hero_classes(db, hero, owned)
     if classes:
-        return "、".join(c for c in CLASSES if c in classes)
+        return lang.t("、".join(c for c in CLASSES if c in classes))
     name, value = engine.hero_tendency(db, hero, owned)  # 并列时用「、」连接
     if value > 0:
-        return f"无 · 倾向 {name} {value:.0f}"
-    return "无"
+        return lang.t(f"无 · 倾向 {name} {value:.0f}")
+    return lang.t("无")
+
+
+def shown_bit(bit: Bit | None) -> Bit | None:
+    """text.py 拼好的一项（星币数、难度：text.py 不转繁体）放进状态胶囊、摘要以前，各段文字按界面语言转一次。
+    界面是简体时原样返回。"""
+    if bit is None or not lang.is_hant():
+        return bit
+    return dataclasses.replace(
+        bit, value=lang.t(bit.value), subject=lang.t(bit.subject), note=lang.t(bit.note),
+        brief_subject=lang.t(bit.brief_subject), brief_value=lang.t(bit.brief_value),
+        brief_tail=lang.t(bit.brief_tail), tight_tail=lang.t(bit.tight_tail), tip=lang.t(bit.tip))
 
 
 def coins_item(view) -> Bit | None:
     """星币数那一项（「识别」卡片的状态胶囊排在星数后面，一行显示的摘要排在最后）；读不到时为 None。"""
     if view.coins is None:
         return None
-    return coins_bit(view.coins, view.coin_cost)
+    return shown_bit(coins_bit(view.coins, view.coin_cost))
 
 
 def coins_tip_text(view) -> str:
@@ -225,28 +238,28 @@ def status_bits(view, db, *, ask, live: bool, plan, blocked: bool, stopped: bool
     if view.game_over:
         bits.append(GAME_OVER_BIT)
     if view.round is not None:
-        bits.append(Bit(f"第 {view.round} 轮", key="round"))
+        bits.append(Bit(lang.t(f"第 {view.round} 轮"), key="round"))
     else:
-        bits.append(Bit("待识别", "轮次", pending, "round"))
+        bits.append(Bit(lang.t("待识别"), lang.t("轮次"), pending, "round"))
     if view.star_read:
-        bits.append(Bit(f"{view.star} 星", key="star"))
+        bits.append(Bit(lang.t(f"{view.star} 星"), key="star"))
     else:
-        bits.append(Bit("待识别", "星数", pending, "star"))
+        bits.append(Bit(lang.t("待识别"), lang.t("星数"), pending, "star"))
     coins = coins_item(view)
     if coins is not None:
         bits.append(coins)  # 排在星数后面
     if view.map is not None:
         # 识别可靠时只写地图名；识别依据放在悬停说明里
         manual = view.map_source == "manual"
-        bits.append(Bit(view.map, key="map", note="（手动指定）" if manual else ""))
+        bits.append(Bit(names.map_in(db, view.map), key="map", note=lang.t("（手动指定）") if manual else ""))
     elif ask:
-        bits.append(Bit("无法确定", "地图", "warn", "map"))  # 需要用户选地图
+        bits.append(Bit(lang.t("无法确定"), lang.t("地图"), "warn", "map"))  # 需要用户选地图
     else:
-        bits.append(Bit("待识别", "地图", pending, "map"))
+        bits.append(Bit(lang.t("待识别"), lang.t("地图"), pending, "map"))
     if view.hero in db.heroes and view.hero_source != "pending":
         # 角色待识别时不写职业：Session 记着的还是上一次的角色，按它算的职业不一定是这一局的
-        bits.append(Bit(class_value(db, view.hero, [n for n in view.owned if n in db.chips]), "职业", key="class"))
-    difficulty = difficulty_bit(view.difficulty)
+        bits.append(Bit(class_value(db, view.hero, [n for n in view.owned if n in db.chips]), lang.t("职业"), key="class"))
+    difficulty = shown_bit(difficulty_bit(view.difficulty))
     if difficulty is not None:
         bits.append(difficulty)
     return bits
@@ -303,11 +316,12 @@ def status_tip(view, db, *, plan, blocked: bool, live: bool, stopped: bool = Fal
             "均未达到时为「无」，后面是分值最高的职业（倾向）。"
         )
     if view.map is not None:
-        lines.append(f"地图「{view.map}」：{MAP_SOURCE_TIP.get(view.map_source, '依据自动识别')}。")
-        others = [m for m in view.map_candidates if m != view.map]
+        shown_map = names.map_in(db, view.map)
+        lines.append(f"地图「{shown_map}」：{MAP_SOURCE_TIP.get(view.map_source, '依据自动识别')}。")
+        others = [names.map_in(db, m) for m in view.map_candidates if m != view.map]
         if view.map_confidence == "medium" and others:
             lines.append(
-                f"「{view.map}」的任务与「{'」「'.join(others)}」部分重叠。"
+                f"「{shown_map}」的任务与「{'」「'.join(others)}」部分重叠。"
                 f"识别有误时，请点击{MAP_PLACE}手动指定。"
             )
     progress, cap = view.progress, view.progress_cap
@@ -321,10 +335,11 @@ def status_tip(view, db, *, plan, blocked: bool, live: bool, stopped: bool = Fal
     mates = teammates_text(view.teammates, db)
     if mates:
         lines.append(mates)
-    mutators = list(view.mutators)
+    mutators = [names.mutator_in(db, m) for m in view.mutators]
     if mutators:
         lines.append(f"畸变组件：{'、'.join(mutators)}（仅提示，未计入推荐度）")
-    return "\n".join(lines)
+    # 各行在这里整段转一次（上面拼的句子、text.py 的星币数和难度说明都是简体；常量、角色和地图的显示名再转一次不变）
+    return lang.t("\n".join(lines))
 
 
 def hero_pill(view, db, *, hero_needed: bool, live: bool) -> tuple[list, str, str]:
@@ -334,22 +349,22 @@ def hero_pill(view, db, *, hero_needed: bool, live: bool) -> tuple[list, str, st
     source = view.hero_source
     seen = view.seen_hero
     if source == "manual":
-        segs, tone = [("角色 ", C.DIM_COLOR), ("手动指定", C.TEXT_COLOR)], ""
+        segs, tone = [(lang.t("角色 "), C.DIM_COLOR), (lang.t("手动指定"), C.TEXT_COLOR)], ""
         if seen and seen != view.hero and seen in db.heroes:
-            tip = f"自动识别结果：「{db.heroes[seen].label}」。点击「恢复自动识别」按钮改用识别结果。"
+            tip = lang.t(f"自动识别结果：「{names.hero_label(db.heroes[seen])}」。点击「恢复自动识别」按钮改用识别结果。")
         elif seen:
-            tip = "自动识别结果与当前角色相同。点击「恢复自动识别」按钮交回自动识别。"
+            tip = lang.t("自动识别结果与当前角色相同。点击「恢复自动识别」按钮交回自动识别。")
         else:
-            tip = "本局尚未识别角色。点击「恢复自动识别」按钮后，进入对局画面时自动识别。"
+            tip = lang.t("本局尚未识别角色。点击「恢复自动识别」按钮后，进入对局画面时自动识别。")
     elif source == "auto":
-        segs, tone = [("角色 ", C.DIM_COLOR), ("已识别", C.OK_COLOR)], "ok"
+        segs, tone = [(lang.t("角色 "), C.DIM_COLOR), (lang.t("已识别"), C.OK_COLOR)], "ok"
         tip = HERO_AUTO_TIP
     else:
         # 对局中（或推荐因此暂停）标橙色；还没进入对局时用暗色
         if hero_needed or in_game(view, live):
-            segs, tone = [("角色 ", C.DIM_COLOR), ("待识别", C.WARN_COLOR)], "warn"
+            segs, tone = [(lang.t("角色 "), C.DIM_COLOR), (lang.t("待识别"), C.WARN_COLOR)], "warn"
         else:
-            segs, tone = [("角色 ", C.DIM_COLOR), ("待识别", C.DIM_COLOR)], "muted"
+            segs, tone = [(lang.t("角色 "), C.DIM_COLOR), (lang.t("待识别"), C.DIM_COLOR)], "muted"
         tip = HERO_PAUSED_TIP if hero_needed else HERO_PENDING_TIP
     return segs, tone, tip
 
@@ -361,11 +376,11 @@ def waiting_text(*, manual: bool, hotkey, hotkey_ok: bool, over: bool, stopped: 
         return RECOG_STOPPED_WAITING
     if manual:
         if hotkey and hotkey_ok:
-            return f"手动模式：后台不截图。出现筹码三选一界面时，请按 {hotkey}。"
-        return f"手动模式：后台不截图，热键不可用。{HOTKEY_PLACE}。"
+            return lang.t(f"手动模式：后台不截图。出现筹码三选一界面时，请按 {hotkey}。")
+        return lang.t(f"手动模式：后台不截图，热键不可用。{HOTKEY_PLACE}。")
     if over:
         return GAME_OVER_WAITING
-    return "等待筹码三选一界面…"
+    return lang.t("等待筹码三选一界面…")
 
 
 def summary_status(base: list[Bit]) -> list[Bit]:
@@ -389,6 +404,7 @@ def line_items(view, base: list[Bit], *, message: str, waiting: str, manual: boo
     in_game_now = view.round is not None or view.star_read
     steps = SUMMARY_STEPS
     if message:
+        # 一次性提示交过来时已是显示用的写法（state.Message：说的那一处按界面语言转好），这里不再转
         items.append(("message", [(message, C.SOFT_COLOR)]))
     elif view.game_over:
         # 对局结束后轮次、星数不再有用，摘要只留地图和难度
@@ -411,7 +427,7 @@ def live_line_items(base: list[Bit], live_bits: dict, message: str) -> list:
     items = [b.brief() for b in base if b.key in ("stopped", "paused", "blocked", "game_over")]
     items += [b.brief() for b in live_bits.values()]
     if message:
-        items.append([(message, C.SOFT_COLOR)])
+        items.append([(message, C.SOFT_COLOR)])  # 已是显示用的写法（同 line_items）
     return items
 
 
@@ -420,7 +436,7 @@ def summary_tip(shown_bits: list[Bit], *, message: str, waiting: str, refreshing
     一段（第一段是识别本身状态的说明，activity_tip）；几块之间空一行。"""
     tip = ["｜".join(b.plain() for b in shown_bits)]
     if message and message != waiting:
-        tip[0] += "｜" + message
+        tip[0] += "｜" + message  # 已是显示用的写法（同 line_items）
     if refreshing:
         tip.append(REFRESHING_TIP)
     if status_tip:
@@ -483,8 +499,9 @@ class StatusView:
         self.shown_bits = bits
         # 悬停说明每项一段，长的一段照理由标签的做法按 tip_lines 分行（Qt 不给纯文本的悬停说明自动换行）
         _set_tip(self.status_box, tip)
-        map_tip = f"当前地图。在游戏中打开任务栏后自动识别；也可点击此下拉框手动指定。选择「{MAP_AUTO}」可恢复自动识别。"
-        line = next((t for t in tip.split("\n") if t.startswith("地图「")), "")
+        map_tip = lang.t(
+            f"当前地图。在游戏中打开任务栏后自动识别；也可点击此下拉框手动指定。选择「{lang.t(MAP_AUTO)}」可恢复自动识别。")
+        line = next((t for t in tip.split("\n") if t.startswith(lang.t("地图「"))), "")
         _set_tip(self.map_box, map_tip + (f"\n{line}" if line else ""))
         for bit in bits:
             if bit.key == "map":
@@ -550,3 +567,9 @@ class StatusView:
         if self.message.text:
             parts.append(self.message.text)
         return "｜".join(parts)
+
+
+# CLASSES 和职业名字比（c in classes），不转
+HANT_KEEP = ("CLASSES",)
+
+lang.localize(globals())

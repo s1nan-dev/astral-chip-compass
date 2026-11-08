@@ -50,7 +50,9 @@ def _white_seaview() -> Skin:
              f"border-radius: 10px; padding: 3px 28px 3px 12px; }}\n"
              f"QComboBox:hover {{ border-color: {p['violet']}; }}\n" + _COMBO_PLAIN)
     overlay_extra = _PANEL_CLEAR + light + combo + _scrollbar(p["scroll"], p["violet"]) + (
-        f"QPushButton[accent=\"map\"], QPushButton[accent=\"primary\"], QPushButton[accent=\"capture\"] {{ {primary} }}\n"
+        # 留 1 像素透明的框，和旁边带框的按钮一样高：按钮不到圆角的两倍高时 Qt 不画圆角，就成了直角
+        f"QPushButton[accent=\"map\"], QPushButton[accent=\"primary\"], QPushButton[accent=\"capture\"] "
+        f"{{ background: {grad}; color: #ffffff; border: 1px solid transparent; }}\n"
         f"QPushButton[accent=\"map\"]:hover, QPushButton[accent=\"primary\"]:hover {{ background: {_WS_GRAD_HOVER}; }}\n"
         f"QPushButton[accent=\"warn\"] {{ background: {p['coral_bg']}; color: {p['coral']}; border: none; }}\n"
         f"QPushButton#closeButton {{ background: {p['gray_bg']}; border: none; border-radius: 12px; color: {p['soft']}; "
@@ -62,6 +64,8 @@ def _white_seaview() -> Skin:
         f"QPushButton#remove {{ border-radius: 9px; padding: 0px 6px; }}\n"
         f"QLabel#title {{ padding: 3px 8px 3px 32px; font-size: 12pt; $TITLE_FONT }}\n"
         f"QLabel#summary {{ font-weight: bold; }}\n"
+        f"QLabel#laneTag {{ background: {p['card']}; color: {p['violet']}; border: 1px solid {p['violet']}; "
+        f"border-radius: 9px; padding: 0px 8px; font-weight: bold; }}\n"
         f"QLabel#cardTitle {{ padding: 3px 6px 3px 18px; font-size: 10pt; $TITLE_FONT }}\n"
         f"QWidget#globalArea {{ background: {p['card']}; border: 1px solid {p['line']}; border-radius: 14px; }}\n"
         f"QLabel#ask, QLabel#notice_warn, QLabel#notice_action {{ background: {p['coral_bg']}; color: {p['coral']}; "
@@ -74,7 +78,7 @@ def _white_seaview() -> Skin:
         "muted": (p["gray_bg"], p["gray_bg"], p["dim"]), "button": (p["line2"], p["card"], p["text"]),
         "plus": (p["teal_bg"], p["teal_bg"], p["teal"]), "minus": (p["coral_bg"], p["coral_bg"], p["coral"]),
     }
-    settings_extra = light + _scrollbar(p["scroll"], p["violet"]) + (
+    settings_extra = light + combo + _scrollbar(p["scroll"], p["violet"]) + (
         f"QPushButton {{ min-height: 22px; font-size: 10pt; }}\n"
         f"QPushButton#exportButton {{ {primary} }}\n"
         f"QPushButton#exportButton:hover {{ background: {_WS_GRAD_HOVER}; }}\n"
@@ -114,6 +118,10 @@ def _white_seaview() -> Skin:
         f"border-radius: 10px; padding: 4px 8px; }}\n"
         f"QPlainTextEdit#preview {{ background: {p['preview']}; color: {p['violet']}; border-color: {p['violet_line']}; "
         f"font-size: 11pt; $NUMBER_FONT }}\n"
+        # 按编号导入的输入框：和粘贴框同一种白底细框（高度跟着右边的胶囊按钮）
+        f"QLineEdit {{ background: {p['card']}; color: {p['text']}; border: 1px solid {p['line2']}; border-radius: 10px; "
+        f"padding: 0px 10px; }}\n"
+        f"QLineEdit:disabled {{ color: {p['dim']}; }}\n"
         f"QWidget#schemeListBody QCheckBox {{ background: {p['gray_bg']}; color: {p['soft']}; border: 2px solid "
         f"{p['gray_bg']}; border-radius: 14px; padding: 5px 14px 5px 9px; }}\n"
         f"QWidget#schemeListBody QCheckBox:checked {{ background: {p['card']}; color: {p['text']}; font-weight: bold; "
@@ -157,11 +165,12 @@ def _white_seaview() -> Skin:
     }
     led = {"recog": p["led_recog"], "scheme": p["led_scheme"], "advice": p["led_advice"], "owned": p["led_owned"],
            "look": p["led_look"], "diag": p["led_diag"], "export": p["led_scheme"], "import": p["led_recog"]}
-    tint = {"mode": "recog", "hotkey": "recog", "capture": "recog", "lowend": "recog", "skin": "look", "opaque": "look",
-            "export": "diag", "update": "diag", "about": "diag"}
+    tint = {"mode": "recog", "hotkey": "recog", "capture": "recog", "lowend": "recog", "big_cores": "recog", "skin": "look",
+            "opaque": "look", "export": "diag", "update": "diag", "about": "diag"}
     return make_skin(
         WHITE_SEAVIEW_KEY, WHITE_SEAVIEW_LABEL, common=common, fonts=fonts, layouts=layouts,
         overlay=dict(
+            WIDTH=532,  # 比默认的 459 宽：最长的角色名、最长的方案名在「筹码方案」卡片的下拉框里要写得下
             PANEL_MARGINS=(14, 12, 14, 14), PANEL_SPACING=10, HEAD_SPACING=8,
             PANEL_BG="transparent", PANEL_BORDER="transparent", PANEL_RADIUS=18, PANEL_PAUSED_BG="transparent",
             PANEL_PAUSED_BORDER="transparent", PANEL_ATTENTION_BORDER=p["coral"], PANEL_OPAQUE_BG="transparent",
@@ -186,8 +195,8 @@ def _white_seaview() -> Skin:
             TOGGLE_PRESSED_BG=p["violet_line"],
             REMOVE_PADDING="0px 6px", REMOVE_RADIUS=9, SCROLL_WIDTH=6, SCROLL_HANDLE=p["violet"], SCROLL_RADIUS=3,
             SCROLL_HANDLE_MIN=24, CLOSE_PADDING="0px 7px 1px 7px",
-            SCHEME_TOOL_ICON_PX=19, SCHEME_TOOL_COLOR=p["violet"], SCHEME_TOOL_DISABLED=p["disabled"],
-            SCHEME_TOOL_GAP=3, SCHEME_TOOL_PADDING=(10, 6),
+            SCHEME_TOOL_ICON_PX=14, SCHEME_TOOL_COLOR=p["violet"], SCHEME_TOOL_DISABLED=p["disabled"],
+            SCHEME_TOOL_GAP=2, SCHEME_TOOL_PADDING=(10, 4),
             MARK_BEST_COLOR="#ffffff", MARK_COLOR=p["soft"],
             NAME_BORDER_ALPHA=255, UNREADABLE_BORDER_ALPHA=255, NAME_PADDING="1px 10px", NAME_WEIGHT_BEST=700,
             NAME_WEIGHT=700, PICKED_WEIGHT=700, GRID_DIAMETER=26,
@@ -270,7 +279,7 @@ def _white_seaview() -> Skin:
             SCHOOL_FILL=p["gray_bg"],
         ),
         share=dict(
-            SIZE=(600, 672), SCREEN_MARGIN=0, SHEET_EXTRA=share_extra, WINDOW_BG=p["bg"],
+            SIZE=(600, 700), SCREEN_MARGIN=0, SHEET_EXTRA=share_extra, WINDOW_BG=p["bg"],
             BOX_BG="transparent", BOX_BORDER="transparent", INPUT_BG=p["card"], INPUT_BORDER=p["line2"],
             INPUT_RADIUS=10, INPUT_PADDING="4px 10px", INPUT_HOVER_BORDER=p["violet"], POPUP_BG=p["card"],
             POPUP_SELECTION=p["violet_bg"], PREVIEW_BG=p["preview"], PREVIEW_TEXT=p["violet"], LIST_BG="transparent",
@@ -284,6 +293,8 @@ def _white_seaview() -> Skin:
             TILE_PEN=1, TILE_ON_PEN=2, TILE_RADIUS=14, TILE_MARGINS=(12, 8, 12, 10), TILE_SPACING=12,
             RADIO_SIZE=18, RADIO_GAP=8, RADIO_PEN=1.4, RADIO_DOT=3, RADIO_OFF_COLOR=p["line2"],
             SELECTED_COLOR=p["violet"], TILE_ON_TEXT=(p["violet"], p["soft"]),
+            LEVEL_COLOR={"easy": p["teal"], "normal": "#0077a8", "danger": "#b8860b",
+                         "critical": "#e8590c", "overload": "#c92a4a"},
             ICON_BOX=34, ICON_PX=16, ICON_RADIUS=11, ICON_BG=p["gray_bg"], ICON_COLOR=p["soft"],
             ICON_TINTS={key: (rgba_tuple(led[group], 36), led[group]) for key, group in tint.items()},
             KEYCAP_BG=p["card"], KEYCAP_BORDER=p["line2"], KEYCAP_EDGE=p["line2"], KEYCAP_RADIUS=9, KEYCAP_EDGE_WIDTH=3,

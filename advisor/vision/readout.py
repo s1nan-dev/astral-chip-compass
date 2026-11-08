@@ -10,9 +10,10 @@ tests/test_vision_matrix.read_sample：
   select     三选一（预筛过了才做文字识别）
   reread     认出三选一以后的快速复查（同一组候选只重查选中的绿框，悬浮窗在同一个三选一界面上就是这样读的）
   pick       选角界面判断，顺带读下方区域的对局外画面
-  pregame    加载画面对局外画面、畸变组件
+  pregame    加载画面对局外画面（连同奖励页「星币」那一格的数）、畸变组件
   panel      「查看筹码」面板
-  hud        左上角轮次、任务栏里的地图
+  hud        左上角轮次（连同看没看见「轮」「Round」、它左边那一小块在哪）、任务栏里的地图
+  round_crop 轮次被挡住时只认字的那一小块（看见了「轮」「Round」才读）
   task_panel 任务栏是否打开
   progress   进度条（当前格和红叉所在的格）
   cap        进度上限（就是进度条上的红叉；单独再读一遍，免得这一项在发行版里坏掉没人发现）
@@ -20,6 +21,9 @@ tests/test_vision_matrix.read_sample：
   stars      自己的星数、玩家列表每一行亮着几颗星
   coins      自己的星币数
   players    玩家列表每认出的角色（队友、谁是不是电脑）
+  finish     通关画面、打输横幅的颜色和形状（悬浮窗每帧都看）
+  victory    通关画面认字（finish 说大字可能出来了才读）
+  game_over  蓝色斜带转正认字（finish 说形状对了才读）
 
 每一项单独接住异常，记成「类型: 说明」（说明里不留绝对路径），不中断其余各项。读数里的小数统一保留 DECIMALS 位：
 两边算出的末位有细微差别时不判成不一致。这个模块随程序进发行版，不能引用 tests/、tools/ 里的任何东西。
@@ -32,7 +36,7 @@ import re
 
 import numpy as np
 
-from . import chip_select, coins, hero, hud, stars
+from . import chip_select, coins, hero, hud, stars, victory
 
 # 和 tests/test_vision_matrix.py 相同的口径：哪些画面读哪些模块。以标注里的 scene 为准（写进清单的 hints）。
 SELECT_SCENES = {"chip_select", "chip_select_selected"}
@@ -165,7 +169,9 @@ def read_frame(img, hints: dict | None = None) -> dict:
     r.run("panel", lambda: _read_panel(frame, db, hints.get("panel_hero")), _panel)
     mode = _hud_mode(hints)
     if mode is not None:
-        r.run("hud", lambda: hud.read_hud(frame, db, full=mode), _hud)
+        reading = r.run("hud", lambda: hud.read_hud(frame, db, full=mode), _hud)
+        if reading is not None and reading.round_crop is not None:
+            r.run("round_crop", lambda: hud.read_round_crop(frame, reading.round_crop))
     r.run("task_panel", lambda: bool(hud.task_panel_visible(frame)))
     r.run("progress", lambda: hud.read_progress(frame), lambda p: [p.current, p.cap])
     r.run("cap", lambda: hud.read_progress_cap(frame))
@@ -177,6 +183,11 @@ def read_frame(img, hints: dict | None = None) -> dict:
             r.run("coins", lambda: coins.read_own_coins(frame, report.result), _coins)
         if hints.get("players"):
             r.run("players", lambda: stars.read_players(frame, hints.get("hero")), lambda p: _players(p, names))
+    seen = r.run("finish", lambda: victory.glance(frame), _glance)
+    if seen is not None and seen.text:
+        r.run("victory", lambda: bool(victory.read(frame)))
+    if seen is not None and seen.banner:
+        r.run("game_over", lambda: bool(victory.read_game_over(frame)))
     return r.got
 
 
@@ -238,6 +249,7 @@ def _hud(hud_reading) -> dict:
         "round": hud_reading.round, "map": hud_reading.map, "map_scores": dict(hud_reading.map_scores),
         "tasks_seen": list(hud_reading.tasks_seen), "map_candidates": list(hud_reading.map_candidates),
         "map_confidence": hud_reading.map_confidence,
+        "round_mark": hud_reading.round_mark, "round_crop": hud_reading.round_crop,
     }
 
 
@@ -289,7 +301,12 @@ def _panel(reading) -> dict | None:
 def _screen(screen) -> dict | None:
     if screen is None:
         return None
-    return {"kind": screen.kind, "difficulty": screen.difficulty, "map": screen.map, "rounds": screen.rounds}
+    return {"kind": screen.kind, "difficulty": screen.difficulty, "map": screen.map, "rounds": screen.rounds,
+            "coins": screen.coins}
+
+
+def _glance(seen) -> dict:
+    return {"coral": seen.coral, "white": seen.white, "banner": seen.banner}
 
 
 def _pregame(found) -> dict:

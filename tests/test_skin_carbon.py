@@ -4,7 +4,7 @@
 图标；四个窗口换过去再换回来；设置窗口的两列
 格子里控件照常、「关于拾星助手」打开关于窗口；关于窗口点目录跳到那一节；× 和 Esc 关窗口、一个窗口只有一个关闭按钮、按住拖动
 移动窗口、编辑方案和导入/导出拖边缘改大小（设置、关于不能）；窗口高度不超过屏幕可用高度（含 768 高的屏幕）；编辑方案的方案
-页签和两列表单、搜索框放大镜的颜色、导入/导出左右并排；「皮肤」窗口里这一套的标法；灯带、灯线、标题后面的线不压在字下面；设置文件记住所选的皮肤，
+页签和两列表单、搜索框放大镜的颜色、导入/导出左右并排（粘贴框、预览框拿到键盘焦点时照常重画）；「皮肤」窗口里这一套的标法；灯带、灯线、标题后面的线不压在字下面；设置文件记住所选的皮肤，
 以及换皮肤的通知名单不会随开关窗口越来越长。
 
 用 Qt 的 offscreen 平台，不会弹出窗口；设置文件、方案文件写在项目 .tmp 下的临时文件夹里。同 tests/test_skin_classic.py：
@@ -30,7 +30,7 @@ from PySide6.QtWidgets import QAbstractButton, QApplication, QComboBox, QLabel, 
 from advisor import paths  # noqa: E402
 from advisor.data import HERO_GROUPS, load_db  # noqa: E402
 from advisor.schemes import Scheme, SchemeStore, Tiers, get_catalog, to_short  # noqa: E402
-from advisor.ui import about, chrome, skin_window, theme, widgets, winapi  # noqa: E402
+from advisor.ui import about, chrome, lang, skin_window, theme, widgets, winapi  # noqa: E402
 from advisor.ui.overlay_parts import option_widgets
 from advisor.ui.overlay_parts import app as overlay_app
 from advisor.ui.overlay_parts import wording
@@ -46,7 +46,7 @@ from advisor.ui.services import Services  # noqa: E402
 from tests.support import qtenv, sandbox  # noqa: E402
 from tests.support.errors import capture_errors  # noqa: E402
 from tests.support.overlay_cases import unreadable  # noqa: E402
-from tests.support.widgets import dispose, pixels, settle  # noqa: E402
+from tests.support.widgets import dispose, paint_messages, pixels, qt_messages, settle  # noqa: E402
 
 APP = qtenv.app()
 PROJECT = Path(__file__).resolve().parents[1]
@@ -332,6 +332,24 @@ class FontTest(Case):
                 with self.subTest(ch=ch, words=words):
                     self.assertIn(ch, text)
                     self.assertTrue(raw.supportsCharacter(ord(ch)), f"子集里没有「{ch}」（{words}）")
+        self.assertNotIn(RARE, text)
+
+    def test_hant_bold_subset_covers_hant_text(self):
+        """繁体界面装的是繁体粗体子集（ACCTitleTC-Bold.otf）：收字规则（tools/make_font_subset.py 的 collect_text_hant）收的
+        汉字子集里都有。"""
+        self.addCleanup(theme.load_fonts, theme.CARBON_FLOW)
+        self.addCleanup(theme.load_fonts, theme.CLASSIC_BLACK)
+        self.addCleanup(setattr, lang, "CURRENT", lang.CURRENT)
+        self.addCleanup(theme.unload_fonts)
+        theme.unload_fonts()
+        lang.CURRENT = lang.HANT
+        self.assertIn("ACC Title", theme.load_fonts(theme.CARBON_FLOW))
+        text = subset_tool().collect_text_hant()
+        raw = QRawFont.fromFont(QFont("ACC Title"))
+        self.assertTrue(raw.isValid())
+        cjk = [ch for ch in text if "\u4e00" <= ch <= "\u9fff"]
+        missing = [ch for ch in cjk if not raw.supportsCharacter(ord(ch))]
+        self.assertEqual(missing, [], "收字规则里有、繁体子集里没有：重做子集（tools/make_font_subset.py）")
         self.assertNotIn(RARE, text)
 
     def test_outside_subset_falls_back(self):
@@ -753,17 +771,18 @@ class HeightTest(Case):
             self.assertGreater(d.scroll.verticalScrollBar().maximum(), 0)
 
     def test_normal_screen_size(self):
-        """正常大小的屏幕：照效果图的大小打开（设置 720 宽、高随内容，导入/导出 900×540 横着，关于 680×552，编辑方案 760×752）。"""
+        """正常大小的屏幕：照效果图的大小打开（设置 720 宽、高随内容，导入/导出 900×580 横着（比效果图高出按编号导入那一行和
+        提示行），关于 680×552，编辑方案 760×752）。"""
         theme.set_skin(KEY)
         self.assertEqual((theme.SETTINGS.WIDTH, theme.SETTINGS.HEIGHT), (720, 0))
-        self.assertEqual(tuple(theme.SHARE.SIZE), (900, 540))
+        self.assertEqual(tuple(theme.SHARE.SIZE), (900, 580))
         self.assertEqual(tuple(theme.ABOUT.SIZE), (680, 552))
         self.assertEqual((theme.EDITOR.WINDOW_W, theme.EDITOR.WINDOW_H), (760, 752))
         share = W.SchemeShareWindow(self.db, self.store(), None)
         self.addCleanup(dispose, share)
         share.show()
         settle()
-        self.assertEqual((share.width(), share.height()), (900, 540))
+        self.assertEqual((share.width(), share.height()), (900, 580))
         d = st.SettingsDialog(SimpleCapture("window"))
         self.addCleanup(dispose, d)
         d.show()
@@ -904,6 +923,27 @@ class EditorShareTest(Case):
         with mock.patch.object(W.SchemeShareWindow, "_style_split_line") as style:
             win.apply_skin()
         self.assertEqual({call.args[0] for call in style.call_args_list}, {win._split_rule, win._split_line})
+
+    def test_share_text_boxes_take_focus(self):
+        """导入/导出的预览框、粘贴框装着切角的框：点进去拿到键盘焦点、往粘贴框里打字，照常重画。切角的框只画输入框这一层，
+        不往里面的视口上画：往上画时 Qt 报画不上去，粘贴框有键盘焦点（要画光标）时程序崩溃。"""
+        messages = qt_messages(self)
+        theme.set_skin(KEY)
+        win = W.SchemeShareWindow(self.db, self.store(), "芬妮")
+        self.addCleanup(dispose, win)
+        win.show()
+        settle()
+        win.activateWindow()
+        for box in (win.preview, win.paste):
+            QTest.mouseClick(box.viewport(), Qt.LeftButton)
+            settle()
+            self.assertIs(win.focusWidget(), box)
+        QTest.keyClicks(win.paste, "abc")
+        win.repaint()
+        settle()
+        self.assertEqual(win.paste.toPlainText(), "abc")
+        self.assertTrue(win.paste.hasFocus())
+        self.assertEqual(paint_messages(messages), [])
 
     def test_skin_window_mark(self):
         """「皮肤」窗口在这一套下：说明写在顶上一行标题的后面，格子直接放在窗口底上；正在用的那一格（碳纤流光）外面一圈光，

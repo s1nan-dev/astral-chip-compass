@@ -94,6 +94,10 @@ class FakeRecorder:
         self.calls.append(("collect", threading.get_ident()))
         return [{"time": "2026-10-10T12:00:00.000", "kind": "segment"}], dict(self.SCOPE)
 
+    def collect_stats(self, hours=12.0):
+        """导出诊断时连带读最近 hours 小时的统计记录（gamelog.GameRecorder.collect_stats）：交回空的，不记进 calls。"""
+        return [], {"hours": hours, "since": None, "segments": 0, "lines": 0}
+
     def close(self):
         pass
 

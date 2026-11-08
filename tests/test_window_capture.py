@@ -2,7 +2,8 @@
 
 截取会话、找游戏窗口、截屏幕、时钟都用假的：不开窗口、不截屏幕、不改任何窗口的截图属性，整组几秒内跑完。
 错误分类、按版本号判断、会话复用和空闲关闭、出错后重建或改为截取屏幕、再试、全黑核对、裁客户区、颜色转换
-（分段单线程，和取前三个通道逐像素相同）；显卡设备的多线程保护（取不到接口时照常建好、只记一次错误记录）；
+（分段单线程，和取前三个通道逐像素相同）、按游戏平台找窗口（三个版本的标题、只认一个端时的提示、同一个句柄只算一次、
+悬浮窗定时查看时的 notice）；显卡设备的多线程保护（取不到接口时照常建好、只记一次错误记录）；
 等显卡做完拷贝（信号和事件，出错、超时改由 Map 等）、取帧时没用上的旧帧计数、分步计时的报告顺序；独占全屏的检查只认
 前台的游戏（切出游戏照常识别时，别的程序独占全屏不算）。
 子进程里跑的（子进程崩溃算失败）：SystemSmokeTest 调真的系统组件（建显卡设备、取系统类的工厂、对句柄 0 建截取对象）；
@@ -13,6 +14,7 @@ ConvertThreadTest 核对 4K 颜色转换只用当前线程（其他线程的 CPU
 from __future__ import annotations
 
 import ast
+import ctypes
 import dataclasses
 import json
 import os
@@ -20,6 +22,7 @@ import re
 import subprocess
 import sys
 import threading
+import time
 import unittest
 from collections import deque
 from pathlib import Path
@@ -609,16 +612,99 @@ class ExclusiveFullscreenTest(unittest.TestCase):
 
 
 class WindowGoneErrorTest(unittest.TestCase):
-    """找不到游戏窗口、游戏窗口最小化抛 capture.WindowGone：给玩家看的 notice 只从两句固定中文里取，
+    """找不到游戏窗口、游戏窗口最小化抛 capture.WindowGone：给玩家看的 notice 只从几句固定中文里取，
     也是 RuntimeError 的一种（按 RuntimeError 接的地方照样接得住）。找窗口用假的，不碰真的窗口。"""
 
+    def setUp(self):
+        capture.set_platform(None)
+        self.addCleanup(capture.set_platform, None)
+
     def test_notice(self):
-        # 不写窗口标题（两个标题写全了悬浮窗一行显示时放不下，「请先启动游戏」会被省略）；和悬浮窗的 NO_GAME 一字不差
+        # 不写窗口标题（三个标题写全了悬浮窗一行显示放不下，「请先启动游戏」会被省略）；和悬浮窗的 NO_GAME 一字不差
         self.assertEqual(capture.WindowGone().notice, "未找到游戏窗口，请先启动游戏。")
         self.assertEqual(capture.WindowGone().notice, capture.NOT_FOUND)
         gone = capture.WindowGone(minimized=True)
         self.assertEqual((gone.notice, str(gone)), (capture.MINIMIZED, capture.MINIMIZED))
         self.assertIsInstance(gone, RuntimeError)
+
+    def test_platform_notice(self):
+        """设了平台、开着的是另一个端时的那一句：填上给的那个端的名字（不看现在的设置）；最小化时照旧是 MINIMIZED；
+        没给、给了别的值时是 NOT_FOUND。"""
+        notice = capture.WindowGone(platform=capture.TAPTAP).notice
+        self.assertEqual(notice, capture.NOT_FOUND_PLATFORM.format(name="TapTap端"))
+        self.assertNotEqual(notice, capture.NOT_FOUND)
+        capture.set_platform(capture.TAPTAP)
+        self.assertEqual(capture.WindowGone(platform=capture.STEAM).notice,
+                         capture.NOT_FOUND_PLATFORM.format(name="Steam端"))
+        self.assertEqual(capture.WindowGone(platform=capture.TAPTAP, minimized=True).notice, capture.MINIMIZED)
+        for other in (None, "steam+taptap", True):
+            with self.subTest(platform=other):
+                self.assertEqual(capture.WindowGone(platform=other).notice, capture.NOT_FOUND)
+
+    def test_one_notice(self):
+        """指定了找哪个端（两路识别各找各的端）时的那一句：填上那个端的名字；最小化时照旧是 MINIMIZED；两项都给了时按
+        one；没给、给了 BOTH 或别的值时是 NOT_FOUND。"""
+        for name, label in capture.PLATFORM_NAMES.items():
+            with self.subTest(platform=name):
+                self.assertEqual(capture.WindowGone(one=name).notice, capture.NOT_FOUND_ONE.format(name=label))
+        self.assertEqual(capture.WindowGone(one=capture.TAPTAP, minimized=True).notice, capture.MINIMIZED)
+        self.assertEqual(capture.WindowGone(one=capture.STEAM, platform=capture.TAPTAP).notice,
+                         capture.NOT_FOUND_ONE.format(name="Steam端"))
+        for other in (None, capture.BOTH, "steam+taptap", True):
+            with self.subTest(one=other):
+                self.assertEqual(capture.WindowGone(one=other).notice, capture.NOT_FOUND)
+
+    def test_missing_notice(self):
+        """现在找不到游戏窗口时给玩家看的那一句（capture.missing_notice）：和 _gone 同一套判断，用眼下设的平台；
+        设了 TapTap 端、只开着 Steam 版时点明是设置的原因，其余是 NOT_FOUND。"""
+        def only(titles):
+            return lambda cls, title: GAME if title in titles else 0
+
+        with mock.patch.object(capture._win, "FindWindowW", side_effect=only(())):
+            capture.set_platform(None)
+            self.assertEqual(capture.missing_notice(), capture.NOT_FOUND)
+            capture.set_platform(capture.TAPTAP)
+            self.assertEqual(capture.missing_notice(), capture.NOT_FOUND)  # 另一个端也没开
+        with mock.patch.object(capture._win, "FindWindowW", side_effect=only(capture.PLATFORM_TITLES[capture.STEAM])):
+            capture.set_platform(capture.TAPTAP)
+            self.assertEqual(capture.missing_notice(), capture.NOT_FOUND_PLATFORM.format(name="TapTap端"))
+            capture.set_platform(None)  # 自动识别：两个端都能认，不点明设置
+            self.assertEqual(capture.missing_notice(), capture.NOT_FOUND)
+        with mock.patch.object(capture._win, "FindWindowW", side_effect=only(capture.PLATFORM_TITLES[capture.TAPTAP])):
+            capture.set_platform(capture.STEAM)
+            self.assertEqual(capture.missing_notice(), capture.NOT_FOUND_PLATFORM.format(name="Steam端"))
+
+    def test_probe_notice(self):
+        """悬浮窗定时查看游戏窗口（winapi.probe_game）：找不到时 notice 是 missing_notice，找到时为空。"""
+        def only(titles):
+            return lambda cls, title: GAME if title in titles else 0
+
+        with mock.patch.object(winapi._user32, "GetForegroundWindow", return_value=0), \
+                mock.patch.object(capture._win, "FindWindowW", side_effect=only(())):
+            capture.set_platform(capture.TAPTAP)
+            self.assertEqual(winapi.probe_game().notice, capture.NOT_FOUND)
+        with mock.patch.object(winapi._user32, "GetForegroundWindow", return_value=0), \
+                mock.patch.object(capture._win, "FindWindowW", side_effect=only(capture.PLATFORM_TITLES[capture.STEAM])):
+            self.assertEqual(winapi.probe_game().notice, capture.NOT_FOUND_PLATFORM.format(name="TapTap端"))
+        # 找到时为空（别的几项都换成假的：不碰真的窗口）
+        with mock.patch.object(capture, "_locate_for", return_value=(GAME, "AstralParty_CN")), \
+                mock.patch.object(winapi, "_client_rect", return_value=CLIENT), \
+                mock.patch.object(winapi, "window_class", return_value=capture.GAME_CLASS), \
+                mock.patch.object(winapi._user32, "IsIconic", return_value=0), \
+                mock.patch.object(winapi._user32, "GetForegroundWindow", return_value=0):
+            self.assertEqual(winapi.probe_game().notice, "")
+
+    def test_overlay_knows_notices(self):
+        """悬浮窗认得出后台识别发来的每一句（overlay_parts.geometry._window_gone_texts）：游戏窗口又看得到时按它收起，
+        点明游戏平台的那几句、指定了端的那两句也在里面。"""
+        from advisor.ui.overlay_parts.geometry import _window_gone_texts
+
+        texts = _window_gone_texts()
+        notices = {capture.WindowGone().notice, capture.WindowGone(minimized=True).notice}
+        notices |= {capture.WindowGone(platform=name).notice for name in capture.PLATFORM_NAMES}
+        notices |= {capture.WindowGone(one=name).notice for name in capture.PLATFORM_NAMES}
+        self.assertEqual(set(texts), notices)
+        self.assertEqual(len(texts), len(notices))  # 没有重复、没有多出来的
 
     def test_missing_window(self):
         with mock.patch.object(capture, "_set_dpi_awareness"), \
@@ -628,33 +714,51 @@ class WindowGoneErrorTest(unittest.TestCase):
                 with self.subTest(find=find), self.assertRaises(capture.WindowGone) as cm:
                     find()
                 self.assertEqual(cm.exception.notice, capture.NOT_FOUND)
-            # 国服、国际服两个标题都找过才算找不到
-            self.assertIn(mock.call(None, "AstralParty_INT"), find_window.call_args_list)
+            # 三个标题都找过才算找不到，每次都要带上类名
+            self.assertIn(mock.call(capture.GAME_CLASS, "吉星派对"), find_window.call_args_list)
+            self.assertEqual({call[0][0] for call in find_window.call_args_list}, {capture.GAME_CLASS})
 
 
 class GameTitlesTest(unittest.TestCase):
-    """国服（AstralParty_CN）、国际服（AstralParty_INT）的游戏窗口都认：先找国服、再找国际服，找到哪个用哪个；只传一个
-    标题时只找那一个。截图（find_game、find_window）、前台判断（game_in_front）、悬浮窗查看游戏窗口（winapi.probe_game）
-    用的是同一个窗口。找窗口用假的，不碰真的窗口。"""
+    """三个版本的游戏窗口都认：Steam 版国服（AstralParty_CN）、国际服（AstralParty_INT），TapTap 版（吉星派对）；
+    先找国服、再找国际服，找到哪个用哪个。标题和类名都对上才算（同名的资源管理器窗口不算，见 PlatformTest）。只传一个
+    标题时只找那一个。截图（find_game、find_window）、前台判断（game_in_front）、悬浮窗查看游戏窗口
+    （winapi.probe_game）用的是同一个窗口。找窗口用假的，不碰真的窗口。"""
 
     INT = 2002
 
+    def setUp(self):
+        capture.set_platform(None)
+        self.addCleanup(capture.set_platform, None)
+
     @staticmethod
     def windows(**found):
-        """假的 FindWindowW：按标题给句柄（没给的找不到）；返回 (side_effect, 找过的标题)。"""
+        """假的 FindWindowW：类名是 UnityWndClass 时按标题给句柄（没给的找不到）；返回 (side_effect, 找过的标题)。"""
         asked: list[str] = []
 
         def find(cls, title):
             asked.append(title)
-            return found.get(title)
+            return found.get(title) if cls == capture.GAME_CLASS else 0
         return find, asked
 
     def test_titles_same_everywhere(self):
         from tools import build_release
 
-        self.assertEqual(capture.WINDOW_TITLES, ("AstralParty_CN", "AstralParty_INT"))
+        self.assertEqual(capture.WINDOW_TITLES, ("AstralParty_CN", "AstralParty_INT", "吉星派对"))
         self.assertEqual(winapi.GAME_TITLES, capture.WINDOW_TITLES)
         self.assertEqual(build_release.GAME_TITLES, capture.WINDOW_TITLES)
+        self.assertEqual(build_release.GAME_CLASS, capture.GAME_CLASS)
+
+    def test_release_script_game_running(self):
+        """打包脚本查游戏开着没有（game_running）：TapTap 版也认，按标题加类名查（同名的文件夹窗口不算）。"""
+        from tools import build_release
+
+        for found, want in (({"吉星派对": GAME}, True), ({"AstralParty_INT": self.INT}, True), ({}, False)):
+            find, _ = self.windows(**found)
+            with self.subTest(found=found), \
+                    mock.patch.object(ctypes.windll.user32, "FindWindowW", side_effect=find) as finder:
+                self.assertEqual(build_release.game_running(), want)
+                self.assertEqual({call.args[0] for call in finder.call_args_list}, {capture.GAME_CLASS})
 
     def test_international_window_found(self):
         find, asked = self.windows(AstralParty_INT=self.INT)
@@ -668,9 +772,26 @@ class GameTitlesTest(unittest.TestCase):
     def test_cn_first_when_both_open(self):
         find, asked = self.windows(AstralParty_CN=GAME, AstralParty_INT=self.INT)
         with mock.patch.object(capture, "_set_dpi_awareness"), \
-                mock.patch.object(capture._win, "FindWindowW", side_effect=find):
+                mock.patch.object(capture._win, "FindWindowW", side_effect=find), \
+                mock.patch.object(capture, "_started", return_value=0):
             self.assertEqual(capture.find_window(), GAME)
-        self.assertEqual(asked, ["AstralParty_CN"])  # 找到国服就不再找国际服
+        self.assertEqual(asked, list(capture.WINDOW_TITLES))  # 自动识别三个标题都找，取不到启动时间时照标题先后
+
+    def test_same_handle_counted_once(self):
+        """同一个窗口对上了几个标题时只算一次：不拿同一个进程去比启动时间，记下的是先对上的那个标题。"""
+        asked: list[str] = []
+
+        def find(cls, title):
+            asked.append(title)
+            return GAME
+
+        with mock.patch.object(capture, "_set_dpi_awareness"), \
+                mock.patch.object(capture._win, "FindWindowW", side_effect=find), \
+                mock.patch.object(capture, "_started", return_value=0) as started:
+            self.assertEqual(capture.find_window(), GAME)
+        self.assertEqual(asked, list(capture.WINDOW_TITLES))
+        self.assertEqual(started.call_count, 0)
+        self.assertEqual(capture.found_title(), capture.WINDOW_TITLES[0])
 
     def test_single_title(self):
         find, asked = self.windows(AstralParty_INT=self.INT)
@@ -704,9 +825,407 @@ class GameTitlesTest(unittest.TestCase):
                 mock.patch.object(winapi, "window_class", return_value="UnityWndClass"):
             info = winapi.probe_game()
             self.assertEqual((info.found, info.hwnd, info.rect, info.game_foreground), (True, self.INT, CLIENT, True))
-            self.assertEqual(asked, ["AstralParty_CN", "AstralParty_INT"])
+            # 标题是找窗口时对上的那个，不另读窗口的标题
+            self.assertEqual((info.game_class, info.game_title), ("UnityWndClass", "AstralParty_INT"))
+            self.assertEqual(asked, list(capture.WINDOW_TITLES))
             self.assertFalse(winapi.probe_game("AstralParty_CN").found)  # 只找国服时找不到
             self.assertIsNone(winapi.find_game_hwnd("AstralParty_CN"))
+
+
+class PlatformTest(unittest.TestCase):
+    """按「游戏平台」设置找窗口（capture.set_platform、capture._find）：自动识别两个端都认、都开着时跟最后启动的那个；
+    设了一个端只认它；同名的资源管理器窗口不算（类名不对）；设的端没开时提示点明是设置的原因。截图、前台判断、
+    悬浮窗查看在同样的设置下认的是同一个窗口。找窗口和进程启动时间都用假的，不碰真的窗口。"""
+
+    STEAM_HWND, TAPTAP_HWND, EXPLORER = 1001, 1002, 1003
+
+    def setUp(self):
+        capture.set_platform(None)
+        self.addCleanup(capture.set_platform, None)
+        self.windows = {}  # 标题 → 句柄，只给类名是 UnityWndClass 的窗口
+        self.other = {}  # (类名, 标题) → 句柄，别的程序的窗口
+        self.asked: list[tuple[str, str]] = []
+        self.times = {}  # 句柄 → 进程启动时间（不在表里时取不到）
+
+        def find(cls, title):
+            self.asked.append((cls, title))
+            if cls == capture.GAME_CLASS:
+                return self.windows.get(title, 0)
+            return self.other.get((cls, title), 0)
+
+        for patcher in (
+            mock.patch.object(capture._win, "FindWindowW", side_effect=find),
+            mock.patch.object(capture, "_started", side_effect=lambda h: self.times.get(h, 0)),
+            mock.patch.object(capture, "_set_dpi_awareness"),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_only_taptap(self):
+        """只开着 TapTap 版：自动识别找得到，三个标题都找过。"""
+        self.windows = {"吉星派对": self.TAPTAP_HWND}
+        self.assertEqual(capture.find_window(), self.TAPTAP_HWND)
+        self.assertEqual(capture.found_platform(), capture.TAPTAP)
+        self.assertEqual([title for _, title in self.asked], list(capture.WINDOW_TITLES))
+
+    def test_latest_started_first(self):
+        """Steam 和 TapTap 都开着：自动识别跟最后启动的那个，两种先后都认。"""
+        self.windows = {"AstralParty_CN": self.STEAM_HWND, "吉星派对": self.TAPTAP_HWND}
+        for steam, taptap, want in ((100, 200, self.TAPTAP_HWND), (300, 200, self.STEAM_HWND)):
+            with self.subTest(steam=steam, taptap=taptap):
+                self.times = {self.STEAM_HWND: steam, self.TAPTAP_HWND: taptap}
+                self.assertEqual(capture.find_window(), want)
+                self.assertEqual(capture.found_platform(), capture.STEAM if want == self.STEAM_HWND else capture.TAPTAP)
+
+    def test_no_start_time(self):
+        """取不到启动时间时照标题先后：Steam 版的两个在前，跟国服而不是 TapTap 版。"""
+        self.windows = {"AstralParty_INT": self.STEAM_HWND, "吉星派对": self.TAPTAP_HWND}
+        self.assertEqual(capture.find_window(), self.STEAM_HWND)
+        self.assertEqual(capture.found_platform(), capture.STEAM)
+
+    def test_selected_platform(self):
+        """设了一个端时只找那个端的标题，另一个端开着也不认。"""
+        both = {"AstralParty_CN": self.STEAM_HWND, "吉星派对": self.TAPTAP_HWND}
+        for setting in (capture.STEAM, capture.TAPTAP):
+            with self.subTest(setting=setting):
+                capture.set_platform(setting)
+                self.windows = dict(both)
+                self.asked.clear()
+                want = self.STEAM_HWND if setting == capture.STEAM else self.TAPTAP_HWND
+                self.assertEqual(capture.find_window(), want)
+                self.assertEqual(capture.found_platform(), setting)
+                self.assertEqual(self.asked, [(capture.GAME_CLASS, capture.PLATFORM_TITLES[setting][0])])
+
+    def test_selected_platform_missing(self):
+        """设的端没开、另一个端开着：提示点明是设置的原因，名字是设的那个端；find_game 也报这一句。"""
+        for setting, other_window in ((capture.STEAM, {"吉星派对": self.TAPTAP_HWND}),
+                                      (capture.TAPTAP, {"AstralParty_CN": self.STEAM_HWND})):
+            with self.subTest(setting=setting):
+                capture.set_platform(setting)
+                self.windows = dict(other_window)
+                name = capture.PLATFORM_NAMES[setting]
+                with self.assertRaises(capture.WindowGone) as cm:
+                    capture.find_window()
+                self.assertEqual(cm.exception.notice, capture.NOT_FOUND_PLATFORM.format(name=name))
+                self.assertIn(name, cm.exception.notice)
+                with self.assertRaises(capture.WindowGone) as cm:
+                    capture.find_game()
+                self.assertEqual(cm.exception.notice, capture.NOT_FOUND_PLATFORM.format(name=name))
+
+    def test_nothing_open(self):
+        """什么都没开时照旧是 NOT_FOUND，不点设置。"""
+        capture.set_platform(capture.TAPTAP)
+        with self.assertRaises(capture.WindowGone) as cm:
+            capture.find_window()
+        self.assertEqual(cm.exception.notice, capture.NOT_FOUND)
+
+    def test_explorer_window_ignored(self):
+        """资源管理器里有个叫「吉星派对」的窗口（类名不是 UnityWndClass）：不认。"""
+        self.other = {("CabinetWClass", "吉星派对"): self.EXPLORER}
+        with self.assertRaises(capture.WindowGone) as cm:
+            capture.find_window()
+        self.assertEqual(cm.exception.notice, capture.NOT_FOUND)
+        self.assertIn((capture.GAME_CLASS, "吉星派对"), self.asked)
+
+    def test_unknown_platform_is_auto(self):
+        """set_platform 给了别的值：按自动识别，三个标题都找。"""
+        capture.set_platform("steam+taptap")  # 别的写法，不是 BOTH
+        self.assertIsNone(capture.platform())
+        self.windows = {"吉星派对": self.TAPTAP_HWND}
+        self.assertEqual(capture.find_window(), self.TAPTAP_HWND)
+        self.assertEqual([title for _, title in self.asked], list(capture.WINDOW_TITLES))
+
+    def test_both_setting(self):
+        """set_platform 认 BOTH（两个客户端同时识别）；别的值按自动识别，不抛错。"""
+        for value in (capture.STEAM, capture.TAPTAP, capture.BOTH):
+            with self.subTest(value=value):
+                capture.set_platform(value)
+                self.assertEqual(capture.platform(), value)
+        for other in (None, "steam+taptap", "both ", 1, ["steam"]):
+            with self.subTest(other=other):
+                capture.set_platform(other)
+                self.assertIsNone(capture.platform())
+
+    def test_specified_platform_ignores_setting(self):
+        """给了 STEAM、TAPTAP 时只找那个端，不管模块里设的是什么；两个端都开着、另一个端后启动也一样。"""
+        both = {"AstralParty_CN": self.STEAM_HWND, "吉星派对": self.TAPTAP_HWND}
+        self.times = {self.STEAM_HWND: 300, self.TAPTAP_HWND: 100}  # Steam 版后启动：自动识别会跟它
+        for setting in (None, capture.BOTH, capture.STEAM, capture.TAPTAP):
+            capture.set_platform(setting)
+            for platform, want in ((capture.STEAM, self.STEAM_HWND), (capture.TAPTAP, self.TAPTAP_HWND)):
+                with self.subTest(setting=setting, platform=platform):
+                    self.windows = dict(both)
+                    self.asked.clear()
+                    self.assertEqual(capture.find_window(platform=platform), want)
+                    self.assertEqual([title for _, title in self.asked],
+                                     [capture.PLATFORM_TITLES[platform][0]])
+                    self.assertEqual(capture.found_platform(), platform)
+                    with mock.patch.object(capture, "window_info", side_effect=lambda h: ("info", h)):
+                        self.assertEqual(capture.find_game(platform=platform), ("info", want))
+                    self.assertEqual(winapi.find_game_hwnd(platform=platform), want)
+                    with mock.patch.object(capture._win, "GetForegroundWindow", return_value=want), \
+                            mock.patch.object(capture, "_pid", return_value=4242):
+                        self.assertTrue(capture.game_in_front(platform=platform))
+                    with mock.patch.object(capture, "_notification_state",
+                                           return_value=capture.QUNS_RUNNING_D3D_FULL_SCREEN), \
+                            mock.patch.object(capture._win, "GetForegroundWindow", return_value=want), \
+                            mock.patch.object(capture, "_pid", return_value=4242):
+                        self.assertTrue(capture.exclusive_fullscreen(platform=platform))
+
+    def test_both_setting_same_as_auto(self):
+        """设置是 BOTH、不给端时和自动识别一样：三个标题都找，都开着跟后启动的那个；找到后记下的是实际的那个端。"""
+        self.windows = {"AstralParty_CN": self.STEAM_HWND, "吉星派对": self.TAPTAP_HWND}
+        for setting in (capture.BOTH, None):
+            for steam, taptap, want in ((100, 200, self.TAPTAP_HWND), (300, 200, self.STEAM_HWND)):
+                with self.subTest(setting=setting, steam=steam):
+                    capture.set_platform(setting)
+                    self.times = {self.STEAM_HWND: steam, self.TAPTAP_HWND: taptap}
+                    self.asked.clear()
+                    self.assertEqual(capture.find_window(), want)
+                    self.assertEqual([title for _, title in self.asked], list(capture.WINDOW_TITLES))
+                    self.assertEqual(capture.found_platform(),
+                                     capture.STEAM if want == self.STEAM_HWND else capture.TAPTAP)
+
+    def test_both_setting_old_callers(self):
+        """设置是 BOTH 时，还没区分端的调用处（不给 platform 的 find_game、missing_notice、悬浮窗查看游戏窗口的 probe_game）
+        都按自动识别：找得到时跟后启动的那个；找不到时是 NOT_FOUND，不点设置（BOTH 不是一个端，没有「游戏平台选的是……」
+        那一句）。"""
+        capture.set_platform(capture.BOTH)
+        self.windows = {"AstralParty_CN": self.STEAM_HWND, "吉星派对": self.TAPTAP_HWND}
+        self.times = {self.STEAM_HWND: 100, self.TAPTAP_HWND: 200}  # TapTap 版后启动
+        u = winapi._user32
+        with mock.patch.object(capture, "window_info", side_effect=lambda h: ("info", h)):
+            self.assertEqual(capture.find_game(), ("info", self.TAPTAP_HWND))
+        with mock.patch.object(u, "GetForegroundWindow", return_value=0), \
+                mock.patch.object(u, "IsIconic", return_value=0), \
+                mock.patch.object(winapi, "_client_rect", return_value=CLIENT), \
+                mock.patch.object(winapi, "window_class", return_value=capture.GAME_CLASS):
+            info = winapi.probe_game()
+        self.assertEqual((info.found, info.hwnd, info.game_title, info.notice),
+                         (True, self.TAPTAP_HWND, "吉星派对", ""))
+        for windows in ({}, {"AstralParty_CN": self.STEAM_HWND}):
+            with self.subTest(windows=windows):
+                self.windows = dict(windows)
+                self.assertEqual(capture.missing_notice(), capture.NOT_FOUND)
+        self.windows = {}
+        with self.assertRaises(capture.WindowGone) as cm:
+            capture.find_game()
+        self.assertEqual(cm.exception.notice, capture.NOT_FOUND)
+        with mock.patch.object(u, "GetForegroundWindow", return_value=0):
+            self.assertEqual(winapi.probe_game().notice, capture.NOT_FOUND)
+        self.assertEqual(capture.platform(), capture.BOTH)  # 设置本身照旧是 BOTH
+
+    def test_located_title_per_platform(self):
+        """两个端都开着、分别指定时，各拿到自己的句柄和标题；found_platform、found_title 记的是最后一次找到的。"""
+        self.windows = {"AstralParty_CN": self.STEAM_HWND, "吉星派对": self.TAPTAP_HWND}
+        self.times = {self.STEAM_HWND: 300, self.TAPTAP_HWND: 100}
+        self.assertEqual(capture._locate_for(None, capture.STEAM), (self.STEAM_HWND, "AstralParty_CN"))
+        self.assertEqual(capture._locate_for(None, capture.TAPTAP), (self.TAPTAP_HWND, "吉星派对"))
+        self.assertEqual((capture.found_platform(), capture.found_title()), (capture.TAPTAP, "吉星派对"))
+
+    def test_probe_by_platform(self):
+        """probe_game(platform=…)：只找那个端，game_title 是这一次对上的标题（不看模块里的设置），notice 按这一次的端说。"""
+        self.windows = {"AstralParty_CN": self.STEAM_HWND, "吉星派对": self.TAPTAP_HWND}
+        self.times = {self.STEAM_HWND: 300, self.TAPTAP_HWND: 100}
+        capture.set_platform(capture.TAPTAP)  # 模块里的设置和指定端不同：指定端优先
+        u = winapi._user32
+        with mock.patch.object(u, "GetForegroundWindow", return_value=0), \
+                mock.patch.object(u, "IsIconic", return_value=0), \
+                mock.patch.object(winapi, "_client_rect", return_value=CLIENT), \
+                mock.patch.object(winapi, "window_class", return_value=capture.GAME_CLASS):
+            for platform, want, title in ((capture.STEAM, self.STEAM_HWND, "AstralParty_CN"),
+                                          (capture.TAPTAP, self.TAPTAP_HWND, "吉星派对")):
+                with self.subTest(platform=platform):
+                    info = winapi.probe_game(platform=platform)
+                    self.assertEqual((info.found, info.hwnd, info.game_title), (True, want, title))
+                    self.assertEqual(info.notice, "")
+        self.windows = {}
+        with mock.patch.object(u, "GetForegroundWindow", return_value=0):
+            for platform, label in ((capture.STEAM, "Steam端"), (capture.TAPTAP, "TapTap端")):
+                with self.subTest(missing=platform):
+                    self.assertEqual(winapi.probe_game(platform=platform).notice,
+                                     capture.NOT_FOUND_ONE.format(name=label))
+
+    def test_missing_one(self):
+        """指定了端、那个端的窗口没开：NOT_FOUND_ONE 填上那个端的名字（另一个端开着、什么都没开时都一样）；不给端时
+        照旧是原来的几句。"""
+        for platform, other, label in ((capture.STEAM, {"吉星派对": self.TAPTAP_HWND}, "Steam端"),
+                                       (capture.TAPTAP, {"AstralParty_CN": self.STEAM_HWND}, "TapTap端")):
+            for windows in (other, {}):
+                with self.subTest(platform=platform, windows=windows):
+                    self.windows = dict(windows)
+                    with self.assertRaises(capture.WindowGone) as cm:
+                        capture.find_window(platform=platform)
+                    self.assertEqual(cm.exception.notice, capture.NOT_FOUND_ONE.format(name=label))
+                    with self.assertRaises(capture.WindowGone) as cm:
+                        capture.find_game(platform=platform)
+                    self.assertEqual(cm.exception.notice, capture.NOT_FOUND_ONE.format(name=label))
+        # 不给端时照旧：设了一个端、开着的是另一个端时点明是设置的原因
+        capture.set_platform(capture.TAPTAP)
+        self.windows = {"AstralParty_CN": self.STEAM_HWND}
+        with self.assertRaises(capture.WindowGone) as cm:
+            capture.find_window()
+        self.assertEqual(cm.exception.notice, capture.NOT_FOUND_PLATFORM.format(name="TapTap端"))
+
+    def test_same_window_everywhere(self):
+        """同样的平台设置下，截图、前台判断、悬浮窗查看认的是同一个窗口；probe 记下找到它时对上的标题。"""
+        self.windows = {"AstralParty_CN": self.STEAM_HWND, "吉星派对": self.TAPTAP_HWND}
+        self.times = {self.STEAM_HWND: 100, self.TAPTAP_HWND: 200}
+        titles = {self.STEAM_HWND: "AstralParty_CN", self.TAPTAP_HWND: "吉星派对"}
+        for setting, want in ((None, self.TAPTAP_HWND), (capture.STEAM, self.STEAM_HWND),
+                              (capture.TAPTAP, self.TAPTAP_HWND)):
+            with self.subTest(setting=setting):
+                capture.set_platform(setting)
+                with mock.patch.object(capture, "window_info", side_effect=lambda h: ("info", h)):
+                    self.assertEqual(capture.find_game(), ("info", want))
+                self.assertEqual(capture.find_window(), want)
+                with mock.patch.object(capture._win, "GetForegroundWindow", return_value=want), \
+                        mock.patch.object(capture, "_pid", return_value=4242):
+                    self.assertTrue(capture.game_in_front())
+                self.assertEqual(winapi.find_game_hwnd(), want)
+                u = winapi._user32
+                with mock.patch.object(u, "GetForegroundWindow", return_value=want), \
+                        mock.patch.object(u, "IsIconic", return_value=0), \
+                        mock.patch.object(u, "GetAncestor", side_effect=lambda h, f: h), \
+                        mock.patch.object(winapi, "_client_rect", return_value=CLIENT), \
+                        mock.patch.object(winapi, "_pid", return_value=1), \
+                        mock.patch.object(winapi, "window_class", return_value="UnityWndClass"):
+                    info = winapi.probe_game()
+                self.assertEqual((info.found, info.hwnd), (True, want))
+                self.assertEqual((info.game_class, info.game_title), ("UnityWndClass", titles[want]))
+                self.assertEqual(capture.found_title(), titles[want])
+
+    def test_found_kept_when_missing(self):
+        """found_platform、found_title：还没找到过时为 None 和空；找到后记下是哪个端、对上的是哪个标题；之后找不到时
+        沿用上一次的。"""
+        with mock.patch.object(capture, "_found", None):
+            self.assertEqual((capture.found_platform(), capture.found_title()), (None, ""))
+            self.windows = {"AstralParty_INT": self.STEAM_HWND}
+            self.assertEqual(capture.find_window(), self.STEAM_HWND)
+            self.assertEqual((capture.found_platform(), capture.found_title()), (capture.STEAM, "AstralParty_INT"))
+            self.windows = {}
+            with self.assertRaises(capture.WindowGone):
+                capture.find_window()
+            self.assertEqual((capture.found_platform(), capture.found_title()), (capture.STEAM, "AstralParty_INT"))
+
+    def test_found_title_per_platform_and_client(self):
+        """两开时按端各记一份上一次找到的标题（两路识别不互相覆盖）；标题换成对局报告的客户端。"""
+        with mock.patch.object(capture, "_found", None), \
+                mock.patch.object(capture, "_found_titles", {}):
+            self.windows = {"AstralParty_CN": self.STEAM_HWND, "吉星派对": self.TAPTAP_HWND}
+            self.times = {self.STEAM_HWND: 300, self.TAPTAP_HWND: 100}
+            self.assertEqual(capture._locate_for(None, capture.STEAM), (self.STEAM_HWND, "AstralParty_CN"))
+            self.assertEqual(capture._locate_for(None, capture.TAPTAP), (self.TAPTAP_HWND, "吉星派对"))
+            # 不带参数照旧是最后一次找到的；按端取各是各的
+            self.assertEqual((capture.found_platform(), capture.found_title()), (capture.TAPTAP, "吉星派对"))
+            self.assertEqual(capture.found_title(capture.STEAM), "AstralParty_CN")
+            self.assertEqual(capture.found_title(capture.TAPTAP), "吉星派对")
+            with mock.patch.object(capture, "_found_titles", {}):
+                self.assertEqual(capture.found_title(capture.STEAM), "")
+        self.assertEqual(capture.client_of("AstralParty_CN"), "cn")
+        self.assertEqual(capture.client_of("AstralParty_INT"), "int")
+        self.assertEqual(capture.client_of("吉星派对"), "taptap")
+        self.assertIsNone(capture.client_of("吉星派对 - 资源管理器"))
+        self.assertIsNone(capture.client_of(None))
+
+    def test_setting_changed_while_finding(self):
+        """识别线程正找着，界面线程改了设置：这一次照开头读到的设置找，找不到时的提示也按它说，不会填成刚改成的那个端
+        （设了 TapTap端、只开着 Steam 版，查「另一个端开着没有」时改成了 Steam端）。"""
+        capture.set_platform(capture.TAPTAP)
+        self.windows = {"AstralParty_CN": self.STEAM_HWND}
+        find = capture._win.FindWindowW.side_effect
+
+        def switching(cls, title):
+            if title in capture.PLATFORM_TITLES[capture.STEAM] and capture.platform() == capture.TAPTAP:
+                capture.set_platform(capture.STEAM)
+            return find(cls, title)
+
+        capture._win.FindWindowW.side_effect = switching
+        with self.assertRaises(capture.WindowGone) as cm:
+            capture.find_window()
+        self.assertEqual(cm.exception.notice, capture.NOT_FOUND_PLATFORM.format(name="TapTap端"))
+        self.assertEqual(capture.platform(), capture.STEAM)  # 设置确实在途中改了
+        self.assertEqual(capture.find_window(), self.STEAM_HWND)  # 下一次照新的设置找
+
+
+class StartedTest(unittest.TestCase):
+    """游戏进程的启动时间（capture._started，自动识别时两个端的窗口都开着时比先后）：按（窗口句柄, 进程号）缓存，游戏关了
+    再开、新进程正好拿到旧进程号时不拿旧进程的时间；取不到的不缓存。找窗口、进程号、查启动时间都用假的。"""
+
+    STEAM_HWND, TAPTAP_HWND, TAPTAP_AGAIN = 2002, 1001, 1005
+
+    def setUp(self):
+        capture.set_platform(None)
+        self.addCleanup(capture.set_platform, None)
+        self.windows = {}  # 标题 → 句柄（类名都是 UnityWndClass）
+        self.pids = {}  # 句柄 → 进程号
+        self.started = {}  # 进程号 → 现在用着这个进程号的进程的启动时间（不在表里时取不到）
+        self.queries: list[int] = []
+
+        def query(pid):
+            self.queries.append(pid)
+            return self.started.get(pid, 0)
+
+        def find(cls, title):
+            return self.windows.get(title, 0) if cls == capture.GAME_CLASS else 0
+
+        for patcher in (
+            mock.patch.object(capture, "_STARTED", {}),
+            mock.patch.object(capture._win, "FindWindowW", side_effect=find),
+            mock.patch.object(capture, "_pid", side_effect=lambda h: self.pids.get(h, 0)),
+            mock.patch.object(capture, "_process_started", side_effect=query),
+            mock.patch.object(capture, "_set_dpi_awareness"),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_cached(self):
+        """同一个窗口、同一个进程只查一次（找窗口每秒要调用好多次）。"""
+        self.pids, self.started = {self.TAPTAP_HWND: 50}, {50: 100}
+        self.assertEqual([capture._started(self.TAPTAP_HWND) for _ in range(3)], [100, 100, 100])
+        self.assertEqual(self.queries, [50])
+
+    def test_pid_reused(self):
+        """TapTap 版关了再开，新进程正好拿到旧进程的进程号、比 Steam 版晚启动：跟新开的 TapTap 版，不拿旧进程的时间。"""
+        self.windows = {"AstralParty_CN": self.STEAM_HWND, "吉星派对": self.TAPTAP_HWND}
+        self.pids = {self.TAPTAP_HWND: 50, self.STEAM_HWND: 60}
+        self.started = {50: 100, 60: 200}  # TapTap 版先启动：跟 Steam 版
+        self.assertEqual(capture.find_window(), self.STEAM_HWND)
+        self.windows["吉星派对"] = self.TAPTAP_AGAIN  # 关了再开：窗口是新建的
+        self.pids = {self.TAPTAP_AGAIN: 50, self.STEAM_HWND: 60}
+        self.started = {50: 300, 60: 200}
+        self.assertEqual(capture.find_window(), self.TAPTAP_AGAIN)
+        self.assertEqual((capture.found_platform(), capture.found_title()), (capture.TAPTAP, "吉星派对"))
+
+    def test_failed_not_cached(self):
+        """取不到（进程已经退出、权限不够）时为 0、不缓存，下次再查；取不到进程号时不查。"""
+        self.pids = {self.TAPTAP_HWND: 50}
+        self.assertEqual(capture._started(self.TAPTAP_HWND), 0)
+        self.started = {50: 100}
+        self.assertEqual(capture._started(self.TAPTAP_HWND), 100)
+        self.assertEqual(capture._started(self.STEAM_HWND), 0)  # 取不到进程号
+        self.assertEqual(self.queries, [50, 50])
+
+    def test_cache_bounded(self):
+        """缓存只留最近的几项：关掉的游戏留下的旧项不会越积越多。"""
+        for hwnd in range(1, 3 * capture._STARTED_KEEP):
+            self.pids[hwnd] = hwnd
+            self.started[hwnd] = hwnd
+            self.assertEqual(capture._started(hwnd), hwnd)
+            self.assertLessEqual(len(capture._STARTED), capture._STARTED_KEEP)
+
+
+class ProcessStartedTest(unittest.TestCase):
+    """查进程启动时间的系统调用（capture._process_started）：只查本进程自己（只读），不碰别的进程和窗口。"""
+
+    def test_own_process(self):
+        """换成 Unix 时间在现在之前、一天以内（高低两半拼得对）；查不了的进程（进程号 0）为 0。"""
+        value = capture._process_started(os.getpid())
+        self.assertGreater(value, 0)
+        unix = (value - 116444736000000000) / 10_000_000  # FILETIME：从 1601 年起的 100 纳秒数
+        self.assertLessEqual(unix, time.time() + 1)
+        self.assertGreater(unix, time.time() - 86400)
+        self.assertEqual(capture._process_started(0), 0)
 
 
 class ModuleRulesTest(unittest.TestCase):

@@ -9,6 +9,7 @@ import sys
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 from advisor import cli
 from advisor.data import (
@@ -27,7 +28,9 @@ from advisor.data import (
 from advisor.engine import (
     CLASS_SHIFT_REASON,
     CLASS_SHIFT_SHOP_REASON,
+    HEAL_ADVANCE_ORIGIN,
     HEAL_DISCOUNT_ORIGIN,
+    HEAL_DISCOUNT_SHORT,
     LOW_NOTE,
     NORMAL_NOTE,
     REROLL,
@@ -40,8 +43,9 @@ from advisor.engine import (
     mutator_notes,
     reward_rounds_left,
 )
+from advisor.engine import parts as engine_parts
 from advisor.engine.advice_text import free_short
-from advisor.engine.chances import heal_chance, heal_discount_score, heal_knife, knife_chance, partner_chance
+from advisor.engine.chances import heal_chance, heal_knife, knife_chance, knife_school_bonus, partner_chance
 from advisor.engine.context import endless_sources, harmonic, mixed_sources, next_sources, split_picks
 from advisor.engine.lookahead import future, future_setup, lookahead_on
 from advisor.engine.parts import endless_value, teammate_parts
@@ -103,6 +107,12 @@ class Base(unittest.TestCase):
         kw.setdefault("rerolls", default_rerolls(db, kw.get("star", 0), kw.get("owned", ())))
         return advise(db, State(hero=hero, **kw), list(offer))
 
+    def scaled(self, scale=0.5):
+        """official.scale 改回 scale 的资料库副本：查内置分参与总分、分项和理由时的行为（现在取 0，不列这几项）。"""
+        rules = {k: dict(v) if isinstance(v, dict) else v for k, v in self.db.rules.items()}
+        rules["official"]["scale"] = scale
+        return dataclasses.replace(self.db, rules=rules)
+
     def by_name(self, adv):
         return {e.chip.name: e for e in adv.evals}
 
@@ -122,6 +132,21 @@ class OfficialScoreTest(Base):
         self.assertEqual(
             self.official("邦妮", "拳击手套-高级"), {"基础分": 60, "角色分": 100, "标签分": 40}
         )
+
+    def test_review_table_column(self):
+        # 适配表审查清单（tools/make_review.py）的「内置」一栏：内置分不计入总分时是游戏公式的原值，这时适配分等于总分；
+        # 计入时是计入的值，适配分是总分减掉它。邦妮的拳击手套-高级原值 60 + 100 + 40
+        from tools import make_review
+
+        def row(db):
+            return next(r for r in make_review.rows_for(db, "邦妮") if r[3].name == "拳击手套-高级")
+
+        total, official, fit, _, _ = row(self.db)
+        self.assertEqual(official, 200)
+        self.assertEqual(fit, total)
+        total, official, fit, _, _ = row(self.scaled(0.5))
+        self.assertEqual(official, 100)
+        self.assertAlmostEqual(fit, total - 100)
 
     def test_minor_fit(self):
         self.assertEqual(self.official("橘雪莉", "电磁炮")["角色分"], 50)
@@ -181,17 +206,22 @@ class OfficialScoreTest(Base):
         self.assertEqual(self.official("凛", "书签", owned=["标记喷罐"])["标签分"], 40)
 
     def test_official_scale_in_total(self):
-        # 内置推荐分计入总分时整体 ×0.5；推荐角标仍按游戏公式的原值判断
-        scale = self.db.rules["official"]["scale"]
-        self.assertEqual(scale, 0.5)
+        # 现在不计入总分：分项里不列内置分各项，内置换算为 0；推荐角标仍按游戏公式的原值判断
+        self.assertEqual(self.db.rules["official"]["scale"], 0)
         scorer = Scorer(self.db, State(hero="邦妮"))
-        parts = {p.label: p.score for p in scorer.parts("拳击手套-高级", (), None) if p.label in OFFICIAL}
-        self.assertEqual(parts, {"基础分": 30, "角色分": 50, "标签分": 20})
+        self.assertEqual([p.label for p in scorer.parts("拳击手套-高级", (), None) if p.label in OFFICIAL], [])
         self.assertEqual(scorer.official_raw("拳击手套-高级", (), None), 200)
         adv = self.run_case("邦妮", ["拳击手套-高级", "夹心饼干-可口", "会员推荐信"])
         glove = self.by_name(adv)["拳击手套-高级"]
-        self.assertEqual(glove.official, 100)
+        self.assertEqual(glove.official, 0)
         self.assertEqual(glove.official_raw, 200)
+        # 代码留着：把 scale 改回 0.5 时照旧整体 ×0.5 计入总分
+        db = self.scaled(0.5)
+        scorer = Scorer(db, State(hero="邦妮"))
+        parts = {p.label: p.score for p in scorer.parts("拳击手套-高级", (), None) if p.label in OFFICIAL}
+        self.assertEqual(parts, {"基础分": 30, "角色分": 50, "标签分": 20})
+        adv = self.run_case("邦妮", ["拳击手套-高级", "夹心饼干-可口", "会员推荐信"], db=db)
+        self.assertEqual(self.by_name(adv)["拳击手套-高级"].official, 100)
 
     def test_badges_on_real_samples(self):
         # 实机样本上的游戏推荐角标，按游戏的判法（mechanics/chips.md 第四节）：这一组有内置推荐分 ≥ 100 的候选时，这些都有
@@ -418,7 +448,7 @@ class AdviceTest(Base):
         vitamin = self.by_name(advise(self.db, st, ["鹰眼瞄具", "优雅之羽", "维生素药丸"]))["维生素药丸"]
         reason = vitamin.lookahead_reason
         self.assertLess(vitamin.lookahead, 0)
-        self.assertIn("本局不再出现的高适配度筹码：魔法箭袋、忍术飞镖", reason)
+        self.assertIn("本局不再出现的高适配度筹码：魔法箭袋、标记喷罐", reason)
         self.assertIn(CLASS_SHIFT_REASON.format(points="卡牌职业分值 +30", classes="卡牌"), reason)
         locked = {"标记", "充能"}
         for bit in reason.split("；"):
@@ -550,8 +580,8 @@ class AdviceTest(Base):
         """「三个候选筹码的适配度均偏低」只在首推是刷新时出现（这条附注用来解释为什么推荐刷新）：总分都低于推荐线、
         首推却是某个筹码时不加；其余条件不变。命令行的附注取同一个 Advice.notes。"""
         line = self.db.rules["advice"]["recommend_total"]
-        # 首推筹码的一组只剩 1 次刷新（刷新的代价高，首推循环往复）
-        chip_first = self.run_case("凛", ["夹心饼干-美味", "循环往复", "医疗箱-紧急治疗"], star=1, round=5, rerolls=1)
+        # 首推筹码的一组没有刷新次数（首推循环往复），断言的是首推筹码时不加这条附注
+        chip_first = self.run_case("凛", ["夹心饼干-美味", "循环往复", "医疗箱-紧急治疗"], star=1, round=5, rerolls=0)
         reroll_first = self.run_case("凛", ["星币锤", "美工刀-初级", "大碗炖肉"], star=1, round=5, rerolls=2)
         for adv in (chip_first, reroll_first):
             self.assertTrue(all(e.total < line for e in adv.evals))  # 两组都是总分都低于推荐线
@@ -569,8 +599,9 @@ class AdviceTest(Base):
 
 class LookaheadTopStarTest(Base):
     """3 星以后的前瞻（context.next_sources）：不再升星，下一次三选一按任务和筹码商店在一局里的占比混合，占比和剩余
-    三选一次数同一个口径（rules.toml [picks]：本地图的筹码任务数 × task_rate 对 shop）。任务三格全随机、稀有度按 3 级任务
-    那一行；筹码商店稀有度按 3 星那一行、最左格出职业筹码池。0～2 星下一次三选一的主体照旧是下一星的升星。"""
+    三选一次数同一个口径（rules.toml [picks]：本地图的筹码任务数 × task_rate 对 shop）。任务三格全随机、按地图资料里任务
+    自带的等级拆成几项，每项按那一级任务的稀有度行；筹码商店稀有度按 3 星那一行、最左格出职业筹码池。0～2 星下一次三选一
+    的主体照旧是下一星的升星。"""
 
     HERO, MAP = "小町", "园林中庭"
     OWNED = ("标记喷罐", "大背包", "循环往复")  # 已有循环往复：下一次三选一里没有它，不经它额外那次三选一调分
@@ -585,13 +616,21 @@ class LookaheadTopStarTest(Base):
         return task / (task + cfg["shop"]), cfg["shop"] / (task + cfg["shop"])
 
     def dists(self, sc, have, map_name):
-        """持有 have 时下一次三选一的筹码池和两种来源的分布：任务（3 级）、筹码商店（3 星），照 pool 的模型直接算。"""
+        """持有 have 时下一次三选一的筹码池和两种来源的分布：任务按地图资料的等级拆成几项（3 星，每项按那一级的稀有度
+        行），筹码商店（3 星），照 pool 的模型直接算。"""
         db = self.db
         pool = player_pool(db, have, map_name)
         schools = owned_schools(db, have)
-        task = slot_dists(db, sc.hero, pool, schools, 3, "task", 3, class_owned=have)
+        task, _ = self.shares(map_name)
+        levels = db.map_info[map_name].task_level_shares("困难")
+        tasks = tuple((task * p, *slot_dists(db, sc.hero, pool, schools, 3, "task", lv, class_owned=have))
+                      for lv, p in levels)
         shop = slot_dists(db, sc.hero, pool, schools, 3, "shop", class_owned=have)
-        return pool, task, shop
+        return pool, tasks, shop
+
+    def task_share(self, sc, map_name) -> float:
+        """下一次三选一里任务的占比合计（任务已按等级拆成几项）。"""
+        return sum(share for share, source, _, _ in next_sources(sc, map_name) if source == "task")
 
     def test_sources_by_star(self):
         for star in (0, 1, 2):
@@ -601,18 +640,24 @@ class LookaheadTopStarTest(Base):
         sc = Scorer(self.db, State(hero=self.HERO, star=3, map=self.MAP))
         task, shop = self.shares(self.MAP)
         self.assertAlmostEqual(task, 0.8)  # 园林中庭最高难度 4 个筹码任务，筹码商店 1 次
-        self.assertEqual(next_sources(sc, self.MAP), ((task, "task", 3, 3), (shop, "shop", 3, None)))
-        # 地图待识别：每张候选地图按各自的任务数（星趴·梦想号 3 个）；不知道地图时按 default_tasks
+        # 任务按地图资料里任务自带的等级拆成几项（园林中庭三条线平均后 1/4、5/12、1/3），和当前星数无关
+        self.assertEqual(next_sources(sc, self.MAP), ((task * 0.25, "task", 3, 1), (task * 5 / 12, "task", 3, 2),
+                                                       (task / 3, "task", 3, 3), (shop, "shop", 3, None)))
+        # 地图待识别：每张候选地图按各自的任务数和等级（星趴·梦想号 3 个，任务占 75%）；不知道地图时按 default_tasks
         cands = Scorer(self.db, State(hero=self.HERO, star=3, map_candidates=("星趴·梦想号", self.MAP)))
         self.assertEqual(cands.maps, ("星趴·梦想号", self.MAP))
-        self.assertAlmostEqual(next_sources(cands, "星趴·梦想号")[0][0], 0.75)
-        self.assertAlmostEqual(next_sources(cands, self.MAP)[0][0], 0.8)
-        self.assertAlmostEqual(next_sources(cands, None)[0][0], self.shares(None)[0])
+        self.assertAlmostEqual(self.task_share(cands, "星趴·梦想号"), 0.75)
+        self.assertAlmostEqual(self.task_share(cands, self.MAP), 0.8)
+        self.assertAlmostEqual(self.task_share(cands, None), self.shares(None)[0])
         # 只剩一种时只列一种：没有筹码商店（shop 为 0）时只有任务
         rules = dict(self.db.rules)
         rules["picks"] = {**rules["picks"], "shop": 0}
         no_shop = Scorer(dataclasses.replace(self.db, rules=rules), State(hero=self.HERO, star=3, map=self.MAP))
-        self.assertEqual(next_sources(no_shop, self.MAP), ((1.0, "task", 3, 3),))
+        got = next_sources(no_shop, self.MAP)
+        self.assertEqual([(source, star, tier) for _, source, star, tier in got],
+                         [("task", 3, 1), ("task", 3, 2), ("task", 3, 3)])
+        for share, want in zip((share for share, *_ in got), (0.25, 5 / 12, 1 / 3)):
+            self.assertAlmostEqual(share, want)
 
     def test_no_task_and_no_shop(self):
         """任务和筹码商店的占比都为 0（rules.toml [picks] 的 task_rate、shop 都写 0；现在的资料碰不到：shop 为 1，每张地图
@@ -633,9 +678,10 @@ class LookaheadTopStarTest(Base):
         self.assertAlmostEqual(sum(e.percent for e in adv.evals) + (adv.reroll.percent if adv.reroll else 0), 1)
 
     def test_future_mixes_task_and_shop(self):
-        """3 星时下一次三选一的期望最高分 = 任务占比 × 三格全随机的期望 + 筹码商店占比 × 最左格出职业筹码池的期望，
-        拿和不拿两边都这样算；出现率同样按占比加权。小町已有标记喷罐和大背包时拿忍术飞镖，金色的卡牌筹码只剩探天卫星：
-        筹码商店的最左格里它的出现率翻了几倍，任务三格全随机，几乎不变，所以前瞻比只按筹码商店算时小得多。"""
+        """3 星时下一次三选一的期望最高分 = 任务各项占比 × 三格全随机的期望 + 筹码商店占比 × 最左格出职业筹码池的期望，
+        拿和不拿两边都这样算；出现率同样按占比加权。任务按地图资料里任务自带的等级拆成几项（园林中庭三条线平均），
+        每一项按那一级的稀有度行。小町已有标记喷罐和大背包时拿忍术飞镖，金色的卡牌筹码只剩探天卫星：筹码商店的最左格
+        里它的出现率翻了几倍，任务三格全随机、按几个等级混合，几乎不变，所以前瞻比只按筹码商店算时小得多。"""
         db, m = self.db, self.MAP
         sc = Scorer(db, State(hero=self.HERO, star=3, map=m, owned=self.OWNED), offer=self.OFFER)
         task, shop = self.shares(m)
@@ -643,20 +689,22 @@ class LookaheadTopStarTest(Base):
         rates = []
         for extra in ((), ("忍术飞镖",)):
             have = sc.ordered((*owned, *extra))
-            pool, (t_left, t_gen), (s_left, s_gen) = self.dists(sc, have, m)
-            self.assertIsNone(t_left)  # 任务没有固定稀有度的最左格
+            pool, tasks, (s_left, s_gen) = self.dists(sc, have, m)
+            self.assertIsNone(tasks[0][1])  # 任务没有固定稀有度的最左格
             self.assertTrue(s_left)
             value = {c.name: sc.score(c.name, owned, None, m) for c in pool}
             with self.subTest(extra=extra):
                 _, dists, _ = future_setup(sc, have, m)
-                self.assertEqual(dists, ((task, t_left, t_gen), (shop, s_left, s_gen)))
-                expect = task * expected_best(t_left, t_gen, value) + shop * expected_best(s_left, s_gen, value)
+                self.assertEqual(dists, (*tasks, (shop, s_left, s_gen)))
+                expect = (sum(share * expected_best(left, general, value) for share, left, general in tasks)
+                          + shop * expected_best(s_left, s_gen, value))
                 self.assertAlmostEqual(sc.future(have, map_name=m), expect)
-            rates.append((appear_prob(t_left, t_gen, "探天卫星"), appear_prob(s_left, s_gen, "探天卫星")))
+            rates.append((sum(share * appear_prob(left, general, "探天卫星") for share, left, general in tasks),
+                          appear_prob(s_left, s_gen, "探天卫星")))
         (t0, s0), (t1, s1) = rates
         self.assertGreater(s1, 2 * s0)  # 筹码商店的最左格：翻倍以上
         self.assertLess(t1 - t0, 0.01)  # 任务：几乎不变
-        p0, p1 = task * t0 + shop * s0, task * t1 + shop * s1
+        p0, p1 = t0 + shop * s0, t1 + shop * s1
         reason = sc.lookahead_reason("忍术飞镖", owned)
         self.assertIn(f"探天卫星下次出现率 {p0:.0%} → {p1:.0%}", reason)
         self.assertLess(p1, s1 / 2)
@@ -812,7 +860,7 @@ class ShownPercentTest(Base):
         syn = {h: hs for h, hs in self.db.hero_synergy.items() if h != "邦妮"}
         notes = notes + advise(dataclasses.replace(self.db, hero_synergy=syn), State(hero="邦妮", rerolls=2),
                                ["标靶", "缓冲盾牌", "书签"]).notes
-        self.assertEqual(sum(n.endswith("只按游戏内置推荐和通用规则计算") for n in notes), 2)
+        self.assertEqual(sum(n.endswith("只按通用规则计算") for n in notes), 2)
         for n in notes:
             with self.subTest(note=n):
                 self.assertIsNone(SCORE_WORDING.search(n))
@@ -897,18 +945,19 @@ class PlayerCoreTest(PlayerBase):
     """玩家思路的「必拿」和「不推荐」在一次三选一里的表现（测试用的默认推荐档位）。"""
 
     def test_core_beats_unlisted_in_same_offer(self):
-        # 凛的必拿大背包，单看分数低于玩家思路没列入的探天卫星（游戏内置分全额计入）
-        lead = self.db.rules["synergy"]["core_lead"]
-        before = Scorer(self.db, State(hero="凛")).score("大背包", (), None)
-        self.assertLess(before, Scorer(self.db, State(hero="凛")).score("探天卫星", (), None))
-        adv = self.run_case("凛", ["大背包", "额外电池", "探天卫星"])
+        # 凛的必拿大背包，单看分数低于玩家思路没列入的探天卫星（内置分全额计入的资料库副本）
+        db = self.scaled(0.5)
+        lead = db.rules["synergy"]["core_lead"]
+        before = Scorer(db, State(hero="凛")).score("大背包", (), None)
+        self.assertLess(before, Scorer(db, State(hero="凛")).score("探天卫星", (), None))
+        adv = self.run_case("凛", ["大背包", "额外电池", "探天卫星"], db=db)
         ev = self.by_name(adv)
         self.assertEqual(adv.best, "大背包")
         self.assertGreaterEqual(ev["大背包"].total, ev["探天卫星"].total + lead - 1e-6)
         self.assertAlmostEqual(ev["大背包"].immediate, sum(p.score for p in ev["大背包"].parts))
         self.assertIn("必选", ev["大背包"].reasons(limit=1)[0])
         # 补分只在这次三选一里，筹码本身的分（前瞻、重选都用它）不变
-        self.assertEqual(Scorer(self.db, State(hero="凛")).score("大背包", (), None), before)
+        self.assertEqual(Scorer(db, State(hero="凛")).score("大背包", (), None), before)
 
     def test_two_cores_keep_their_order(self):
         adv = self.run_case("凛", ["大背包", "忍术飞镖", "探天卫星"])
@@ -986,7 +1035,8 @@ class PlayerCoreTest(PlayerBase):
                     self.assertGreater(ev["夹心饼干-美味"].percent, ev["夹心饼干-可口"].percent)
                     self.assertNotIn(adv.best, ("夹心饼干-可口", "夹心饼干-一般"))
                     self.assertEqual(adv.evals[adv.top].chip.name, "夹心饼干-美味")
-                    self.assertGreater(ev["夹心饼干-美味"].immediate, ev["夹心饼干-可口"].immediate)
+                    # 内置分不计入总分后，两张的眼前分相同；差别在职业分值带来的前瞻上
+                    self.assertAlmostEqual(ev["夹心饼干-美味"].immediate, ev["夹心饼干-可口"].immediate)
                     self.assertGreater(ev["夹心饼干-美味"].total, ev["夹心饼干-一般"].total)
 
 
@@ -1065,7 +1115,7 @@ class SynergyTableTest(Base):
 
     def test_engine_reasons_use_glossary_wording(self):
         # 前瞻写「前瞻」不写「后续」；标签分的理由里保留职业名（悬浮窗的标签从这句里找职业名）
-        adv = self.run_case("邦妮", ["标靶", "夹心饼干-可口", "会员推荐信"], star=1, round=4)
+        adv = self.run_case("邦妮", ["标靶", "夹心饼干-可口", "会员推荐信"], star=1, round=4, db=self.scaled(0.5))
         target = self.by_name(adv)["标靶"]
         tag = next(p for p in target.parts if p.label == "标签分")
         self.assertEqual(tag.reason, "筹码标签「攻击」与角色当前职业相符")
@@ -1073,7 +1123,7 @@ class SynergyTableTest(Base):
         adv = self.run_case("凛", ["银行卡-余额多", "会员推荐信", "优雅之羽"])
         self.assertEqual(adv.notes, [LOW_NOTE, "地图：待识别，按候选地图平均计算"])
         # 必选的整句是凛的玩家思路原文（测试用的默认推荐档位），补分后另起一句「优先于本次未列入筹码方案的筹码」
-        db = with_player_layer(self.db)
+        db = with_player_layer(self.scaled(0.5))  # 补分要在未列入的筹码被内置分抬高时才有：用内置分照旧计入的副本
         core = self.by_name(self.run_case("凛", ["大背包", "额外电池", "探天卫星"], db=db))["大背包"]
         note = db.player_synergy["凛"].note
         self.assertEqual(core.reasons(limit=1)[0].rsplit("（", 1)[0], f"{note}。优先于本次未列入筹码方案的筹码")
@@ -1278,9 +1328,9 @@ class SourceRuleTest(Base):
             with self.subTest(not_source=not_source):
                 self.assertEqual(self.auto("美咲", "电流核心", [not_source]), [])
         self.assertEqual(self.auto("美咲", "电流核心", mates=["橘雪莉", "照", "凛"]), [])
-        # 一张充能筹码都没有时的开套预判（rules.toml [charge_build]）照常
+        # 一张充能筹码都没有时的开套预判（rules.toml [school_build]）照常
         parts = Scorer(self.db, State(hero="美咲", star=1, round=4)).parts("电流核心", (), 4)
-        self.assertEqual([p.label for p in parts if p.origin == "charge_build"], ["组合"])
+        self.assertEqual([p.label for p in parts if p.origin == "school_build"], ["组合"])
         # 实例（推荐基准 offers35/01002）：阿兰娜 0 星、第 1 轮、星趴·梦想号，没有充能来源：电流核心没有「技能依赖」加分，
         # 首推拳击手套-初级
         adv = self.run_case("阿兰娜", ["拳击手套-初级", "电流核心", "跃迁引擎"], round=1, map="星趴·梦想号")
@@ -1744,9 +1794,9 @@ class EndlessPendingPicksTest(Base):
         n = sc.picks.total
         ups, endless, rest = split_picks(sc, n)
         ml = miss(*slot_dists(self.db, sc.hero, pool, schools, 3, class_owned=owned))
-        me = miss(*slot_dists(self.db, sc.hero, pool, schools, 2, "task", 2, class_owned=owned))
-        (t, _, _, _), (s, _, _, _) = mixed_sources(sc, m)
-        mm = (t * me + s * miss(*slot_dists(self.db, sc.hero, pool, schools, 2, "shop", class_owned=owned)))
+        me = miss(*slot_dists(self.db, sc.hero, pool, schools, 2, "task", 2, class_owned=owned))  # 循环往复那一次
+        mm = sum(share * miss(*slot_dists(self.db, sc.hero, pool, schools, star, source, tier, class_owned=owned))
+                 for share, source, star, tier in mixed_sources(sc, m))
         from advisor.engine.chances import take_chance
         self.assertAlmostEqual(take_chance(sc, owned, take, (m,)), 1 - ml ** ups * me ** endless * mm ** rest,
                                places=12)
@@ -1827,10 +1877,96 @@ class DifficultyCapTest(Base):
         p = self.picks(map="水乡古镇", difficulty_name="极限", round=None)
         self.assertEqual(p.cap, 16)
         self.assertAlmostEqual(p.extras, cfg["task_rate"] * 5 + cfg["shop"])
-        # 任务和筹码商店的占比跟着用同一个任务数
+        # 任务和筹码商店的占比跟着用同一个任务数；任务按等级拆成几项，占比合计仍是任务的占比
         sc = Scorer(self.db, State(hero="凛", star=3, map="御魂庆典", difficulty_name="极限"))
         task = cfg["task_rate"] * 4
-        self.assertAlmostEqual(mixed_sources(sc, "御魂庆典")[0][0], task / (task + cfg["shop"]))
+        got = sum(share for share, source, _, _ in mixed_sources(sc, "御魂庆典") if source == "task")
+        self.assertAlmostEqual(got, task / (task + cfg["shop"]))
+
+
+class TaskLevelTest(Base):
+    """之后任务三选一的等级按地图资料里任务自带的等级（data/maps.json 的 task_levels、context.mixed_sources），
+    和当前星数无关：比例按整局各等级算，路线不知道时按各条线平均；只知道是噩梦及以上时按噩梦那一列，难度不知道、
+    没写的难度按困难那一列；地图不知道、这张图没写等级时照旧按当前星数。任务和筹码商店的总占比不变。"""
+
+    def proportions(self, star, map_name, difficulty_name=None, difficulty_level=None):
+        """任务各项的等级占比（按任务占比合计归一）：{等级: 占比}。"""
+        sc = Scorer(self.db, State(hero="照", star=star, round=4 + 2 * star, owned=(), map=map_name,
+                                   difficulty_name=difficulty_name, difficulty_level=difficulty_level))
+        task = [(share, tier) for share, source, _, tier in mixed_sources(sc, map_name) if source == "task"]
+        total = sum(share for share, _ in task)
+        out: dict[int, float] = {}
+        for share, tier in task:
+            out[tier] = out.get(tier, 0.0) + share / total
+        return out
+
+    def test_autumnwood_same_at_all_stars(self):
+        # 森秋幻境一局四个任务 1、2、2、3 级：25%/50%/25%，1 星和 3 星一样
+        for star in (0, 1, 2, 3):
+            with self.subTest(star=star):
+                got = self.proportions(star, "森秋幻境", "困难")
+                for level, want in ((1, 0.25), (2, 0.5), (3, 0.25)):
+                    self.assertAlmostEqual(got[level], want)
+
+    def test_water_town_difficulty_columns(self):
+        # 水乡古镇普通、困难 1、2、2 级，噩梦、疯狂 1、2、3 级；难度不知道时按困难那一列
+        self.assertAlmostEqual(self.proportions(1, "水乡古镇", "普通")[2], 2 / 3)
+        self.assertNotIn(3, self.proportions(1, "水乡古镇", "普通"))
+        self.assertAlmostEqual(self.proportions(1, "水乡古镇", "噩梦")[2], 1 / 3)
+        self.assertAlmostEqual(self.proportions(1, "水乡古镇", "噩梦")[3], 1 / 3)
+        self.assertAlmostEqual(self.proportions(1, "水乡古镇")[2], 2 / 3)
+
+    def test_magic_academy_routes_averaged(self):
+        # 噩梦、疯狂两条线：代理院长线 1、2、2 级，学院安全官线 2、2、3 级：各半 → 1/6、4/6、1/6
+        got = self.proportions(1, "魔法学院", "噩梦")
+        for level, want in ((1, 1 / 6), (2, 2 / 3), (3, 1 / 6)):
+            self.assertAlmostEqual(got[level], want)
+
+    def test_garden_routes_averaged(self):
+        # 园林中庭三条线：两条 1、2、2、3，一条 1、2、3、3 → 1/4、5/12、1/3
+        got = self.proportions(1, "园林中庭", "普通")
+        for level, want in ((1, 0.25), (2, 5 / 12), (3, 1 / 3)):
+            self.assertAlmostEqual(got[level], want)
+
+    def test_nightmare_level_without_name(self):
+        # 只知道是噩梦及以上、没读到难度名（进度上限噩梦和疯狂相同这类）：按噩梦那一列；完全不知道时按困难那一列
+        got = self.proportions(1, "魔法学院", difficulty_level=LEVEL_NIGHTMARE)
+        for level, want in ((1, 1 / 6), (2, 2 / 3), (3, 1 / 6)):
+            self.assertAlmostEqual(got[level], want)
+        self.assertAlmostEqual(self.proportions(1, "水乡古镇", difficulty_level=LEVEL_NIGHTMARE)[3], 1 / 3)
+        self.assertNotIn(3, self.proportions(1, "魔法学院"))  # 困难两条线都是 1、2、2 级
+        self.assertNotIn(3, self.proportions(1, "水乡古镇"))
+        # 读到了难度名时照难度名，不看档位
+        self.assertNotIn(3, self.proportions(1, "水乡古镇", "困难", LEVEL_NIGHTMARE))
+
+    def test_extreme_falls_back_to_hard(self):
+        # 御魂庆典极限多出的那个任务没有核对、没写极限一列：按困难那一列（1、2、3 级各 1/3）
+        got = self.proportions(1, "御魂庆典", "极限")
+        for level in (1, 2, 3):
+            self.assertAlmostEqual(got[level], 1 / 3)
+
+    def test_unknown_map_and_no_levels_by_star(self):
+        # 地图不知道、已结束的地图没写等级：照旧按当前星数（至少 1 级）
+        for star in (1, 2, 3):
+            sc = Scorer(self.db, State(hero="照", star=star, round=6, owned=()))
+            with self.subTest(star=star):
+                tiers = [tier for _, source, _, tier in mixed_sources(sc, None) if source == "task"]
+                self.assertEqual(tiers, [max(1, star)])
+        self.assertEqual(self.proportions(1, "海选赛运动场", "普通"), {1: 1.0})
+        self.assertEqual(self.proportions(3, "海选赛运动场", "普通"), {3: 1.0})
+
+    def test_total_share_unchanged(self):
+        # 任务按等级拆成几项，任务的占比合计仍是 chip_tasks × task_rate 对 shop，各项合计为 1
+        cfg = self.db.rules["picks"]
+        for name in ("森秋幻境", "水乡古镇", "魔法学院", "园林中庭"):
+            tasks = self.db.map_info[name].chip_tasks * cfg["task_rate"]
+            want = tasks / (tasks + cfg["shop"])
+            for star in (0, 1, 2, 3):
+                sc = Scorer(self.db, State(hero="照", star=star, round=4 + 2 * star, owned=(), map=name))
+                items = mixed_sources(sc, name)
+                with self.subTest(map=name, star=star):
+                    self.assertAlmostEqual(sum(share for share, source, _, _ in items if source == "task"), want)
+                    self.assertAlmostEqual(sum(share for share, *_ in items), 1)
 
 
 class MapAverageTest(Base):
@@ -1961,9 +2097,9 @@ class EndlessCycleTest(Base):
 class IncomeTest(Base):
     """收入类筹码按剩余兑现次数折算。"""
 
-    def income(self, hero, chip, **kw):
+    def income(self, hero, chip, db=None, **kw):
         st = State(hero=hero, **kw)
-        return next((p for p in Scorer(self.db, st).parts(chip, (), st.round) if p.label == "收入折算"), None)
+        return next((p for p in Scorer(db or self.db, st).parts(chip, (), st.round) if p.label == "收入折算"), None)
 
     def test_reward_rounds(self):
         self.assertEqual(reward_rounds_left(1, 16), 5)  # 第 3、6、9、12、15 轮
@@ -1971,29 +2107,33 @@ class IncomeTest(Base):
         self.assertEqual(reward_rounds_left(15, 16), 0)
 
     def test_bank_card_discounted_late(self):
-        self.assertIsNone(self.income("恋", "银行卡-余额多", round=1))
-        self.assertIsNone(self.income("恋", "银行卡-余额多"))  # 轮次待识别：不折算
-        mid = self.income("恋", "银行卡-余额多", round=7)
-        late = self.income("恋", "银行卡-余额多", round=13)
+        # 纯收入筹码的正分只有内置分，现在没有可折的分；这里用内置分照旧计入的资料库副本查银行卡的折算
+        db = self.scaled(0.5)
+        self.assertIsNone(self.income("恋", "银行卡-余额多", db=db, round=1))
+        self.assertIsNone(self.income("恋", "银行卡-余额多", db=db))  # 轮次待识别：不折算
+        mid = self.income("恋", "银行卡-余额多", db=db, round=7)
+        late = self.income("恋", "银行卡-余额多", db=db, round=13)
         self.assertLess(mid.score, 0)
         self.assertLess(late.score, mid.score)
         self.assertIn("星光收入按剩余兑现次数折算", late.reason)
         self.assertIn("到进度上限（16）前还有 1 次轮次奖励", late.reason)
 
     def test_three_stars_non_economy(self):
-        # 满 3 星：非经济型角色（邦妮）的星币收入再降分；经济型角色（芬妮）不降
-        bonnie = self.income("邦妮", "小猪存钱罐", star=3)
+        # 满 3 星：非经济型角色（邦妮）的星币收入再降分；经济型角色（芬妮）不降。
+        # 用同时有特性正分的缓冲盾牌：小猪存钱罐的正分只有内置分，现在没有可折的分
+        bonnie = self.income("邦妮", "缓冲盾牌", star=3)
         self.assertIsNotNone(bonnie)
         self.assertIn("已达到 3 星，星币不再用于升星", bonnie.reason)
-        self.assertIsNone(self.income("芬妮", "小猪存钱罐", star=3))
+        self.assertIsNone(self.income("芬妮", "缓冲盾牌", star=3))
 
     def test_starlight_growth_hero_discounted_less(self):
-        # 阿尔的星光层数直接换成属性：同样的轮次，星光收入的折算比例减半
-        al = self.income("阿尔", "银行卡-余额多", round=10)
-        ren = self.income("恋", "银行卡-余额多", round=10)
-        al_base = sum(p.score for p in Scorer(self.db, State(hero="阿尔", round=10)).parts("银行卡-余额多", (), 10)
+        # 阿尔的星光层数直接换成属性：同样的轮次，星光收入的折算比例减半（内置分照旧计入的资料库副本）
+        db = self.scaled(0.5)
+        al = self.income("阿尔", "银行卡-余额多", db=db, round=10)
+        ren = self.income("恋", "银行卡-余额多", db=db, round=10)
+        al_base = sum(p.score for p in Scorer(db, State(hero="阿尔", round=10)).parts("银行卡-余额多", (), 10)
                       if p.score > 0 and p.label != "成长分")
-        ren_base = sum(p.score for p in Scorer(self.db, State(hero="恋", round=10)).parts("银行卡-余额多", (), 10)
+        ren_base = sum(p.score for p in Scorer(db, State(hero="恋", round=10)).parts("银行卡-余额多", (), 10)
                        if p.score > 0 and p.label != "成长分")
         self.assertAlmostEqual(al.score / al_base, ren.score / ren_base / 2)
 
@@ -2037,7 +2177,7 @@ class ReasonWordingTest(Base):
             self.assertIn(d, part.reason)
 
     def test_zero_score_part_has_no_number(self):
-        adv = self.run_case("凛", ["书签", "大背包", "标靶"])
+        adv = self.run_case("凛", ["书签", "大背包", "标靶"], db=self.scaled(0.5))
         book = self.by_name(adv)["书签"]
         text = [p.text() for p in book.parts if p.label == "职业倾向"][0]
         self.assertNotIn("（+0）", text)
@@ -2055,7 +2195,8 @@ class TendencyTest(Base):
         self.assertEqual(hero_tendency(self.db, "凛", ("标记喷罐",)), ("卡牌", 130))
 
     def test_zero_score_reason(self):
-        scorer = Scorer(self.db, State(hero="凛"))
+        db = self.scaled(0.5)
+        scorer = Scorer(db, State(hero="凛"))
         parts = scorer.parts("书签", (), None)
         part = next(p for p in parts if p.label == "职业倾向")
         self.assertEqual(part.score, 0)
@@ -2067,11 +2208,14 @@ class TendencyTest(Base):
         self.assertFalse(any(p.label == "职业倾向" for p in scorer.parts("拳击手套-初级", (), None)))
         # 达到门槛（已有标记喷罐，卡牌 130）后是标签分，不再写倾向
         owned = ("标记喷罐",)
-        parts = Scorer(self.db, State(hero="凛", owned=owned)).parts("书签", owned, None)
+        parts = Scorer(db, State(hero="凛", owned=owned)).parts("书签", owned, None)
         self.assertTrue(any(p.label == "标签分" for p in parts))
         self.assertFalse(any(p.label == "职业倾向" for p in parts))
         # 已属于某个职业的角色（邦妮：攻击 100）不写倾向
-        self.assertFalse(any(p.label == "职业倾向" for p in Scorer(self.db, State(hero="邦妮")).parts("书签", (), None)))
+        self.assertFalse(any(p.label == "职业倾向" for p in Scorer(db, State(hero="邦妮")).parts("书签", (), None)))
+        # 内置分不计入总分（现在的资料库）时也不写职业倾向：它说的是标签分「暂不加分」，现在根本不参与打分
+        self.assertFalse(any(p.label == "职业倾向"
+                             for p in Scorer(self.db, State(hero="凛")).parts("书签", (), None)))
 
 
 class PlayerSourceTest(PlayerBase):
@@ -2204,18 +2348,19 @@ class DegradedTest(Base):
 
     def test_unrecorded_hero(self):
         adv = advise(self.db, State(hero="新角色", rerolls=2), ["标靶", "缓冲盾牌", "书签"])
-        self.assertIn("角色「新角色」资料库未收录：只按游戏内置推荐和通用规则计算", adv.notes)
+        self.assertIn("角色「新角色」资料库未收录：只按通用规则计算", adv.notes)
         shield = self.by_name(adv)["缓冲盾牌"]
         labels = {p.label for p in shield.parts}
         self.assertIn("特性", labels)  # 通用规则：缓冲盾牌 +40
         self.assertFalse(labels & {"玩家思路", "角色专属规则", "职业倾向"})
+        self.assertFalse(labels & OFFICIAL)  # 附注写的「只按通用规则」：内置分不计入总分，这里也不列
 
     def test_hero_missing_from_synergy(self):
         syn = dict(self.db.hero_synergy)
         del syn["邦妮"]
         db = dataclasses.replace(self.db, hero_synergy=syn)
         adv = advise(db, State(hero="邦妮", rerolls=2), ["标靶", "缓冲盾牌", "书签"])
-        self.assertIn("适配表缺少角色「邦妮」：只按游戏内置推荐和通用规则计算", adv.notes)
+        self.assertIn("适配表缺少角色「邦妮」：只按通用规则计算", adv.notes)
         self.assertTrue(all(p.origin in ("", GENERAL_TRAIT) for e in adv.evals for p in e.parts if p.label == "特性"))
 
 
@@ -2232,8 +2377,9 @@ class ComboTest(Base):
         )
         db = self.db_with(combo)
         none = Scorer(db, State(hero="邦妮")).parts("美工刀-初级", (), None)
-        # 没有治愈来源时另有一项「组合」是美工刀的治愈来源折算（rules.toml [heal_knife] ③），不是这条组合规则
-        self.assertFalse(any(p.label == "组合" and p.origin != HEAL_DISCOUNT_ORIGIN for p in none))
+        # 没有治愈来源时另有「组合」是美工刀按还没有治愈来源算的两项（rules.toml [heal_knife] ③、④），不是这条组合规则
+        self.assertFalse(any(p.label == "组合" and p.origin not in (HEAL_ADVANCE_ORIGIN, HEAL_DISCOUNT_ORIGIN)
+                             for p in none))
         owned = ("医疗箱-紧急治疗",)
         part = next(p for p in Scorer(db, State(hero="邦妮", owned=owned)).parts("美工刀-初级", owned, None) if p.label == "组合")
         self.assertEqual(part.score, 20)
@@ -2335,11 +2481,11 @@ class ComboContentTest(Base):
     另有飞星叠加（见 SupportFlyingStarTest）和转账筹码叠加。"""
 
     def combo_parts(self, hero, chip, owned, db=None, **kw):
-        """组合规则给的分项（不含美工刀的治愈来源折算：分项名也是「组合」，见 HealDiscountTest）。db 不给时用 self.db。"""
+        """组合规则给的分项（不含美工刀按还没有治愈来源算的两项：分项名也是「组合」，见 HealDiscountTest）。db 不给时用 self.db。"""
         owned = tuple(owned)
         st = State(hero=hero, owned=owned, **kw)
         return [p for p in Scorer(db or self.db, st).parts(chip, owned, None)
-                if p.label == "组合" and p.origin != HEAL_DISCOUNT_ORIGIN]
+                if p.label == "组合" and p.origin not in (HEAL_ADVANCE_ORIGIN, HEAL_DISCOUNT_ORIGIN)]
 
     def test_four_groups_recorded(self):
         names = {c.name for c in self.db.combos}
@@ -2382,7 +2528,10 @@ class ComboContentTest(Base):
 
     def test_half_hp_conflict_both_ways(self):
         self.assertEqual([p.score for p in self.combo_parts("墨影", "美工刀-锋利", ["磨刀石"])], [-30])
-        self.assertEqual([p.score for p in self.combo_parts("墨影", "可口糖果", ["肾上腺素-高效"])], [-10])
+        # 可口糖果是治愈来源：另有「之后获得美工刀」的预判分（墨影是物理输出），这里只看半血冲突那一项
+        candy = [p for p in self.combo_parts("墨影", "可口糖果", ["肾上腺素-高效"])
+                 if p.origin != "治愈来源与美工刀"]
+        self.assertEqual([p.score for p in candy], [-10])
         self.assertEqual([p.score for p in self.combo_parts("墨影", "肾上腺素-高效", ["美工刀-初级"])], [-30])
         self.assertEqual([p.score for p in self.combo_parts("墨影", "磨刀石", ["可口糖果"])], [-10])
         # 帕帕拉（半血特性：潜能使主动技能期间视为生命值不超过一半）不参与半血、满血冲突的组合，冲突由半血特性的规则处理
@@ -2505,7 +2654,9 @@ class ComboContentTest(Base):
         db = with_player_layer(self.db)
         for owned in ((), ("魔法箭袋",), ("手持风扇-小",), ("医疗箱-紧急治疗",), ("永动机",)):
             with self.subTest(owned=owned):
-                self.assertEqual(self.run_case("凛", ["标靶", "标记喷罐", "鹰眼瞄具"], db=db, owned=owned).best, "标记喷罐")
+                # 已有魔法箭袋时去掉内置分以后标靶排到前面
+                want = "标靶" if owned == ("魔法箭袋",) else "标记喷罐"
+                self.assertEqual(self.run_case("凛", ["标靶", "标记喷罐", "鹰眼瞄具"], db=db, owned=owned).best, want)
                 self.assertEqual(self.run_case("凛", ["标靶", "大背包", "缓冲盾牌"], db=db, owned=owned).best, "大背包")
 
 
@@ -2519,10 +2670,10 @@ class HealKnifeTest(Base):
     回合里稳定在 2g − 1 层；计分的层数另加 1 层，计治愈来源使美工刀「生命值为满」的加成更易保住。
     """
 
-    def combos(self, hero, chip, owned=(), **kw):
+    def combos(self, hero, chip, owned=(), db=None, **kw):
         owned = tuple(owned)
         st = State(hero=hero, owned=owned, **kw)
-        return [p for p in Scorer(self.db, st).parts(chip, owned, None) if p.label == "组合"]
+        return [p for p in Scorer(db or self.db, st).parts(chip, owned, None) if p.label == "组合"]
 
     def test_layers_when_knife_owned(self):
         self.assertEqual(self.db.rules["heal_knife"]["traits"], ["物理输出"])
@@ -2554,11 +2705,15 @@ class HealKnifeTest(Base):
         # 同一个概率：完备治疗计 6 层、紧急治疗计 2 层
         full = self.combos("美咲", "医疗箱-完备治疗", **kw)
         self.assertAlmostEqual(full[0].score, 3 * part.score)
-        # 不是物理输出角色没有预判；半血角色帕帕拉照常预判（技能回血以后常是满血，美工刀在那几个回合同样生效）
+        # 不是物理输出角色没有预判
         self.assertEqual(self.combos("米米", "医疗箱-紧急治疗", **kw), [])
+        # 半血角色帕帕拉同样走预判（技能回血以后常是满血，美工刀在那几个回合同样生效）：只算达到推荐线的美工刀。
+        # 预判的是选了这个治愈来源之后的情形，美工刀那时有组合分，拿着每回合治愈来源时够线，有这一项；
+        # 条件治愈来源（可口糖果）配美工刀的组合分低，两把都够不到，概率 0、没有这一项
         papara = self.combos("帕帕拉", "医疗箱-紧急治疗", **kw)
         self.assertEqual(len(papara), 1)
         self.assertRegex(papara[0].reason, r"^预计之后获得美工刀的概率约 \d+%：")
+        self.assertEqual(self.combos("帕帕拉", "可口糖果", **kw), [])
         # 已经持有一把美工刀时按层数计分，不再预判另一把
         self.assertEqual([p.score for p in self.combos("美咲", "医疗箱-紧急治疗", ["美工刀-初级"], **kw)], [15])
         # 剩余三选一为 0 时概率为 0，不加分
@@ -2576,7 +2731,7 @@ class HealKnifeTest(Base):
         self.assertEqual(cfg["anticipation_factor"], 0.7)
         st = State(hero="美咲", star=1, round=5, map="星趴·梦想号")
         scorer = Scorer(self.db, st)
-        p = knife_chance(scorer, frozenset(), heal_knife(scorer))
+        p = knife_chance(scorer, "医疗箱-紧急治疗", frozenset(), heal_knife(scorer))
         self.assertGreater(p, 0)
         part = [x for x in scorer.parts("医疗箱-紧急治疗", (), None) if x.label == "组合"]
         self.assertEqual(len(part), 1)
@@ -2586,14 +2741,14 @@ class HealKnifeTest(Base):
 
     def test_anticipation_factor_basis(self):
         # 系数的依据（rules.toml [heal_knife] anticipation_factor）：梦想号实机第 5 轮（美咲 1 星，已有普通瞄具），实际很晚才
-        # 拿到美工刀。把之后每一次三选一都按下一星的升星算时约 80%，乘 0.5 计入约 40%；按次数分开算约 56%，乘 0.7 计入约 39%，
-        # 和原来相当。改了概率的算法、这里的数对不上时，系数要照这个办法重新定
+        # 拿到美工刀。把之后每一次三选一都按下一星的升星算时约 80%，乘 0.5 计入约 40%；按次数分开算、任务的等级按地图资料
+        # 约 58%，乘 0.7 计入约 41%，和原来相当。改了概率的算法、这里的数对不上时，系数要照这个办法重新定
         st = State(hero="美咲", star=1, round=5, map="星趴·梦想号", owned=("普通瞄具",), rerolls=3,
                    probabilities=(60, 37, 3), left_rarity="蓝")
         sc = Scorer(self.db, st)
-        p = knife_chance(sc, frozenset(sc.known_owned), heal_knife(sc))
-        self.assertAlmostEqual(p, 0.56, delta=0.01)
-        self.assertAlmostEqual(p * self.db.rules["heal_knife"]["anticipation_factor"], 0.40, delta=0.02)
+        p = knife_chance(sc, "医疗箱-紧急治疗", frozenset(sc.known_owned), heal_knife(sc))
+        self.assertAlmostEqual(p, 0.58, delta=0.01)
+        self.assertAlmostEqual(p * self.db.rules["heal_knife"]["anticipation_factor"], 0.41, delta=0.02)
 
     def test_misaki_round5_keeps_first_choice(self):
         # 梦想号实机第 5 轮：预判分打折后医疗箱-紧急治疗不首推（打折的依据），紧急治疗仍有预判分。
@@ -2605,6 +2760,119 @@ class HealKnifeTest(Base):
         kit = self.by_name(adv)["医疗箱-紧急治疗"]
         self.assertTrue(any(p.label == "组合" and p.score > 0 for p in kit.parts))
         self.assertGreater(self.by_name(adv)["速度轮滑-中级"].percent, kit.percent)
+
+
+class HealAdvanceTest(Base):
+    """美工刀还没有治愈来源时的提前加分（rules.toml [heal_knife] ④）和折算（③）。
+
+    提前加分 = 之后获得治愈来源的概率 × 以这把美工刀为「已持有」一方的组合规则（combos）里最高的组合分（25）×
+    [school_build] factor（0.5）；两项各自独立，不到 0.5 分时没有那一项。已有治愈来源时都没有。
+    """
+
+    KNIFE = "美工刀-锋利"
+
+    def heal_parts(self, sc, chip, owned=()):
+        return [p for p in sc.parts(chip, tuple(owned), None)
+                if p.origin in (HEAL_ADVANCE_ORIGIN, HEAL_DISCOUNT_ORIGIN)]
+
+    def advance_value(self, sc, chip):
+        """提前加分用的组合分：combos 里以这把美工刀为「已持有」一方、适用这个角色的最高一条。"""
+        cfg = self.db.rules["heal_knife"]
+        return max(c.score for c in self.db.combos
+                   if c.name in cfg["combos"] and chip in c.owned and c.applies_to(sc.hero.name, sc.traits))
+
+    def test_advance_and_discount_without_heal_source(self):
+        sc = Scorer(self.db, State(hero="邦妮", star=1, round=4))
+        parts = sc.parts(self.KNIFE, (), 4)
+        rule = next(p for p in parts if p.label == "特性" and p.origin == "物理输出")
+        adv = next(p for p in parts if p.origin == HEAL_ADVANCE_ORIGIN)
+        disc = next(p for p in parts if p.origin == HEAL_DISCOUNT_ORIGIN)
+        p = heal_chance(sc, self.KNIFE, frozenset())
+        self.assertGreater(p, 0)
+        # 组合分 25 = 「完备治疗与美工刀」；系数取 [school_build] factor
+        self.assertEqual(self.advance_value(sc, self.KNIFE), 25)
+        self.assertAlmostEqual(adv.score, p * 25 * self.db.rules["school_build"]["factor"])
+        self.assertEqual(adv.label, "组合")
+        self.assertTrue(adv.reason.startswith("预计之后获得治愈来源的概率约"), adv.reason)
+        self.assertIsNone(BANNED_WORDING.search(adv.reason))
+        self.assertEqual(adv.short, f"之后获得治愈来源 {p:.0%}")
+        # 折算照留，分值仍是「特性实际计入了的分（+ 推荐流派加分）×（1 − 概率）」
+        counted = rule.score + knife_school_bonus(sc, self.KNIFE)
+        self.assertAlmostEqual(disc.score, -counted * (1 - p))
+        self.assertEqual(disc.short, HEAL_DISCOUNT_SHORT)
+
+    def test_none_with_heal_source_or_not_physical(self):
+        # 已有治愈来源、队友里有带「治疗友方」特性的角色：不加也不折
+        for kw in (dict(owned=("缓冲盾牌",)), dict(teammates=(Teammate("璐璐"),))):
+            with self.subTest(**kw):
+                sc = Scorer(self.db, State(hero="邦妮", star=1, round=4, **kw))
+                self.assertEqual(self.heal_parts(sc, "美工刀-初级", kw.get("owned", ())), [])
+        # 不是物理输出角色的美工刀没有这一项
+        sc = Scorer(self.db, State(hero="米米", star=1, round=4))
+        self.assertEqual(self.heal_parts(sc, "美工刀-初级"), [])
+
+    def test_advance_and_discount_independent(self):
+        # 概率接近 1：折算不到 0.5 分没有，提前加分有；概率 2%：提前加分不到 0.5 分没有，折算有
+        for p, want_adv, want_disc in ((0.999, True, False), (0.02, False, True)):
+            with mock.patch.object(engine_parts, "heal_chance", return_value=p):
+                sc = Scorer(self.db, State(hero="邦妮", star=1, round=4))
+                got = self.heal_parts(sc, self.KNIFE)
+                origins = [x.origin for x in got]
+                with self.subTest(p=p):
+                    self.assertEqual(HEAL_ADVANCE_ORIGIN in origins, want_adv)
+                    self.assertEqual(HEAL_DISCOUNT_ORIGIN in origins, want_disc)
+                    self.assertAlmostEqual(sum(x.score for x in got if x.origin == HEAL_ADVANCE_ORIGIN),
+                                           p * 25 * 0.5 if want_adv else 0.0)
+                    self.assertLessEqual(sum(x.score for x in got if x.origin == HEAL_DISCOUNT_ORIGIN), 0.0)
+
+    def test_knife_chance_unaffected(self):
+        # 治愈来源预判美工刀时按「已有筹码 + 这个治愈来源」给美工刀打分：那时已有治愈来源，不再有 ③、④ 两项，
+        # 把提前加分拿掉，同一局面算出的概率相同
+        st = State(hero="邦妮", star=1, round=4)
+        sc = Scorer(self.db, st)
+        cfg = heal_knife(sc)
+        p = knife_chance(sc, "医疗箱-紧急治疗", frozenset(), cfg)
+        self.assertGreater(p, 0)
+        with mock.patch.object(engine_parts, "_heal_advance", lambda *a, **k: None):
+            self.assertAlmostEqual(knife_chance(Scorer(self.db, st), "医疗箱-紧急治疗", frozenset(), cfg), p)
+        # 美工刀自己那一侧照旧有提前加分（「之后获得治愈来源」）
+        got = self.heal_parts(sc, self.KNIFE)
+        self.assertNotEqual(sum(x.score for x in got if x.origin == HEAL_ADVANCE_ORIGIN), 0.0)
+
+    def test_knife_chance_uses_heal_source(self):
+        # ① 邦妮 1 星无筹码：美工刀-初级单独只有特性那点分，够不到推荐线；选了医疗箱-紧急治疗之后有组合分，
+        # 预判「之后获得美工刀」的概率应和美咲这种两把都够线的角色接近，不是只算金色那把
+        line = self.db.rules["advice"]["recommend_total"]
+        bonnie = Scorer(self.db, State(hero="邦妮", star=1, round=4))
+        self.assertLess(bonnie.score("美工刀-初级", (), 4), line)
+        p_bonnie = knife_chance(bonnie, "医疗箱-紧急治疗", frozenset(), heal_knife(bonnie))
+        misaki = Scorer(self.db, State(hero="美咲", star=1, round=4))
+        p_misaki = knife_chance(misaki, "医疗箱-紧急治疗", frozenset(), heal_knife(misaki))
+        self.assertGreater(p_bonnie, 0.3)
+        self.assertLess(abs(p_bonnie - p_misaki), 0.05)
+
+    def test_knife_chance_per_heal_source(self):
+        # ② 真梦梓持有条件治愈来源时美工刀有 −25 的专属规则，只有金色那把够线：医疗箱-紧急治疗的概率高于可口糖果，
+        # 缓存不把两个治愈来源混成一个数
+        sc = Scorer(self.db, State(hero="真梦梓", star=1, round=4))
+        p_full = knife_chance(sc, "医疗箱-紧急治疗", frozenset(), heal_knife(sc))
+        p_candy = knife_chance(sc, "可口糖果", frozenset(), heal_knife(sc))
+        self.assertGreater(p_full, p_candy)
+        self.assertGreater(p_candy, 0)
+
+    def test_bonnie_live(self):
+        # 邦妮 0 星第 1 轮（森秋幻境）：三张候选里美工刀-锋利 37 分上下，电流剑 32 分上下
+        st = State(hero="邦妮", star=0, round=1, map="森秋幻境", owned=(), source="task", tier=1,
+                   rerolls=1, rerolls_known=True, probabilities=(60, 30, 10), left_rarity="金",
+                   teammates=(Teammate("阿兰娜", True), Teammate("芬妮", True), Teammate("美咲", False)),
+                   difficulty="normal", progress=1)
+        adv = advise(self.db, st, ["跃迁引擎", self.KNIFE, "电流剑"])
+        self.assertEqual(adv.best, self.KNIFE)
+        got = {ev.chip.name: ev for ev in adv.evals}
+        self.assertAlmostEqual(got[self.KNIFE].total, 37.1, delta=1)
+        self.assertAlmostEqual(got["电流剑"].total, 32.2, delta=1)
+        self.assertAlmostEqual(got["跃迁引擎"].total, 2.8, delta=1)
+        self.assertGreater(next(p for p in got[self.KNIFE].parts if p.origin == HEAL_ADVANCE_ORIGIN).score, 8)
 
 
 class SurvivalDifficultyTest(Base):
@@ -2678,23 +2946,31 @@ class SurvivalDifficultyTest(Base):
         self.assertIn("难度", labels)
 
 
-class ChargeBuildTest(Base):
-    """开套预判（rules.toml [charge_build]）。
+class SchoolBuildTest(Base):
+    """开套预判（rules.toml [school_build]）：充能、标记、星光三个流派。
 
-    还没有充能筹码时，充能筹码加「之后出现并会选择的配套筹码的概率 × 组合分 × 0.5」（之后的几次三选一怎么算见
-    AnticipationPicksTest）；已持有充能筹码后由组合规则计分，不再预判。
+    还没有这一流派的筹码时，这一流派的筹码加「之后出现并会选择的配套筹码的概率 × 组合分 × 0.5」（之后的几次三选一怎么算见
+    AnticipationPicksTest）；已持有这一流派的筹码后由组合规则计分，不再预判。配套筹码只算同一流派、不是自己、也不在已有筹码里的。
     """
 
-    def charge_parts(self, hero, chip, owned=(), **kw):
+    def school_parts(self, hero, chip, owned=(), **kw):
         owned = tuple(owned)
         kw.setdefault("star", 1)
         sc = Scorer(self.db, State(hero=hero, owned=owned, **kw))
-        return sc, [p for p in sc.parts(chip, owned, None) if p.origin == "charge_build"]
+        return sc, [p for p in sc.parts(chip, owned, None) if p.origin == "school_build"]
+
+    def value(self, sc, chip):
+        """开套预判的组合分：以这个筹码为「已持有」一方、配的是同一流派（不是自己、也不在已有筹码里）的组合规则里最高的一条。"""
+        school = self.db.chips[chip].school
+        combos = [c for c in self.db.combos if chip in c.owned and c.applies_to(sc.hero.name, sc.traits)
+                  and any(x in self.db.chips and self.db.chips[x].school == school and x != chip
+                          for x in c.chips)]
+        return max(c.score for c in combos)
 
     def test_anticipation_before_first_charge_chip(self):
-        cfg = self.db.rules["charge_build"]
-        self.assertEqual((cfg["school"], cfg["factor"]), ("充能", 0.5))
-        sc, parts = self.charge_parts("美咲", "永动机")
+        cfg = self.db.rules["school_build"]
+        self.assertEqual((cfg["schools"], cfg["factor"]), (["充能", "标记", "星光"], 0.5))
+        sc, parts = self.school_parts("美咲", "永动机")
         self.assertEqual(len(parts), 1)
         part = parts[0]
         self.assertEqual(part.label, "组合")
@@ -2709,44 +2985,97 @@ class ChargeBuildTest(Base):
         self.assertAlmostEqual(part.score, p * value * 0.5)
         self.assertLessEqual(part.score, value * 0.5)
 
-    def test_only_charge_chips_and_only_before_owning_one(self):
-        # 不是充能筹码：没有预判
-        self.assertEqual(self.charge_parts("美咲", "标靶")[1], [])
+    def test_only_school_chips_and_only_before_owning_one(self):
+        # 不是这三个流派的筹码：没有预判（这里用治愈筹码）
+        self.assertEqual(self.school_parts("美咲", "医疗箱-完备治疗")[1], [])
         # 已持有充能筹码：不再预判，组合规则照常计分（持有电流剑时电流核心 +15）
-        sc, parts = self.charge_parts("美咲", "电流核心", owned=("电流剑",))
+        sc, parts = self.school_parts("美咲", "电流核心", owned=("电流剑",))
         self.assertEqual(parts, [])
         self.assertTrue(any(p.label == "组合" and p.origin == "充能来源与充能消耗"
                             for p in sc.parts("电流核心", ("电流剑",), None)))
         # 持有的是别的流派的筹码时照常预判
-        self.assertEqual(len(self.charge_parts("美咲", "永动机", owned=("标靶",))[1]), 1)
+        self.assertEqual(len(self.school_parts("美咲", "永动机", owned=("标靶",))[1]), 1)
 
     def test_every_charge_chip_with_partners(self):
-        # 8 个充能筹码都有以自己为「已持有」一方的组合规则，都会预判；剩余三选一为 0 时概率为 0，不加分（3 星、星趴·梦想号
-        # 困难及以上进度上限 18：第 18 轮到了进度上限）
+        # 8 个充能筹码都有以自己为「已持有」一方、配的是充能筹码的组合规则，都会预判；剩余三选一为 0 时概率为 0，不加分
+        # （3 星、星趴·梦想号困难及以上进度上限 18：第 18 轮到了进度上限）
         charge = [n for n, c in self.db.chips.items() if c.school == "充能"]
         self.assertEqual(len(charge), 8)
         for chip in charge:
             with self.subTest(chip=chip):
-                has_combo = any(chip in c.owned for c in self.db.combos)
-                parts = self.charge_parts("玲玲", chip)[1]
-                self.assertEqual(len(parts), 1 if has_combo else 0)
-        self.assertEqual(self.charge_parts("玲玲", "永动机", star=3, round=18, map="星趴·梦想号")[1], [])
+                self.assertEqual(len(self.school_parts("玲玲", chip)[1]), 1)
+        self.assertEqual(self.school_parts("玲玲", "永动机", star=3, round=18, map="星趴·梦想号")[1], [])
+
+    def test_mark_anticipation(self):
+        # 邦妮的标靶：只沾「鹰眼瞄具与标记来源」（物理输出），组合分 20
+        sc, parts = self.school_parts("邦妮", "标靶", star=1, round=3)
+        self.assertEqual(len(parts), 1)
+        part = parts[0]
+        self.assertEqual(self.value(sc, "标靶"), 20)
+        self.assertRegex(part.reason, r"^预计之后获得配套标记筹码的概率约 \d+%：")
+        self.assertIsNone(BANNED_WORDING.search(part.reason))
+        p = partner_chance(sc, "标靶", frozenset({"鹰眼瞄具"}), frozenset())
+        self.assertGreater(p, 0)
+        self.assertAlmostEqual(part.score, p * 20 * 0.5)
+        # 已有标记筹码：不再预判
+        self.assertEqual(self.school_parts("邦妮", "标靶", owned=("普通瞄具",), star=1, round=3)[1], [])
+        # 持有的是别的流派：照常预判
+        self.assertEqual(len(self.school_parts("邦妮", "标靶", owned=("电流剑",), star=1, round=3)[1]), 1)
+        # 魔法箭袋在邦妮身上没有这一项：以它为「已持有」一方的组合规则要求效果牌类特性
+        self.assertEqual(self.school_parts("邦妮", "魔法箭袋", star=1, round=3)[1], [])
+
+    def test_star_anticipation_own_combo_only(self):
+        # 帕露南的 ATM机：组合分取「星光筹码与金色飞星」的 10，不是「转账筹码叠加」的 25（她的「转账」特性把那条排除了）；
+        # 只配到自己的组合规则不排除时，ATM机两边都有，会拿 25 分当组合分却没有配套筹码
+        sc, parts = self.school_parts("帕露南", "ATM机", star=2, round=5)
+        self.assertEqual(len(parts), 1)
+        self.assertEqual(self.value(sc, "ATM机"), 10)
+        self.assertRegex(parts[0].reason, r"^预计之后获得配套星光筹码的概率约 \d+%：")
+        p = partner_chance(sc, "ATM机", frozenset({"金色飞星"}), frozenset())
+        self.assertAlmostEqual(parts[0].score, p * 10 * 0.5)
+        # 只有「转账筹码叠加」生效的角色（不带队「转账」特性）：配套的都不是星光筹码，没有这一项
+        self.assertEqual(self.school_parts("米米", "ATM机", star=2, round=5)[1], [])
+        # 没有以自己为「已持有」一方的组合规则的星光筹码：没有这一项
+        for chip in ("“8面”骰子", "手电筒-强光"):
+            with self.subTest(chip=chip):
+                self.assertEqual(self.school_parts("帕露南", chip, star=2, round=5)[1], [])
+
+    def test_heal_school_not_included(self):
+        # 治愈不在列表里：治愈筹码没有这一项
+        for chip in ("医疗箱-完备治疗", "大碗炖肉"):
+            with self.subTest(chip=chip):
+                self.assertEqual(self.school_parts("米米", chip, star=1, round=3)[1], [])
+
+    def test_charge_filter_unchanged(self):
+        # 充能这一项一位不变：对每个充能筹码，排除自己、已有筹码的新筛选和旧筛选（只要求有一个充能筹码，不排除自己和已有筹码）
+        # 选出的组合规则相同：充能筹码的配套筹码都是别的充能筹码，池子里不会有正在评估的这一张
+        for chip in (n for n, c in self.db.chips.items() if c.school == "充能"):
+            with self.subTest(chip=chip):
+                sc = Scorer(self.db, State(hero="美咲", star=1))
+                old = [c.name for c in self.db.combos if chip in c.owned and c.applies_to(sc.hero.name, sc.traits)
+                       and any(x in self.db.chips and self.db.chips[x].school == "充能" for x in c.chips)]
+                new = [c.name for c in self.db.combos
+                       if chip in c.owned and c.applies_to(sc.hero.name, sc.traits)
+                       and any(x in self.db.chips and self.db.chips[x].school == "充能" and x != chip
+                               for x in c.chips)]
+                self.assertEqual(old, new)
 
 
 class AnticipationPicksTest(Base):
-    """美工刀预判、治愈来源折算、开套预判的概率（chances.take_chance）按次数分开算，和前瞻同一个口径（context.split_picks）：
+    """美工刀预判、治愈来源的提前加分和折算、开套预判的概率（chances.take_chance）按次数分开算，和前瞻同一个口径（context.split_picks）：
     剩余 n 次三选一里，剩下的升星 L 次（min(剩余升星次数, n)）按下一星的升星；其余 n − L 次是任务和筹码商店，按两者在一局里
-    的占比混合，稀有度按当前星数（任务等级取当前星数、至少 1 级）。一次三选一的三格出自同一种来源，一次里一个都不出现的
-    概率按来源分别算、再按占比加权（Σ 占比 × Π(1 − 这种来源下的出现率)），不把两种来源的分布先平均再算；n 次都不出现是
-    升星那一类的 L 次方乘混合那一类的 n − L 次方。3 星以后 L = 0。"""
+    的占比混合，稀有度：升星和筹码商店按当前星数，任务按地图资料里任务自带的等级（context.mixed_sources）。一次三选一的三格
+    出自同一种来源，一次里一个都不出现的概率按来源分别算、再按占比加权（Σ 占比 × Π(1 − 这种来源下的出现率)），不把两种来源
+    的分布先平均再算；n 次都不出现是升星那一类的 L 次方乘混合那一类的 n − L 次方。3 星以后 L = 0。"""
 
     HERO, MAP = "美咲", "园林中庭"  # 园林中庭最高难度 4 个筹码任务、筹码商店 1 次：任务占 80%
     OWNED = ("普通瞄具",)
     CHARGE = "永动机"
+    HEAL = "医疗箱-紧急治疗"  # 预判美工刀时按「已有筹码 + 这个治愈来源」给美工刀打分
 
     def misses(self, sc, owned, take, m):
-        """持有 owned 时在地图 m 上一次三选一里 take 一个都不出现的概率：（下一星的升星, 当前星数的任务, 当前星数的筹码商店），
-        照 pool 的模型直接算。"""
+        """持有 owned 时在地图 m 上一次三选一里 take 一个都不出现的概率：（下一星的升星, 任务, 筹码商店），照 pool 的
+        模型直接算。任务按地图资料里任务自带的等级拆成几项、按占比加权，和 context.mixed_sources 一样。"""
         db = self.db
         pool = player_pool(db, owned, m)
         schools = owned_schools(db, owned)
@@ -2758,10 +3087,13 @@ class AnticipationPicksTest(Base):
             return out
 
         star = sc.st.star
+        levels = db.map_info[m].task_level_shares(sc.st.difficulty_name) or ((max(1, star), 1.0),)
+        task = sum(share * miss(*slot_dists(db, sc.hero, pool, schools, star, "task", level, class_owned=owned,
+                                            difficulty=sc.st.difficulty))
+                   for level, share in levels)
         return (miss(*slot_dists(db, sc.hero, pool, schools, min(3, star + 1), class_owned=owned,
                                  difficulty=sc.st.difficulty)),
-                miss(*slot_dists(db, sc.hero, pool, schools, star, "task", max(1, star), class_owned=owned,
-                                 difficulty=sc.st.difficulty)),
+                task,
                 miss(*slot_dists(db, sc.hero, pool, schools, star, "shop", class_owned=owned,
                                  difficulty=sc.st.difficulty)))
 
@@ -2773,14 +3105,14 @@ class AnticipationPicksTest(Base):
         return task / (task + cfg["shop"]), cfg["shop"] / (task + cfg["shop"])
 
     def takes(self, sc):
-        """三个预判各自「会选的筹码」（只含总分达到推荐线的）和按哪一组已有筹码算：美工刀不含正在评估的治愈来源、
-        治愈来源按「已有筹码 + 美工刀-锋利」、配套筹码按「已有筹码 + 永动机」。"""
+        """三个预判各自「会选的筹码」（只含总分达到推荐线的）和按哪一组已有筹码算：美工刀的分数含正在评估的治愈来源
+        （筹码池不含它）、治愈来源按「已有筹码 + 美工刀-锋利」、配套筹码按「已有筹码 + 永动机」。"""
         db, rnd = self.db, sc.st.round
         line = db.rules["advice"]["recommend_total"]
         cfg = db.rules["heal_knife"]
         owned = sc.ordered(frozenset(sc.known_owned))
-        knives = [k for k in cfg["knives"]
-                  if sc.score(k, owned, rnd) - heal_discount_score(sc, k, owned, rnd) >= line]
+        knives = [k for k in cfg["knives"] if k in db.chips and k not in sc.known_owned
+                  and sc.score(k, (*owned, self.HEAL), rnd) >= line]
         with_knife = owned + ("美工刀-锋利",)
         heals = [h for h in cfg["layers"] if h not in with_knife and sc.score(h, with_knife, rnd) >= line]
         with_charge = owned + (self.CHARGE,)
@@ -2790,13 +3122,15 @@ class AnticipationPicksTest(Base):
 
     def partners(self, sc) -> frozenset:
         db = self.db
-        school = db.rules["charge_build"]["school"]
-        combos = [c for c in db.combos if self.CHARGE in c.owned and c.applies_to(sc.hero.name, sc.traits)]
+        school = "充能"  # 永动机是充能筹码
+        self.assertIn(school, db.rules["school_build"]["schools"])
+        combos = [c for c in db.combos if self.CHARGE in c.owned and c.applies_to(sc.hero.name, sc.traits)
+                  and any(x in db.chips and db.chips[x].school == school and x != self.CHARGE for x in c.chips)]
         return frozenset(x for c in combos for x in c.chips if db.chips[x].school == school) - {self.CHARGE}
 
     def chances(self, sc):
         owned_set = frozenset(sc.known_owned)
-        return (knife_chance(sc, owned_set, heal_knife(sc)), heal_chance(sc, "美工刀-锋利", owned_set),
+        return (knife_chance(sc, self.HEAL, owned_set, heal_knife(sc)), heal_chance(sc, "美工刀-锋利", owned_set),
                 partner_chance(sc, self.CHARGE, self.partners(sc), owned_set))
 
     def test_split_by_picks(self):
@@ -2816,18 +3150,24 @@ class AnticipationPicksTest(Base):
                     split, levelup, averaged = [], [], []
                     for m in sc.maps:
                         t, s = self.shares(m)
-                        self.assertEqual(mixed_sources(sc, m), ((t, "task", star, max(1, star)), (s, "shop", star, None)))
+                        levels = self.db.map_info[m].task_level_shares(sc.st.difficulty_name)
+                        self.assertEqual(mixed_sources(sc, m), tuple((t * share, "task", star, level)
+                                                                     for level, share in levels)
+                                         + ((s, "shop", star, None),))
                         ml, mt, ms = self.misses(sc, owned, take, m)
                         split.append(1 - ml ** ups * (t * mt + s * ms) ** (n - ups))
                         levelup.append(1 - ml ** n)
                         # 先把两种来源的出现率按占比平均、再当成一种分布算（不该这样算）
                         pool = player_pool(self.db, owned, m)
                         schools = owned_schools(self.db, owned)
-                        task = slot_dists(self.db, sc.hero, pool, schools, star, "task", max(1, star), class_owned=owned)
+                        task = [(share, slot_dists(self.db, sc.hero, pool, schools, star, "task", level,
+                                                   class_owned=owned))
+                                for level, share in levels]
                         shop = slot_dists(self.db, sc.hero, pool, schools, star, "shop", class_owned=owned)
                         one = 1.0
                         for k in take:
-                            one *= 1 - (t * appear_prob(*task, k) + s * appear_prob(*shop, k))
+                            one *= 1 - (s * appear_prob(*shop, k)
+                                        + sum(share * appear_prob(*d, k) for share, d in task))
                         averaged.append(1 - ml ** ups * one ** (n - ups))
                     expect = sum(split) / len(split)
                     with self.subTest(star=star, kw=kw, chance=("knife", "heal", "partner")[i]):
@@ -2871,7 +3211,7 @@ class AnticipationPicksTest(Base):
 
     def test_factors_all_stars(self):
         """预判分 = 概率 × 组合分 × 系数，0～3 星同一个系数：美工刀预判 anticipation_factor = 0.7，开套预判 factor = 0.5。"""
-        knife_cfg, charge_cfg = self.db.rules["heal_knife"], self.db.rules["charge_build"]
+        knife_cfg, charge_cfg = self.db.rules["heal_knife"], self.db.rules["school_build"]
         self.assertEqual((knife_cfg["anticipation_factor"], charge_cfg["factor"]), (0.7, 0.5))
         layers = knife_cfg["per_layer"] * knife_cfg["layers"]["医疗箱-紧急治疗"]
         for star in (1, 2, 3):
@@ -2881,21 +3221,21 @@ class AnticipationPicksTest(Base):
             # 开套预判的组合分：以永动机为「已持有」一方、配的是充能筹码的组合规则里最高的一条
             value = max(c.score for c in self.db.combos if self.CHARGE in c.owned
                         and c.applies_to(sc.hero.name, sc.traits)
-                        and any(self.db.chips[x].school == charge_cfg["school"] for x in c.chips))
+                        and any(self.db.chips[x].school == "充能" and x != self.CHARGE for x in c.chips))
             with self.subTest(star=star):
                 kit = [p for p in sc.parts("医疗箱-紧急治疗", owned, 9) if p.label == "组合"]
                 self.assertEqual(len(kit), 1)
                 self.assertAlmostEqual(kit[0].score, knife * layers * 0.7)
-                charge = [p for p in sc.parts(self.CHARGE, owned, 9) if p.origin == "charge_build"]
+                charge = [p for p in sc.parts(self.CHARGE, owned, 9) if p.origin == "school_build"]
                 self.assertEqual(len(charge), 1)
                 self.assertAlmostEqual(charge[0].score, partner * value * 0.5)
 
 
 class LookaheadSplitTest(Base):
     """前瞻影响的几次三选一按次数分开算（lookahead.lookahead_on、context.split_picks）：剩下的升星一定会来，先算满，
-    min(剩余升星次数, 次数) 次按下一星的升星，其余按任务和筹码商店混合（future 的 mixed，稀有度按当前星数）。0～1 星全按
-    升星，3 星以后全按混合，只有 2 星影响 1.5 次时 1 次按升星、半次按混合。说明里的「下次出现率」照旧按下一次三选一的
-    主体（0～2 星是升星）。"""
+    min(剩余升星次数, 次数) 次按下一星的升星，其余按任务和筹码商店混合（future 的 mixed，任务按地图资料里任务自带的等级、
+    筹码商店按当前星数）。0～1 星全按升星，3 星以后全按混合，只有 2 星影响 1.5 次时 1 次按升星、半次按混合。说明里的
+    「下次出现率」照旧按下一次三选一的主体（0～2 星是升星）。"""
 
     def delta(self, sc, name, owned, m, mixed=False):
         return (sc.future((*owned, name), map_name=m) if not mixed
@@ -2916,8 +3256,8 @@ class LookaheadSplitTest(Base):
                                      weight * times * self.delta(sc, name, owned, "龙宫游乐园"))
 
     def test_two_stars_split(self):
-        """2 星影响 1.5 次：1 次按升到 3 星的升星，多出的半次按 2 星时的任务（2 级）和筹码商店（2 星）混合，各自的期望最高分
-        按来源分别算再加权。混合的那一份和照 pool 的模型直接算的分布相同。"""
+        """2 星影响 1.5 次：1 次按升到 3 星的升星，多出的半次按 2 星时的任务（龙宫游乐园 2、2、2、3 级：3/4、1/4）和筹码
+        商店（2 星）混合，各自的期望最高分按来源分别算再加权。混合的那一份和照 pool 的模型直接算的分布相同。"""
         db = self.db
         sc = Scorer(db, State(hero="梅加斯", star=2, round=5, map="龙宫游乐园", owned=("手持风扇-大",), rerolls=4))
         times = sc.lookahead_times()
@@ -2929,10 +3269,12 @@ class LookaheadSplitTest(Base):
         schools = owned_schools(db, have)
         t, s = (db.map_info["龙宫游乐园"].chip_tasks * db.rules["picks"]["task_rate"],
                 db.rules["picks"]["shop"])
-        task = slot_dists(db, sc.hero, pool, schools, 2, "task", 2, class_owned=have)
+        levels = db.map_info["龙宫游乐园"].task_level_shares("困难")
+        tasks = tuple((t / (t + s) * share, *slot_dists(db, sc.hero, pool, schools, 2, "task", level, class_owned=have))
+                      for level, share in levels)
         shop = slot_dists(db, sc.hero, pool, schools, 2, "shop", class_owned=have)
         self.assertEqual(future_setup(sc, have, "龙宫游乐园", mixed=True)[1],
-                         ((t / (t + s), *task), (s / (t + s), *shop)))
+                         (*tasks, (s / (t + s), *shop)))
         self.assertEqual(future_setup(sc, have, "龙宫游乐园")[1],
                          ((1.0, *slot_dists(db, sc.hero, pool, schools, 3, class_owned=have)),))
         weight = db.rules["lookahead"]["weight"]
@@ -2943,12 +3285,13 @@ class LookaheadSplitTest(Base):
                 self.assertNotAlmostEqual(up, mix, places=3)
                 self.assertAlmostEqual(lookahead_on(sc, name, owned, "龙宫游乐园"), weight * (1 * up + (times - 1) * mix))
 
-    def test_megas_two_stars_keeps_dart(self):
-        """梅加斯 2 星第 5 轮、龙宫游乐园、已有手持风扇-大，在拳击手套-中级、维生素药丸、忍术飞镖之间首推忍术飞镖：
-        3 星时的探天卫星（金色卡牌筹码只剩它）更常出现在升到 3 星那次的最左格。多出的半次按混合以后前瞻变小，仍是首推。"""
+    def test_megas_two_stars_dart_lookahead(self):
+        """梅加斯 2 星第 5 轮、龙宫游乐园、已有手持风扇-大，拳击手套-中级、维生素药丸、忍术飞镖：3 星时的探天卫星（金色卡牌
+        筹码只剩它）更常出现在升到 3 星那次的最左格，忍术飞镖的前瞻为正、写明这一条。忍术飞镖靠前瞻的这点分盖不过
+        维生素药丸的角色特性分，首推维生素药丸。"""
         adv = self.run_case("梅加斯", ["拳击手套-中级", "维生素药丸", "忍术飞镖"], star=2, round=5, map="龙宫游乐园",
                             owned=("手持风扇-大",), rerolls=4)
-        self.assertEqual(adv.best, "忍术飞镖")
+        self.assertEqual(adv.best, "维生素药丸")
         dart = self.by_name(adv)["忍术飞镖"]
         self.assertGreater(dart.lookahead, 0)
         self.assertIn("探天卫星下次出现率", dart.lookahead_reason)
@@ -3217,8 +3560,10 @@ class TeammateNeedTest(Base):
                 self.assertEqual(gives, rules)
 
     def test_lifted_to_second(self):
+        # 内置分照旧计入的资料库副本：现在标记喷罐自身的分已在最前，不再需要提上来
+        db = self.scaled(0.5)
         st = State(hero="凛", star=1, round=4, rerolls=3, teammates=self.BONNIE)
-        adv = advise(self.db, st, ["探天卫星", "魔法秘典", "标记喷罐"])
+        adv = advise(db, st, ["探天卫星", "魔法秘典", "标记喷罐"])
         self.assertEqual(adv.best, "探天卫星")
         self.assertEqual(self.ranking(adv), ["探天卫星", "标记喷罐", "魔法秘典", REROLL])
         lifted = self.need_parts(adv)
@@ -3242,7 +3587,7 @@ class TeammateNeedTest(Base):
         # 总分），三条标签、悬停、诊断包、命令行（含 --json 的 top、p_better）、推荐日志里的 Advice.top 同一个比较对象
         # 照的默认推荐档位用测试用的那一份（这一组局面是按有档位时挑的）
         from advisor.ui import text as ui_text
-        db = with_player_layer(self.db)
+        db = with_player_layer(self.scaled(0.5))  # 刚需提升要有筹码被内置分抬到前面：用内置分照旧计入的副本
         st = State(**self.LIFT)
         adv = advise(db, st, self.LIFT_OFFER)
         self.assertEqual(adv.best, REROLL)
@@ -3254,14 +3599,15 @@ class TeammateNeedTest(Base):
         self.assertGreater(fan.total, sat.total)
         need = sum(p.score for name, p in self.need_parts(adv) if name == "手持风扇-大")
         self.assertLess(fan.total - need, sat.total)  # 没有刚需的提升时排在探天卫星之后
-        # 概率按被提的那张（提升后的总分）重算：比按探天卫星算的小，显示的数也不同（「90%」→「85%」）。这一局剩 4 次刷新、
-        # 之后的三选一不到 1 次：留 2 次（1 次，再多留 1 次以防估少），多出来的 2 次按最多连着刷 2 次估值（概率按 2 次之内）
+        # 概率按被提的那张（提升后的总分）重算。这一局剩 4 次刷新、之后的三选一不到 1 次：留 2 次（1 次，再多留 1 次
+        # 以防估少），多出来的 2 次按最多连着刷 2 次估值（概率按 2 次之内）。去掉内置分以后两张之间没有别的筹码，
+        # 按被提的那张和按探天卫星算出的概率相同
         scorer = Scorer(db, st, offer=self.LIFT_OFFER)
         self.assertEqual((adv.reroll.chain, adv.reroll.kept, adv.reroll.spare), (2, 2, 2))
         self.assertEqual(adv.reroll.p_better, scorer.reroll_p_better(self.LIFT_OFFER, fan.total))
         old = scorer.reroll_p_better(self.LIFT_OFFER, sat.total)
-        self.assertLess(adv.reroll.p_better, old)
-        self.assertEqual((ui_text.chance_text(old), ui_text.chance_text(adv.reroll.p_better)), ("90%", "85%"))
+        self.assertEqual(adv.reroll.p_better, old)
+        self.assertEqual((ui_text.chance_text(old), ui_text.chance_text(adv.reroll.p_better)), ("85%", "85%"))
         pills = ui_text.reroll_pills(adv.reroll, ui_text.best_chip(adv), st.rerolls)
         self.assertEqual([p.text for p in pills],
                          ["预计优于手持风扇-大", "85% 概率刷出优于手持风扇-大的筹码", "留 2 次，多出 2 次不必留"])
@@ -3291,12 +3637,13 @@ class TeammateNeedTest(Base):
 
     def test_reroll_compare_unchanged_when_chip_first(self):
         # 首推是筹码时刚需只提到第二，提不到首推之上：比较对象照旧是首推（test_lifted_to_second 那一组）
+        db = self.scaled(0.5)
         st = State(hero="凛", star=1, round=4, rerolls=3, teammates=self.BONNIE)
         offer = ["探天卫星", "魔法秘典", "标记喷罐"]
-        adv = advise(self.db, st, offer)
+        adv = advise(db, st, offer)
         self.assertEqual(adv.evals[adv.top].chip.name, "探天卫星")
         self.assertEqual(adv.reroll.p_better,
-                         Scorer(self.db, st, offer=offer).reroll_p_better(offer, adv.evals[adv.top].total))
+                         Scorer(db, st, offer=offer).reroll_p_better(offer, adv.evals[adv.top].total))
 
     def test_bot_or_unknown_mate_not_counted(self):
         offer = ["探天卫星", "魔法秘典", "标记喷罐"]
@@ -3317,18 +3664,40 @@ class TeammateNeedTest(Base):
         self.assertEqual(self.ranking(adv)[:3], ["鹰眼瞄具", "标靶", REROLL])
 
     def test_useless_school_not_lifted(self):
-        # 不能把自己锁进对自己没用的流派：阿兰娜（推荐流派治愈）已进入星光，拿普通瞄具会占满流派名额（星光、标记），
-        # 治愈本局再也进不去：普通瞄具排第三、本身够推荐线也不提；已持有标记喷罐后可以提。
+        # 不能把自己锁进对自己没用的流派：阿兰娜（推荐流派治愈、标记，只保治愈）已进入星光，拿普通瞄具会占满流派名额
+        # （星光、标记），治愈本局再也进不去：要保住治愈的扣分把它压到推荐线以下，排在最后也不提。
         # 只进入了治愈时拿它不耽误治愈，照样提（tests/test_need_useless_school.py）
         mates = (Teammate("邦妮"), Teammate("吉尔"), Teammate("芬妮"))
         offer = ["拳击手套-高级", "精品剑盾", "普通瞄具"]
         st = State(hero="阿兰娜", star=3, round=8, owned=("紫色飞星", "书签"),
                    rerolls=default_rerolls(self.db, 3), teammates=mates)
-        self.assertEqual(self.need_parts(advise(self.db, st, offer)), [])
+        adv = advise(self.db, st, offer)
+        self.assertEqual(self.need_parts(adv), [])
+        self.assertEqual(self.ranking(adv)[-1], "普通瞄具")
+        # 已持有标记喷罐后（已进入标记）不再扣分：普通瞄具本身就排在两张加攻击力的筹码前面，不用提
         marked = dataclasses.replace(st, owned=(*st.owned, "标记喷罐"))
         adv = advise(self.db, marked, offer)
+        self.assertEqual(self.need_parts(adv), [])
+        self.assertEqual(self.by_name(adv)["普通瞄具"].percent, max(e.percent for e in adv.evals))
+        # 内置分照旧计入的资料库副本：另外两张被内置分抬到它前面时，它排第三、够推荐线，提到第二
+        db = self.scaled(0.5)
+        adv = advise(db, marked, offer)
         self.assertEqual([name for name, _ in self.need_parts(adv)], ["普通瞄具"])
         self.assertEqual(self.ranking(adv)[1], "普通瞄具")
+
+    def test_lifted_on_current_data(self):
+        # 现在的资料库（内置分不计入总分）照样会提：小町 2 星第 9 轮，真人队友凛刚需标记，标记喷罐本身排第三、够推荐线，
+        # 提到第二，第一位仍是大背包
+        mates = (Teammate("凛"), Teammate("糖糖", bot=True))
+        st = State(hero="小町", star=2, round=9, map="魔法学院", owned=("美工刀-初级", "速度轮滑-中级"), rerolls=4,
+                   teammates=mates)
+        offer = ["大背包", "探天卫星", "标记喷罐"]
+        adv = advise(self.db, st, offer)
+        self.assertEqual([name for name, _ in self.need_parts(adv)], ["标记喷罐"])
+        self.assertEqual(self.ranking(adv)[:2], ["大背包", "标记喷罐"])
+        spray = self.by_name(adv)["标记喷罐"]
+        own = spray.total - sum(p.score for p in spray.parts if p.label == "队友" and p.score > 0)
+        self.assertGreaterEqual(own, self.db.rules["advice"]["recommend_total"])
 
     def test_needs_recommend_line_without_teammate_parts(self):
         # 本身的分（不计为正的「队友」分项）要达到推荐线；把推荐线提到它之上就不提
@@ -3386,12 +3755,13 @@ class DeterminismTest(Base):
         # 按传进来的顺序取的话，倒过来传时取到标记、充能，关键词分就没了（155 分或 140 分）
         st = State(**self.MESSY)
         owned = st.owned
-        self.assertEqual(owned_schools(self.db, owned), ("治愈", "星光"))
+        db = self.scaled(0.5)  # 关键词分属于内置分，现在不计入总分
+        self.assertEqual(owned_schools(db, owned), ("治愈", "星光"))
         perms = list(itertools.islice(itertools.permutations(owned), 0, 50000, 4999))
         orders = [owned, owned[::-1], tuple(sorted(owned)), tuple(frozenset(owned)), *perms]
         results = set()
         for order in orders:
-            scorer = Scorer(self.db, st)
+            scorer = Scorer(db, st)
             parts = scorer.parts("美工刀-初级", order, st.round)
             results.add(tuple((p.label, round(p.score, 9)) for p in parts))
             self.assertIn("关键词分", [p.label for p in parts], order)
@@ -3415,7 +3785,7 @@ class DeterminismTest(Base):
         self.assertEqual(outs[0], outs[2])
         here = advise(self.db, State(**self.MESSY), list(self.MESSY_OFFER))
         self.assertAlmostEqual(here.reroll.expected, outs[0][0][1], places=6)
-        self.assertEqual(f"{outs[0][1][2]:.0%}", "96%")
+        self.assertEqual(f"{outs[0][1][2]:.0%}", "75%")
 
     def test_prob_above_ignores_last_digit(self):
         # 分值和比较对象按 tie_key 比（舍到 9 位小数）：分值相等的筹码不算「高于」，末位误差不影响结果
@@ -3441,7 +3811,7 @@ class DeterminismTest(Base):
         for noise in (0.0, 1e-12, -1e-12):
             self.assertEqual(scorer.reroll_p_better(self.TIE_OFFER, x.total + noise), adv.reroll.p_better)
         # 刷出的筹码的分值含前瞻（2 星前瞻里多出的半次按任务和筹码商店混合，见 LookaheadSplitTest）
-        self.assertEqual(f"{adv.reroll.p_better:.0%}", "96%")
+        self.assertEqual(f"{adv.reroll.p_better:.0%}", "75%")
 
 
 class CoreVsRefreshTest(PlayerBase):
@@ -3459,14 +3829,15 @@ class CoreVsRefreshTest(PlayerBase):
         self.assertEqual(adv.best, REROLL if adv.reroll.value > ev["大背包"].total else "大背包")
 
     def test_core_lifted_over_unlisted_only(self):
-        # 必拿相对本次未列入的筹码照常补分，理由只写这一项
-        adv = self.run_case("凛", ["大背包", "额外电池", "探天卫星"])
+        # 必拿相对本次未列入的筹码照常补分，理由只写这一项（内置分全额计入的资料库副本）
+        db = self.scaled(0.5)
+        adv = self.run_case("凛", ["大背包", "额外电池", "探天卫星"], db=db)
         ev = self.by_name(adv)
-        lead = self.db.rules["synergy"]["core_lead"]
+        lead = db.rules["synergy"]["core_lead"]
         self.assertGreaterEqual(ev["大背包"].total, max(ev["额外电池"].total, ev["探天卫星"].total) + lead - 1e-6)
         # 整句是凛的玩家思路原文，后面另起一句写补分；理由标签的短句照旧「筹码方案：必选」
         part = next(p for p in ev["大背包"].parts if p.label == "玩家思路")
-        self.assertEqual(part.reason, f"{self.db.player_synergy['凛'].note}。优先于本次未列入筹码方案的筹码")
+        self.assertEqual(part.reason, f"{db.player_synergy['凛'].note}。优先于本次未列入筹码方案的筹码")
         self.assertEqual(part.short, "筹码方案：必选")
         self.assertEqual(ev["大背包"].reasons(limit=1)[0].rsplit("（", 1)[0], part.reason)
 
@@ -3479,13 +3850,14 @@ class CoreVsRefreshTest(PlayerBase):
             "rule": [{"chips": ["鹰眼瞄具"], "needs_owned": ["普通瞄具"], "score": 110,
                       "reason": "筹码方案：测试用的带条件规则，分值达到必选档", "short": "筹码方案：测试用的规则"}],
         }], self.fail)
-        db = dataclasses.replace(self.db, player_synergy={**self.db.player_synergy, "墨影": ps})
+        base = self.scaled(0.5)
+        db = dataclasses.replace(base, player_synergy={**base.player_synergy, "墨影": ps})
         owned = ("普通瞄具",)
         adv = advise(db, State(hero="墨影", star=1, round=4, owned=owned, rerolls=default_rerolls(db, 1, owned)),
                      ["鹰眼瞄具", "拳击手套-高级", "探天卫星"])
         ev = self.by_name(adv)
         part = next(p for p in ev["鹰眼瞄具"].parts if p.label == "玩家思路")
-        self.assertGreater(part.score, self.db.rules["synergy"]["core"])  # 补过分
+        self.assertGreater(part.score, db.rules["synergy"]["core"])  # 补过分
         self.assertEqual((part.reason, part.short),
                          ("筹码方案：测试用的带条件规则，分值达到必选档，优先于本次未列入筹码方案的筹码", "筹码方案：测试用的规则"))
         note = next(p for p in ev["探天卫星"].parts if p.label == "玩家思路").reason
@@ -3541,11 +3913,12 @@ class EdgeWordingTest(Base):
         self.assertEqual(f"{adv.reroll.cost:.0f}", "0")
 
     def test_income_wording_without_round(self):
-        adv = self.run_case("梅加斯", ["小猪存钱罐", "会员推荐信", "智能手表"], star=3, rerolls=0)
-        part = next(p for p in self.by_name(adv)["小猪存钱罐"].parts if p.label == "收入折算")
+        # 纯收入筹码（小猪存钱罐）的正分只有内置分，现在没有可折的分；改用同时有特性的缓冲盾牌查这一句
+        adv = self.run_case("梅加斯", ["缓冲盾牌", "会员推荐信", "智能手表"], star=3, rerolls=0)
+        part = next(p for p in self.by_name(adv)["缓冲盾牌"].parts if p.label == "收入折算")
         self.assertTrue(part.reason.startswith("星币收入折算：已达到 3 星"), part.reason)
-        with_round = self.run_case("梅加斯", ["小猪存钱罐", "会员推荐信", "智能手表"], star=3, round=6, rerolls=0)
-        part = next(p for p in self.by_name(with_round)["小猪存钱罐"].parts if p.label == "收入折算")
+        with_round = self.run_case("梅加斯", ["缓冲盾牌", "会员推荐信", "智能手表"], star=3, round=6, rerolls=0)
+        part = next(p for p in self.by_name(with_round)["缓冲盾牌"].parts if p.label == "收入折算")
         self.assertIn("按剩余兑现次数折算", part.reason)
 
     def test_mutator_note_punctuation(self):
@@ -3834,8 +4207,9 @@ class SupportFlyingStarTest(Base):
     def test_flying_star_combo(self):
         def combos(hero, chip, owned):
             owned = tuple(owned)
+            # 只查飞星叠加这两条组合规则；还没有星光筹码时另有开套预判（也是「组合」，见 SchoolBuildTest）
             return [(p.origin, p.score) for p in Scorer(self.db, State(hero=hero, owned=owned)).parts(chip, owned, None)
-                    if p.label == "组合"]
+                    if p.label == "组合" and p.origin != "school_build"]
 
         for hero in ("美咲", "蓝海晴", "芬妮", "照"):  # 物理输出、辅助、钱辅、照
             with self.subTest(hero=hero):
@@ -3956,7 +4330,8 @@ class AlLiveReviewTest(Base):
         self.assertEqual([(p.score, p.short) for p in rule], [(-30, "手牌常不足，缩短冷却收益低")])
         self.assertLessEqual(len(rule[0].short), SHORT_LIMIT)
         self.assertIsNone(BANNED_WORDING.search(rule[0].reason))
-        self.assertGreater(battery.total, ev["速度轮滑-中级"].total)
+        # 内置分不计入总分以后两者持平（都只有角色特性那一项正分）
+        self.assertAlmostEqual(battery.total, ev["速度轮滑-中级"].total)
         self.assertLess(battery.total, adv.reroll.value)
         self.assertNotEqual(adv.best, "额外电池")
         # 只对阿尔：凛的额外电池没有这一项
@@ -4015,10 +4390,10 @@ class AlLiveReviewTest(Base):
         adv = self.advise_at("130113-3", difficulty_level=LEVEL_NIGHTMARE)
         ev = self.by_name(adv)
         self.assertEqual(adv.best, "摩托头盔-高级")
-        for got, want in ((ev["摩托头盔-高级"].percent, 0.41), (adv.reroll.percent, 0.29),
-                          (ev["额外电池"].percent, 0.17), (ev["速度轮滑-中级"].percent, 0.14)):
+        for got, want in ((ev["摩托头盔-高级"].percent, 0.68), (adv.reroll.percent, 0.16),
+                          (ev["额外电池"].percent, 0.08), (ev["速度轮滑-中级"].percent, 0.08)):
             self.assertAlmostEqual(got, want, delta=0.02)
-        self.assertGreater(ev["额外电池"].percent, ev["速度轮滑-中级"].percent)
+        self.assertGreaterEqual(ev["额外电池"].percent, ev["速度轮滑-中级"].percent)
         # 困难和读不到难度时维持现状：金头盔不是首推
         self.assertNotEqual(self.advise_at("130113-3").best, "摩托头盔-高级")
 
@@ -4039,15 +4414,16 @@ class AlLiveReviewTest(Base):
                     self.assertEqual(night.best, self.advise_at(key).best)
             if night.best != self.LIVE_BEST[key]:
                 changed[key] = night.best
-        self.assertEqual(changed, {"130113-3": "摩托头盔-高级", "130412-4": REROLL, "132328-11": REROLL})
+        self.assertEqual(changed, {"130113-3": "摩托头盔-高级", "130412-4": "友情徽章",
+                                   "131242-7": REROLL, "131952-9": "探天卫星"})
         self.assertEqual(self.PICKS["130849-5"], REROLL)
         later = self.advise_at("130849-5", difficulty_level=LEVEL_NIGHTMARE)
         self.assertEqual((later.reroll.kept, later.reroll.spare, later.reroll.need), (4, 0, 3))
         self.assertGreater(later.reroll.cost, 0)
         self.assertEqual(self.ranking(self.advise_at("130412-4", difficulty_level=LEVEL_NIGHTMARE))[:2],
-                         [REROLL, "友情徽章"])
+                         ["友情徽章", REROLL])
         self.assertEqual(self.ranking(self.advise_at("132328-11", difficulty_level=LEVEL_NIGHTMARE))[:2],
-                         [REROLL, "缓冲盾牌"])
+                         ["缓冲盾牌", REROLL])
 
 
 class FennyLiveReviewTest(PlayerBase):
@@ -4100,7 +4476,8 @@ class FennyLiveReviewTest(PlayerBase):
         m = sc.maps[0]
         name = "星币锤"
         delta = sc.future((*sc.known_owned, name), map_name=m) - sc.future(sc.known_owned, zero=name, map_name=m)
-        self.assertAlmostEqual(lookahead_on(sc, name, sc.known_owned, m), sc.picks.total * delta)
+        self.assertAlmostEqual(lookahead_on(sc, name, sc.known_owned, m),
+                               sc.db.rules["lookahead"]["weight"] * sc.picks.total * delta)
 
     def test_net_effect_hammer(self):
         # 星币锤对芬妮：「经济」+40「获得星光，星币多时提高攻击力」和「辅助定位」-20「较少挑战怪物，攻击力加成难触发」
@@ -4299,11 +4676,11 @@ class FennyLiveReviewTest(PlayerBase):
                 self.assertEqual(e.parts[0].reason, reason + "，优先于本次未列入筹码方案的筹码")
 
     def test_live_game_bests(self):
-        # 这一局 12 次推荐按现在的规则重算，和对局当时相比首推变了一次：第 11 次医疗箱-完备治疗 → 友情徽章（当时实际选了刷新）。
-        # 第 12 次（这一局实际的最后一次）照旧星币锤：读到的进度第 9 格（噩梦，进度上限 17），3 星以后、还没到进度上限，之后的
-        # 三选一按下限约 0.8 次，剩的 1 次刷新要留着，刷新扣掉代价后不如星币锤（之后预计没有三选一时首推刷新：她不挑战
-        # 怪物，星币锤只剩 5 层星光，芬妮的角色专属规则另扣分）
-        want = {"135348-7": REROLL, "140011-11": "友情徽章", "140015-12": "星币锤"}
+        # 这一局 12 次推荐按现在的规则重算，和对局当时相比首推变了两次：第 11 次医疗箱-完备治疗 → 友情徽章（当时实际选了刷新），
+        # 第 12 次星币锤 → 刷新。第 12 次读到的进度第 9 格（噩梦，进度上限 17），3 星以后、还没到进度上限，之后的
+        # 三选一按下限约 0.8 次，用掉剩的 1 次刷新代价约 11 分；内置分不再计入总分后三张都不高（星币锤约 -6，最高的医疗箱-紧急
+        # 治疗约 8），扣掉代价后仍是刷新最高（约 9）。
+        want = {"135348-7": REROLL, "140011-11": "友情徽章", "140015-12": REROLL}
         for key, best in want.items():
             with self.subTest(offer=key):
                 self.assertEqual(self.at(key).best, best)

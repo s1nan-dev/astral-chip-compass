@@ -117,7 +117,7 @@ class WindowGoneTest(StatusExpiryBase):
 
     def test_no_game_same_as_capture(self):
         """悬浮窗自己查到找不到游戏窗口时说的（NO_GAME）和后台识别发来的（capture.NOT_FOUND）是同一句：游戏窗口又看得到时
-        按这句认出来收起。不写窗口标题（两个标题写全了一行显示放不下，「请先启动游戏」会被省略）。"""
+        按这句认出来收起。不写窗口标题（三个标题写全了一行显示放不下，「请先启动游戏」会被省略）。"""
         self.assertEqual(NO_GAME, capture.NOT_FOUND)
         self.assertEqual(NO_GAME, "未找到游戏窗口，请先启动游戏。")
 

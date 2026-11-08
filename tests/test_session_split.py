@@ -214,7 +214,9 @@ class ScreenRulesTest(unittest.TestCase):
     def test_derived_tables(self):
         self.assertEqual(list(OUT_OF_GAME_LABEL.items()), [
             ("result", "结算画面"), ("match_found", "「匹配成功」画面"), ("team_room", "组队房间"),
-            ("create_room", "创建房间界面"), ("custom_room", "自建房间"), ("reward", "奖励画面")])
+            ("create_room", "创建房间界面"), ("custom_room", "自建房间"), ("reward", "奖励画面"), ("main_menu", "主菜单")])
+        # 只有主菜单结束的局之后可能当成断线以后连回（offgame.round_after_game）
+        self.assertEqual([kind for kind, rule in offgame.SCREEN_RULES.items() if rule.rejoin], ["main_menu"])
         self.assertEqual(ROOM_KINDS, ("team_room", "create_room", "custom_room"))
         self.assertEqual(list(DIFFICULTY_SOURCE_LABEL.items()), [
             ("result", "结算画面"), ("match_found", "「匹配成功」画面"), ("team_room", "组队房间的难度选项"),

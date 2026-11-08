@@ -18,7 +18,7 @@ import math
 from collections import Counter
 from dataclasses import dataclass
 
-from ..data import CLASSES, DB, TIERS, Chip, Hero, Rule, unrecorded_hero
+from ..data import CLASSES, DB, DIFFICULTIES, LEVEL_NIGHTMARE, NORMAL, TIERS, Chip, Hero, Rule, unrecorded_hero
 from ..pool import Dist, State, owned_schools, player_pool, slot_dists
 from ..schemes import listed_schools, locked_schools, target_schools
 from .advice_text import SCHEME_TIER_WORD
@@ -222,6 +222,7 @@ class Memo:
     键的约定：已有筹码一律按集合（frozenset）进键，计算时按 Context.ordered 排成确定的先后；轮次、地图可以是 None
     （不知道）；「地图组」是参与平均的几张地图（只按一张地图算时就是这一张）。
     - score、parts：(筹码名, frozenset(已有筹码), 轮次, 地图) → 总分、分项（parts 取用时复制一份）；
+    - knife：(治愈来源, frozenset(已有筹码), 地图组) → 选这个治愈来源之后获得美工刀的概率；
     - setup：(frozenset(已有筹码), 地图, 来源) → 下一次三选一的（筹码池, 各来源的（占比, 最左格的分布, 其余两格的分布）,
       各筹码的分值）。来源为 False 时是下一次三选一的主体（next_sources：0～2 星是下一星的升星，3 星以后是循环往复给的
       额外那次（还没给时）或任务和筹码商店），为 True 时是升星和循环往复那一次以外的那几次（mixed_sources，任务和筹码
@@ -310,13 +311,31 @@ def chip_tasks_on(ctx: Context, map_name) -> float:
     return info.tasks_for(getattr(ctx.st, "difficulty_name", None))
 
 
+def task_level_column(st) -> str | None:
+    """取任务等级（MapInfo.task_level_shares）时用哪一个难度那一列：知道难度名（State.difficulty_name）时就是它；没有
+    难度名、只知道档位时按档位取：普通按普通那一列，噩梦及以上（分不出是噩梦、疯狂还是极限，例如进度上限噩梦和疯狂
+    相同、画面上又没读到难度名）按噩梦那一列（资料里噩梦、疯狂两列相同；不按极限，同 chip_tasks_on 不知道具体难度时
+    不按极限算）；都不知道时为 None，按困难那一列。"""
+    name = getattr(st, "difficulty_name", None)
+    if name is not None:
+        return name
+    if getattr(st, "difficulty", None) == NORMAL:
+        return DIFFICULTIES[0]
+    if getattr(st, "difficulty_level", None) == LEVEL_NIGHTMARE:
+        return DIFFICULTIES[2]
+    return None
+
+
 def mixed_sources(ctx: Context, map_name) -> tuple[tuple[float, str, int, int | None], ...]:
     """升星以外的三选一（在地图 map_name 上）：任务和筹码商店，占比按 rules.toml [picks] 一局的任务和商店三选一（本地图
     的筹码任务数 chip_tasks_on × task_rate 对 shop；地图待识别时每张候选地图按各自的任务数，没有地图资料时按 default_tasks），
-    和剩余三选一次数的推算同一个口径（Context._picks_left）。稀有度按当前星数：任务三格全随机，等级取当前星数（至少 1 级；
-    3 星时 3 级，同循环往复额外那次三选一）；筹码商店照升星的规则，稀有度按当前星数那一行、最左格是这一行的固定稀有度、
-    出自职业筹码池。占比为 0 的来源不列；两者都为 0 时之后没有这类三选一（剩余三选一次数里只有升星，3 星以后为 0，也不加
-    3 星的下限，前瞻和三个概率都记 0），这里按筹码商店给一种，不会用到。"""
+    和剩余三选一次数的推算同一个口径（Context._picks_left）。
+
+    稀有度：任务三格全随机，等级按地图资料里任务自带的等级（MapInfo.task_level_shares：这个难度一局的等级比例，路线
+    不知道时按各条线平均；取哪一列难度见 task_level_column），按比例拆成几项，和当前星数无关；地图不知道、这张图没写
+    等级时照旧按当前星数（至少 1 级，3 星时 3 级）。筹码商店照升星的规则，稀有度按当前星数那一行、最左格是这一行的固定稀有度、出自职业筹码池。
+    占比为 0 的来源不列；两者都为 0 时之后没有这类三选一（剩余三选一次数里只有升星，3 星以后为 0，也不加 3 星的下限，
+    前瞻和三个概率都记 0），这里按筹码商店给一种，不会用到。"""
     star = max(0, min(TOP_STAR, ctx.st.star))
     cfg = ctx.db.rules["picks"]
     task = chip_tasks_on(ctx, map_name) * cfg["task_rate"]
@@ -325,7 +344,13 @@ def mixed_sources(ctx: Context, map_name) -> tuple[tuple[float, str, int, int | 
         return ((1.0, "shop", star, None),)
     out = []
     if task > 0:
-        out.append((task / (task + shop), "task", star, max(1, star)))
+        share = task / (task + shop)
+        info = ctx.db.map_info.get(map_name)
+        levels = info.task_level_shares(task_level_column(ctx.st)) if info else None
+        if levels:
+            out.extend((share * p, "task", star, level) for level, p in levels)
+        else:
+            out.append((share, "task", star, max(1, star)))
     if shop > 0:
         out.append((shop / (task + shop), "shop", star, None))
     return tuple(out)
@@ -348,7 +373,7 @@ def endless_sources(ctx: Context) -> tuple[tuple[float, str, int, int | None], .
     """循环往复给的额外那次三选一（PicksLeft.endless）：任务来源（三格全随机），等级按到期那一轮预计的星数（task_tiers：
     当前星数 + [endless_cycle] star_rate × 离到期还有几轮，不是整数时按相邻两级插值、占比就是插值的权重），和给循环往复
     估值时额外那次三选一同一个算法（parts._endless_parts）。到期轮次（State.endless_due）或当前轮次不知道（旧记录、冻结的
-    局面、命令行没给）、已经到期时按当前星数（至少 1 级），同 mixed_sources 里任务的等级。3 星以后都是 3 级。"""
+    局面、命令行没给）、已经到期时按当前星数（至少 1 级）。3 星以后都是 3 级。"""
     st = ctx.st
     star = max(0, min(TOP_STAR, st.star))
     due = getattr(st, "endless_due", None)

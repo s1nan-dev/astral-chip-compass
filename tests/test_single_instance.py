@@ -1712,8 +1712,10 @@ class OverlayMainWiringTest(unittest.TestCase):
             return listener
 
         with mock.patch.object(main_mod, "build", return_value=(app, window, SimpleNamespace(
-                    eventlog=SimpleNamespace(recorder=None), save=lambda force=False: None), threading.Lock())), \
+                    eventlog=SimpleNamespace(recorder=None), save=lambda force=False: None,
+                    settings=SimpleNamespace(big_cores=False)), threading.Lock())), \
                 mock.patch.object(main_mod, "Watcher"), mock.patch.object(main_mod, "Hotkey", return_value=hotkey), \
+                mock.patch.object(main_mod, "QTimer"), \
                 mock.patch.object(main_mod, "expected_capture", return_value="window"), \
                 mock.patch.object(main_mod.Services, "load", return_value=None), \
                 mock.patch.object(si, "listen", side_effect=fake_listen), \

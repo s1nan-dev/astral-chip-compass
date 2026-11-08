@@ -10,7 +10,7 @@
 下载线程是真的线程（同悬浮窗的 run_background），结果经信号排队回到界面线程。本机是旧版本（几个文件不一样，另有新版本里
 没有的旧文件和用户数据）。
 - 有文件清单：查到新版本（清单的三项都认出来，「更新」写成最多约多少）→ 点「更新」→ 比对本机的文件 → 只按段取变了的那几个
-  → 最后核对 → 下好；没点「重启更新」、下次启动再查到这一版时直接是「重启更新」，不再下载；
+  → 最后核对 → 下好；这次运行没换上（例如没等到自动重启就退出了）、下次启动再查到这一版时直接是「重启更新」，不再下载；
 - 没有清单（加清单以前的 latest.json，GitHub 上也没有清单附件）：下整包 → 解压核对 → 下好；
 - 有清单、镜像不认 Range：换 GitHub 的地址（跳到文件服务器，Range 头照样带着）按段取，照样只下变了的那几个；
 - 有清单、两边都不认 Range：比对以后改下整包（记一条错误记录，不提示），照样下好；
@@ -64,7 +64,6 @@ API_PATH = f"/repos{REPO}/releases/latest"  # update.GITHUB_API 的路径
 DOWNLOAD_PATH = f"{REPO}/releases/download/"  # 发布页附件的地址前缀（update.DOWNLOAD_PREFIX）的路径
 PAGE = f"{app_version.SOURCE_URL}/releases/tag/v{NEW_VERSION}"
 NOTES_TEXT = "这一版改了什么\n- 改了一处\n"
-TODAY = "2030-01-20"  # 测试里的「今天」（本地日期）
 MB = W.MB
 WAIT_MS = 30000
 PROXY_VARS = ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy")
@@ -295,7 +294,7 @@ class Ui(QObject):
             session=session, lock=self.lock, run_background=lambda fn: threading.Thread(target=fn, daemon=True).start(),
             later=lambda ms, fn: None, refresh=self._refresh, update_settings=lambda: None,
             trace_user=lambda action, **data: None, quit_app=lambda: self.quits.append(True),
-            open_url=lambda url: False, frozen=lambda: True, today=lambda: TODAY, root=lambda: root)
+            open_url=lambda url: False, frozen=lambda: True, root=lambda: root)
         self.ctl.phased.connect(self.on_phase)
         self.ctl.progressed.connect(self.on_progress)
         test.addCleanup(self.ctl.shutdown, 10)
@@ -457,7 +456,10 @@ class FlowCase(unittest.TestCase):
 
     CHECKING = ("checking", None, W.UPDATE_CHECKING)
     PREPARING = ("preparing", W.UPDATE_PREPARING.format(version=NEW_VERSION), W.UPDATE_PREPARING.format(version=NEW_VERSION))
-    READY = ("ready", W.UPDATE_READY.format(version=NEW_VERSION), W.UPDATE_READY_NOTE.format(version=NEW_VERSION))
+    # 点了「更新」下好的：在对局外，提示马上重启（这次运行不再等玩家点）
+    READY = ("ready", W.UPDATE_RESTARTING.format(version=NEW_VERSION), W.UPDATE_RESTARTING.format(version=NEW_VERSION))
+    # 上次已下好、这次检查时直接是下好了的：要点「重启更新」才换
+    READY_PREPARED = ("ready", W.UPDATE_READY.format(version=NEW_VERSION), W.UPDATE_READY_NOTE.format(version=NEW_VERSION))
 
     def assert_counted(self, calls: list[tuple[int, int]], total: int) -> None:
         """界面收到的一段进度：从 (0, 总数) 开始，只增不减，总数不变、没超过，最后等于总数。"""
@@ -513,12 +515,13 @@ class DeltaFlowTest(FlowCase):
         self.assertLess(fetched, need + 32 * 1024)
         self.assertEqual(self.github.seen, [(API_PATH, None)])
         self.assertEqual(self.objects.seen, [])
-        # 没点「重启更新」，下次启动再查到这一版：已经下好、核对过（换版本的模块认），直接是「重启更新」，不再下载
+        # 这次运行没换上（没等到自动重启就退出了），下次启动再查到这一版：已经下好、核对过（换版本的模块认），直接是
+        # 「重启更新」，不再下载
         self.mirror.seen.clear()
         later = self.ui()
         with mock.patch.object(app_paths, "is_frozen", return_value=True):
             self.assertEqual(later.check(), "ready")
-        self.assertEqual(changes(later.shown), [self.CHECKING, self.READY])
+        self.assertEqual(changes(later.shown), [self.CHECKING, self.READY_PREPARED])
         self.assertEqual([path for path, _ in self.mirror.seen], ["/" + upload_r2.LATEST_JSON_KEY])
         self.assertEqual(self.left(), sorted([update.NEW_DIR, update.READY_FILE]))
 

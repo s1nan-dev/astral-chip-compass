@@ -8,6 +8,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeySequence
 
+from .. import lang
 from ..hotkey import MODIFIER_KEYS, hotkey_text, same_hotkey
 from ..settings import HOTKEY_BAD_KEY, HOTKEY_SAME, HOTKEY_SAVED, HOTKEY_SETTING, HOTKEY_UNSET
 from .wording import BLOCKED_HOTKEY, HOTKEY_CHANGE_FAILED
@@ -67,7 +68,7 @@ class HotkeyController:
             return
         if self.activity() not in (None, "game", "own"):
             return  # 热键只在游戏前台时登记；万一排队的消息在切出后才到，不识别
-        self.busy = f"已按下 {self.hotkey}，正在识别…"
+        self.busy = lang.t(f"已按下 {self.hotkey}，正在识别…")
         self.say(self.busy)
         self.refresh()
         self.request_capture()
@@ -135,7 +136,8 @@ class HotkeyController:
             return
         text = hotkey_text(key, modifiers, native_vk)
         if text is None:
-            self.feedback(HOTKEY_BAD_KEY.format(name=QKeySequence(key).toString() or "该键"))
+            # 说明处照显示用的写法存（同 on_hotkey_change_failed）：Qt 给不出键名时的「该键」也按界面语言转
+            self.feedback(HOTKEY_BAD_KEY.format(name=QKeySequence(key).toString() or lang.t("该键")))
             return
         self.end_capture()
         if self.hotkey_ok and self.hotkey and same_hotkey(text, self.hotkey):
@@ -158,7 +160,9 @@ class HotkeyController:
         不在前台时标题栏下方提示（HOTKEY_CHANGE_FAILED）。
 
         active：设置窗口是否在前台，None 时按实际情况（测试和预览里窗口不在前台，用它指定）。
+        reason 是热键线程给的简体原句，在这里按界面语言转一次（设置窗口的说明处、一次性提示都照显示用的写法存）。
         """
+        reason = lang.t(reason)
         if self.settings_active() if active is None else active:
             self.note = reason
             self.start_capture(retry=True)

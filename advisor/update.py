@@ -5,7 +5,7 @@
 换上新版本的后一半在 advisor/update_apply.py（换版本程序）：它只认这里备好的 update\\new 和 ready.json（见「备好」），这两样的
 位置和格式是新旧两版之间固定下来的，不随版本改。
 
-  check(current, skipped)          → CheckResult：问下载镜像、GitHub（问哪几边见「两个来源」），按「认哪一版」定下最新的那一版；
+  check(current, skipped, manual)  → CheckResult：问下载镜像、GitHub（问哪几边见「两个来源」），按「认哪一版」定下最新的那一版；
                                      比 current 新、又不是跳过的那个版本时 release 是它
   sources(source_url)              → 由源代码地址推出问哪几边：(用不用下载镜像, GitHub 的接口地址)
   is_newer(a, b)                   → a 比 b 新（版本号按数字逐段比）
@@ -19,6 +19,9 @@
 root 是用户看到的程序文件夹（paths.program_folder()：解压出来的 AstralChipCompass 文件夹，启动程序拾星助手.exe 和 app 在这一层）。
 本模块只建、只删 <root>\\update\\ 里的东西。出错抛 UpdateError，str(e) 是给用户看的白话原因（写不进、空间不够、连不上、
 核对不上）；停止时抛 winhttp.Stopped。
+
+记录：查更新（check）和下载（preflight、download、_delta、obtain）各写几行进程序目录的 logs\\update.log（update_log.note），
+给诊断包查问题用；谁、写什么见 docs/软件维护说明.md 的「更新记录」。
 
 两个来源
 - 下载镜像（Cloudflare R2，MIRROR_BASE）：版本文件 latest.json（LATEST_JSON，各字段的要求见 _mirror_release）和发行包
@@ -128,7 +131,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 
-from . import errors, fileio, paths, update_files, winhttp
+from . import errors, fileio, paths, update_files, update_log, winhttp
 from .version import APP_NAME, SHORT_NAME, SOURCE_URL, VERSION
 
 MIRROR_BASE = "https://dl.astral-chip-compass.com/"
@@ -623,14 +626,18 @@ def _both_files(mirror: Release, github: _Found) -> str:
     return f"{github.version}\n下载镜像：清单 {mirror.files_size} 字节，SHA-256 {mirror.files_sha256}\n{theirs}"
 
 
-def check(current: str, skipped: str | None = None, *, session=None, stop=None) -> CheckResult:
+def check(current: str, skipped: str | None = None, *, session=None, stop=None, manual: bool = False) -> CheckResult:
     """问下载镜像、GitHub（先镜像后 GitHub），按模块说明「认哪一版」「认清单」定下最新的那一版和它的清单。镜像只在 USE_MIRROR
     时问，GitHub 只在有 GITHUB_API 时问（模块说明「两个来源」），不问的一边当没拿到；两边都不问时不联网（会话也不建），problem
     是 NO_SOURCE。认下的版本比 current 新、又不是 skipped（跳过的版本，空串、None 都表示没有）时 CheckResult.release 是它。
 
     session：winhttp.Session 这样有 stream 的对象（测试换上假的）；不给时自己建一个、用完关掉，只在调用的这个线程里用。
-    stop（threading.Event，可以不给）置位时抛 winhttp.Stopped。联网出错不抛，写进结果。"""
+    stop（threading.Event，可以不给）置位时抛 winhttp.Stopped。联网出错不抛，写进结果。manual：手动「检查更新」为 True，
+    自动检查为 False；只影响 update.log 里的说法。"""
+    started = time.monotonic()
+    update_log.note("查更新", f"{'手动检查' if manual else '自动检查'}（当前 {current}）")
     if not USE_MIRROR and not GITHUB_API:
+        update_log.note("查更新", f"没有设置查更新的地址，不查（用时 {_elapsed(started)}）")
         return CheckResult(None, None, False, False, NO_SOURCE)
     own = session is None
     mirror = github = None
@@ -640,25 +647,56 @@ def check(current: str, skipped: str | None = None, *, session=None, stop=None) 
             try:
                 session = winhttp.Session()
             except OSError as e:  # 读不了系统的证书、代理设置不对等：WinHttpOpen 失败
-                return CheckResult(None, None, False, False, f"建不了联网会话（{_why(e)}），查不了新版本。")
+                problem = f"建不了联网会话（{_why(e)}），查不了新版本。"
+                update_log.note("查更新", f"没能检查：{problem}（用时 {_elapsed(started)}）")
+                return CheckResult(None, None, False, False, problem)
         if USE_MIRROR:
             mirror, why = _ask_mirror(session, stop)
             if mirror is None:
                 missed.append(f"下载镜像：{why}")
+                update_log.note("查更新", f"下载镜像：没拿到（{why}）")
+            else:
+                update_log.note("查更新", f"下载镜像：{mirror.version}")
         if GITHUB_API:
             github, why = _ask_github(session, stop)
             if github is None:
                 missed.append(f"GitHub：{why}")
+                update_log.note("查更新", f"GitHub：没拿到（{why}）")
+            else:
+                update_log.note("查更新", f"GitHub：{github.version}")
     finally:
         if own and session is not None:
             session.close()
     if mirror is None and github is None:
-        return CheckResult(None, None, False, False, f"查不到版本信息（{'；'.join(missed)}）。请检查网络连接，稍后再试。")
+        problem = f"查不到版本信息（{'；'.join(missed)}）。请检查网络连接，稍后再试。"
+        update_log.note("查更新", f"两边都没拿到，没有认下版本：{problem}（用时 {_elapsed(started)}）")
+        return CheckResult(None, None, False, False, problem)
     found = _decide(mirror, github)
     if found is None:
+        update_log.note("查更新", f"没有认下版本：{NO_DIGEST}（用时 {_elapsed(started)}）")
         return CheckResult(None, None, True, mirror is not None, NO_DIGEST)
+    update_log.note("查更新", f"认下 {found.version}（{_accepted(mirror, github)}）")
     newer = is_newer(found.version, current) and not _same_version(found.version, skipped)
+    if not is_newer(found.version, current):
+        update_log.note("查更新", f"{found.version} 不比当前 {current} 新，不提示更新（用时 {_elapsed(started)}）")
+    elif _same_version(found.version, skipped):
+        update_log.note("查更新", f"{found.version} 是跳过的版本，不提示更新（用时 {_elapsed(started)}）")
+    else:
+        update_log.note("查更新", f"有新版本 {found.version}（用时 {_elapsed(started)}）")
     return CheckResult(found if newer else None, found.version, True, mirror is not None, None)
+
+
+def _accepted(mirror: Release | None, github: _Found | None) -> str:
+    """记录里这一版是怎么认下的（check 用；两边都拿到了时看版本号、大小、SHA-256 同不同）。"""
+    if github is None:
+        return "只拿到下载镜像"
+    if mirror is None:
+        return "只拿到 GitHub"
+    if github.sha256 is None:
+        return "两边版本号和大小一致，SHA-256 用下载镜像的"
+    if (mirror.version, mirror.size, mirror.sha256) == (github.version, github.size, github.sha256):
+        return "两边一致"
+    return "两边对不上，只认 GitHub 的"
 
 
 # ---------------------------------------------------------------- 开始下载之前
@@ -681,6 +719,7 @@ def preflight(root: Path) -> str | None:
     existed = os.path.lexists(folder)
     unwritable = paths.unwritable_dirs([folder])
     if unwritable:
+        update_log.note("下载", f"下载前检查没过：程序文件夹写不进（{unwritable[0][1]}）")
         return (f"程序文件夹写不进（{unwritable[0][1]}），没法自动更新：可能是受保护的文件夹，或被杀毒软件拦了。"
                 "可以把拾星助手整个文件夹挪到别处（例如 D:\\拾星助手）后再试，或手动下载新版本。")
     free = free_space(Path(root))
@@ -690,6 +729,7 @@ def preflight(root: Path) -> str | None:
                 folder.rmdir()
             except OSError:
                 pass  # 删不掉（里面有东西、被占着）就留着，是空的或只有更新自己的东西
+        update_log.note("下载", f"下载前检查没过：磁盘剩余空间不到 {FREE_SPACE >> 20} MB（还剩 {free >> 20} MB）")
         return (f"程序文件夹所在的磁盘剩余空间不到 {FREE_SPACE >> 20} MB（还剩 {free >> 20} MB），没法下载新版本。"
                 "请清理磁盘后再试，或手动下载新版本。")
     return None
@@ -777,10 +817,36 @@ def _source(url: str) -> str:
     return host or url
 
 
-def _fetch_to(session, url: str, part: Path, release: Release, progress, stop) -> str | None:
-    """从 url 下到 part（已有的覆盖）。大小和 SHA-256 都对上时返回 None（已刷盘、关好）；联网出错、大小或 SHA-256 不对时删掉
-    part、返回白话原因（换下一个地址再试）。写不进时抛 UpdateError（换地址也一样），停止时抛 winhttp.Stopped（part 由调用方
-    删）。"""
+def _log_source(url: str) -> str:
+    """记录里的来源名：只写「下载镜像」「GitHub」；别的地址（测试的本机地址、以后的别的镜像）写「其他地址」，
+    不把 IP 形状的主机名写进去。"""
+    source = _source(url)
+    return source if source in ("下载镜像", "GitHub") else "其他地址"
+
+
+def _log_name(url: str) -> str:
+    """记录里的文件名：地址只到文件名，不带查询串、目录和主机。"""
+    return Path(urllib.parse.urlsplit(url).path).name or "压缩包"
+
+
+def _elapsed(started: float) -> str:
+    """从 started（time.monotonic）到现在多少秒，记录里用。"""
+    return f"{max(time.monotonic() - started, 0.0):.1f} 秒"
+
+
+def _brief(error: BaseException) -> str:
+    """记录里的出错原因：差分这条路上认得的错照原话，别的带上类型，不带调用栈。"""
+    if isinstance(error, (update_files.DeltaError, UpdateError)):
+        return str(error)
+    text = str(error).strip()
+    return f"{type(error).__name__}: {text}" if text else type(error).__name__
+
+
+def _fetch_to(session, url: str, part: Path, release: Release, progress, stop) -> tuple[str | None, int]:
+    """从 url 下到 part（已有的覆盖）。大小和 SHA-256 都对上时返回 (None, 下到的字节数)（已刷盘、关好）；联网出错、大小或
+    SHA-256 不对时删掉 part、返回 (白话原因, 下到的字节数)（换下一个地址再试）。写不进时抛 UpdateError（换地址也一样），
+    停止时抛 winhttp.Stopped（part 由调用方删）。"""
+    started = time.monotonic()
     hasher = hashlib.sha256()
     got = reported = 0
 
@@ -822,9 +888,13 @@ def _fetch_to(session, url: str, part: Path, release: Release, progress, stop) -
         raise UpdateError(_write_problem(e.error)) from e.error
     except OSError as e:  # 建、刷、关 .part 时写不进
         raise UpdateError(_write_problem(e)) from e
-    if why is not None:
+    source = f"{_log_source(url)}：{_log_name(url)}，{got} 字节"
+    if why is None:
+        update_log.note("下载", f"{source}，用时 {_elapsed(started)}")
+    else:
+        update_log.note("下载", f"{source}，没成（{why}），用时 {_elapsed(started)}")
         _discard(part)
-    return why
+    return why, got
 
 
 def download(release: Release, root: Path, *, progress=None, stop=None, session=None) -> Path:
@@ -832,11 +902,14 @@ def download(release: Release, root: Path, *, progress=None, stop=None, session=
 
     progress(已下字节, 总字节) 在调用的这个线程里调用；stop（threading.Event）置位时删掉 .part，抛 winhttp.Stopped。session 同
     check：不给时自己建、用完关掉。都下不成、写不进时抛 UpdateError。"""
+    started = time.monotonic()
     if _stopped(stop):
         raise winhttp.Stopped
     if not isinstance(release.version, str) or not _VERSION.fullmatch(release.version):  # 版本号要拼进文件名
+        update_log.note("下载", f"版本号不对（{_shown(release.version)}），没法下载")
         raise UpdateError(f"新版本的版本号不对（{_shown(release.version)}），没法下载。")
     if not release.urls:
+        update_log.note("下载", "没有新版本的下载地址，没法下载")
         raise UpdateError("没有新版本的下载地址，没法下载。")
     folder = Path(root) / UPDATE_DIR
     target = folder / _zip_name(release.version)
@@ -844,8 +917,10 @@ def download(release: Release, root: Path, *, progress=None, stop=None, session=
     try:
         folder.mkdir(exist_ok=True)
     except OSError as e:
+        update_log.note("下载", f"存不下新版本（{_detail(e)}），没法下载")
         raise UpdateError(_write_problem(e)) from e
     if _complete(target, release):
+        update_log.note("下载", f"{release.version}：已有下载好的整包，直接用")
         return target
     own = session is None
     reasons = []
@@ -858,7 +933,7 @@ def download(release: Release, root: Path, *, progress=None, stop=None, session=
         for url in release.urls:
             if _stopped(stop):
                 raise winhttp.Stopped
-            why = _fetch_to(session, url, part, release, progress, stop)
+            why, _got = _fetch_to(session, url, part, release, progress, stop)
             if why is None:
                 if _stopped(stop):  # 收齐的那一刻停下的：照样作废
                     raise winhttp.Stopped
@@ -866,14 +941,20 @@ def download(release: Release, root: Path, *, progress=None, stop=None, session=
                     _retrying(lambda: os.replace(part, target))
                 except OSError as e:
                     raise UpdateError(_write_problem(e)) from e
+                update_log.note("下载", f"{release.version}：整包下载好（{release.size} 字节，用时 {_elapsed(started)}）")
                 return target
             reasons.append(f"{_source(url)}：{why}")
-    except BaseException:
+    except BaseException as e:
         _discard(part)
+        if isinstance(e, UpdateError):
+            update_log.note("下载", f"{release.version}：整包下载失败（{e}），用时 {_elapsed(started)}")
+        elif isinstance(e, winhttp.Stopped):
+            update_log.note("下载", f"{release.version}：整包下载停下了，用时 {_elapsed(started)}")
         raise
     finally:
         if own and session is not None:
             session.close()
+    update_log.note("下载", f"{release.version}：整包没下到，用时 {_elapsed(started)}")
     # 界面上这一句前面已经有「新版本下载失败：」（wording.UPDATE_FAILED），这里不再写一遍
     raise UpdateError(f"下不到压缩包（{'；'.join(reasons)}）。请检查网络连接，稍后再试，或手动下载新版本。")
 
@@ -1221,13 +1302,18 @@ class _Ranges:
         self.received = received
         self.index = 0  # 现在用 release.urls 里的第几个
         self.reasons: list[str] = []
+        self.bytes = 0  # 实际取到的压缩字节（记录里写「实际下了多少」用）
+        self.used = ""  # 取成功用的地址（记录里写来源用）
 
     def __call__(self, start: int, end: int) -> bytes:
         urls = self.release.urls
         while self.index < len(urls):
             url = urls[self.index]
             try:
-                return _range(self.session, url, start, end, self.release.size, self.stop, self.received)
+                data = _range(self.session, url, start, end, self.release.size, self.stop, self.received)
+                self.bytes += len(data)
+                self.used = url
+                return data
             except _NoRange as e:
                 why = str(e)
             except winhttp.TooLong:
@@ -1235,6 +1321,7 @@ class _Ranges:
             except OSError as e:
                 why = _why(e)
             self.reasons.append(f"{_source(url)}：{why}")
+            update_log.note("下载", f"{_log_source(url)}：{_log_name(url)}，按段取没成（{why}），换下一个地址")
             self.index += 1
         raise update_files.DeltaError(f"按段取整包没成（{'；'.join(self.reasons) or '没有地址'}）")
 
@@ -1292,6 +1379,7 @@ def _delta(release: Release, root: Path, session, progress, stop, phase) -> bool
     （原因经 paths.scrub_paths），返回 False，由调用方改下整包；停止时删掉 new.part，抛 winhttp.Stopped。"""
     folder = root / UPDATE_DIR
     part = folder / NEW_PART
+    started = time.monotonic()
     _tell(phase, "compare", None)
     try:
         _begin(folder)
@@ -1306,6 +1394,9 @@ def _delta(release: Release, root: Path, session, progress, stop, phase) -> bool
         _tell(phase, "prepare", None)
         _flush_tree(part)
         _finish(part, release, folder)
+        source = _log_source(fetch.used) if fetch.used else "本机文件"
+        update_log.note("下载", f"{release.version}：只下变了的文件，来源 {source}，清单 {len(data)} 字节，"
+                              f"要取 {meter.total or 0} 字节，实际取 {fetch.bytes} 字节，用时 {_elapsed(started)}")
         return True
     except winhttp.Stopped:
         _remove_quietly(part)
@@ -1317,6 +1408,7 @@ def _delta(release: Release, root: Path, session, progress, stop, phase) -> bool
         else:  # 想不到的错：连同出错的位置记下来
             why = "".join(traceback.format_exception(e)).rstrip()
         errors.log_error(DELTA_FAILED, paths.scrub_paths(f"{release.version}：{why}"))
+        update_log.note("下载", f"{release.version}：只下变了的文件没成（{_brief(e)}），改下整包，用时 {_elapsed(started)}")
         return False
     except BaseException:
         _remove_quietly(part)
@@ -1334,25 +1426,45 @@ def obtain(release: Release, root: Path, *, progress=None, stop=None, session=No
     progress(已下, 总数) 在 "delta"、"full" 之后各从 0 数起；stop（threading.Event）置位时抛 winhttp.Stopped，不留下 .part、
     new.part；session 同 download：不给时自己建、用完关掉。整包这条路的错抛 UpdateError（str 是给用户看的白话原因）；差分
     走不通只写错误记录，不往外抛。"""
+    started = time.monotonic()
     if _stopped(stop):
         raise winhttp.Stopped
     if not isinstance(release.version, str) or not _VERSION.fullmatch(release.version):  # 要拼进文件名、和 exe 的比
+        update_log.note("下载", f"版本号不对（{_shown(release.version)}），没法下载")
         raise UpdateError(f"新版本的版本号不对（{_shown(release.version)}），没法下载。")
     root = Path(root)
     own = session is None
+    delta = release.files_sha256 is not None and bool(release.files_urls)
+    update_log.note("下载", f"{release.version}：有文件清单，先试只下变了的文件" if delta
+                    else f"{release.version}：没有文件清单，下整包（{release.size} 字节）")
+    stage = "download"
     try:
         if own:
             try:
                 session = winhttp.Session()
             except OSError as e:
                 raise UpdateError(f"建不了联网会话（{_why(e)}），没法下载新版本。") from e
-        if release.files_sha256 is not None and release.files_urls:
+        if delta:
             if _delta(release, root, session, progress, stop, phase):
+                update_log.note("下载", f"{release.version}：已备好（差分，用时 {_elapsed(started)}）")
                 return
+            update_log.note("下载", f"{release.version}：改下整包（{release.size} 字节）")
         _tell(phase, "full", release.size)
         zip_path = download(release, root, progress=progress, stop=stop, session=session)
+        stage = "prepare"
         _tell(phase, "prepare", None)
         prepare(zip_path, release, root)
+    except winhttp.Stopped:
+        update_log.note("下载", f"{release.version}：下载停下了，用时 {_elapsed(started)}")
+        raise
+    except UpdateError as e:
+        update_log.note("下载", f"{release.version}：{'核对、解压' if stage == 'prepare' else '下载'}失败（{e}），"
+                              f"用时 {_elapsed(started)}")
+        raise
+    except BaseException as e:
+        update_log.note("下载", f"{release.version}：下载出错（{_brief(e)}），用时 {_elapsed(started)}")
+        raise
     finally:
         if own and session is not None:
             session.close()
+    update_log.note("下载", f"{release.version}：已备好（整包，用时 {_elapsed(started)}）")

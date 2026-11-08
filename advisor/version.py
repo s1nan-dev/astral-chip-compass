@@ -13,7 +13,7 @@ from pathlib import Path
 
 from . import paths
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 APP_NAME = "拾星助手"  # 界面上的名字；也是发行版根目录启动程序的文件名（tools/build_release.py 的 LAUNCHER_EXE）
 FULL_NAME = "拾星助手（《星引擎Party/吉星派对》筹码推荐工具）"
 # 英文名：exe 版本信息里的产品名和文件说明；去掉空格是个人目录和发行版文件夹的名字（paths.FOLDER_NAME）
@@ -32,8 +32,8 @@ FREE_NOTICE = ("拾星助手是免费的开源软件（AGPL-3.0）。下载镜�
                "源代码和发布页面：https://github.com/s1nan-dev/astral-chip-compass 。付费获得的版本均非官方发布。")
 # 免责声明的八条（标题, 正文）和结尾一句：「关于」窗口的「免责声明」一节、THIRD_PARTY_NOTICES.md 第五节、使用说明的「声明」
 # 一节同一套写法（两份 Markdown 文件里标题加粗、网址加尖括号）。第 7 条「隐私」后面各接一句指向各自的隐私说明，不在这里。
-# 第 6 条写官方下载的两处（同 FREE_NOTICE）；第 7 条写联网的两项（下载识别图片、检查和下载新版本：advisor/update.py），
-# 下载镜像只写主机名、不写成网址（不做成链接）
+# 第 6 条写官方下载的两处（同 FREE_NOTICE）；第 7 条写联网的三项（下载识别图片、检查和下载新版本、发送对局报告：后者见
+# advisor/game_report.py 和设置里的「帮助拾星助手改善推荐准确度」），下载镜像只写主机名、不写成网址（不做成链接）
 DISCLAIMER_ITEMS: tuple[tuple[str, str], ...] = (
     ("非官方工具", "拾星助手是玩家自制的免费开源工具（AGPL-3.0），与《吉星派对》的开发商、发行商、运营方，"
                 "以及吉星派对 WIKI、Astral Party Wiki 均无关联，没有得到它们的授权或认可。"
@@ -50,8 +50,10 @@ DISCLAIMER_ITEMS: tuple[tuple[str, str], ...] = (
     ("获取渠道", "拾星助手免费发布，官方下载只有两处：下载镜像 https://dl.astral-chip-compass.com/ACC-latest.zip ，"
                f"GitHub 上的发布页面 {SOURCE_URL}/releases ；源代码在 {SOURCE_URL} 。"
                "付费获得的版本、来路不明的修改版都不是官方发布的，可能被植入恶意程序，请只从上面的地址下载。"),
-    ("隐私", "截图只在本机识别，不上传。联网只有两项：从吉星派对 WIKI 下载识别用的图片；检查和下载新版本"
-           "（连接下载镜像 dl.astral-chip-compass.com 和 GitHub，启动时的自动检查可以在「拾星助手设置」中关掉）。"),
+    ("隐私", "截图只在本机识别，不上传。联网有三项：从吉星派对 WIKI 下载识别用的图片；检查和下载新版本"
+           "（连接下载镜像 dl.astral-chip-compass.com 和 GitHub，启动时的自动检查可以在「拾星助手设置」中关掉）；"
+           "发送对局报告（筹码三选一的局面、推荐和您的选择等，不含截图和玩家名字，用于改善推荐准确度；默认开启，"
+           "可以在「拾星助手设置」最下面关掉）。"),
     ("联系", "游戏方如对本工具有异议，请通过项目主页联系作者。"),
 )
 DISCLAIMER_CLOSING = "下载、安装或使用本工具，即表示您已阅读并同意本声明。"
@@ -68,11 +70,21 @@ USER_TEMPLATE_DIR = IMAGES_DIR + "\\heroes\\user"
 # logs；{folder} 填 paths.FOLDER_NAME）。使用说明的「隐私」一节照抄发行版的写法。这句是给用发行版的玩家看的，只写发行版的
 # 保存位置；开发版把设置和筹码方案存在项目目录，写在 docs/软件维护说明.md 里（界面上不写给开发者看的内容）
 PRIVACY_STORAGE = ("推荐日志（{logs} 文件夹）保存在程序目录下；设置和筹码方案保存在 %APPDATA%\\{folder} 中。"
-                   "本工具不会把筹码方案发送到任何地方，只在您点击「复制到剪贴板」时把方案复制到剪贴板。")
+                   "除了对局报告里带的分享码（不含方案名称，见下面的「对局报告」），本工具不会把筹码方案发送到任何地方，"
+                   "只在您点击「复制到剪贴板」时把方案复制到剪贴板。")
 # 「关于」窗口隐私说明里筹码三选一另留在内存里的两帧（识别流程的 pick_shot、covered_shot，导出诊断时另存）：使用说明的「隐私」
 # 一节照抄（那里不写「您」：{you} 填空）
 PRIVACY_SELECT_SHOTS = ("筹码三选一里记下选中了哪个筹码时用的那一帧、筹码名被临时遮挡而没有采用的那一帧，同样只在内存里"
                         "各留最近一次，{you}点击「导出诊断」时一并写进诊断包。")
+# 「关于」窗口隐私说明里对局中途像一局打完时的那一帧（识别流程的 finish_shot，缩小后留在内存里，导出诊断时另存）：使用说明的
+# 「隐私」一节照抄（同 PRIVACY_SELECT_SHOTS，{you} 填空）
+PRIVACY_FINISH_SHOT = ("对局中途出现像一局打完时的颜色（通关画面的红底、打完时那条蓝色斜带）、这一局却接着打下去时，那一帧"
+                       "缩小后同样只在内存里留最近一次，{you}点击「导出诊断」时一并写进诊断包。")
+# 「关于」窗口隐私说明里每分钟一条的处理器占用记录存在哪（advisor/usage.py；{logs} 同 PRIVACY_STORAGE）：使用说明的「隐私」一节
+# 照抄发行版的写法
+PRIVACY_USAGE = ("处理器占用记录（{logs}\\usage.jsonl）：每分钟一条拾星助手自己的处理器占用（只有百分比，没有别的程序的信息）、"
+                 "当时的识别状态和这台电脑的电源状态（插着电源还是用电池、电量、节电模式、电源模式和电源计划），只保留最近 12 小时，"
+                 "用于导出诊断，可以随时删除这个文件。")
 
 # 发行版里实际带上的第三方组件：(名称, 版本, 许可证, LICENSES 目录下的许可证文件)。
 # tools/build_release.py 打包后会核对：每个文件都在 LICENSES/ 里，且发行版里的库都在这张表上。
@@ -89,14 +101,19 @@ THIRD_PARTY: tuple[tuple[str, str, str, str], ...] = (
     ("ONNX Runtime", "1.30.0", "MIT（及附带组件的许可证）", "onnxruntime.txt"),
     ("RapidOCR", "3.9.2", "Apache-2.0（随发行版的是按 3.9.2 修改的精简版 rapidocr_lite）", "RapidOCR.txt"),
     ("PaddleOCR 文字识别模型（PP-OCRv6 检测与识别、方向分类）", "随 RapidOCR 3.9.2", "Apache-2.0", "PaddleOCR-models.txt"),
+    ("OpenCC 简体转繁体词典（data/zh_hant.json）", "1.4.2", "Apache-2.0", "OpenCC.txt"),
     ("Apache License 2.0 全文", "—", "Apache-2.0", "Apache-2.0.txt"),
     ("NumPy", "2.5.3", "BSD-3-Clause（及附带组件 LAPACK、libdivide、Highway、x86-simd-sort、掩码数组 numpy.ma 等的许可证）", "NumPy.txt"),
     ("python-mss", "10.2.0", "MIT", "mss.txt"),
     ("pyclipper / Clipper", "1.4.0", "MIT / BSL-1.0", "pyclipper.txt"),
-    # 界面标题用的字体：思源黑体简体中文 Heavy、Bold 按界面用到的字做的子集（tools/make_font_subset.py），按许可证对保留
-    # 字体名的要求改了字体名
+    # 界面标题用的字体：思源黑体简体中文、繁体中文的 Heavy、Bold 按界面用到的字做的子集（tools/make_font_subset.py），
+    # 按许可证对保留字体名的要求改了字体名（简体、繁体的子集字体名相同，只按界面语言装不同的文件）
     ("思源黑体 Heavy（按界面用到的字做的子集，字体名改为 ACC Heading）", "2.005", "SIL OFL 1.1", "SourceHanSans-OFL.txt"),
     ("思源黑体 Bold（按界面用到的字做的子集，字体名改为 ACC Title）", "2.005", "SIL OFL 1.1", "SourceHanSans-OFL.txt"),
+    ("思源黑体繁体中文 Heavy（按界面用到的字做的子集，字体名改为 ACC Heading）", "2.005", "SIL OFL 1.1",
+     "SourceHanSans-OFL.txt"),
+    ("思源黑体繁体中文 Bold（按界面用到的字做的子集，字体名改为 ACC Title）", "2.005", "SIL OFL 1.1",
+     "SourceHanSans-OFL.txt"),
 )
 
 
@@ -278,6 +295,7 @@ def about_sections() -> list[tuple[str, str]]:
     data, notices, licenses = paths.shown("data"), paths.shown("THIRD_PARTY_NOTICES.md"), paths.shown("LICENSES")
     own_license = f"{licenses} 文件夹" if paths.is_frozen() else "LICENSE 文件"
     games, reports = paths.shown("logs\\games"), paths.shown("reports")
+    upload = paths.shown("logs\\upload")
     onnx_notes = paths.shown("LICENSES\\onnxruntime.txt")
     images, templates = IMAGES_DIR.format(folder=paths.FOLDER_NAME), USER_TEMPLATE_DIR.format(folder=paths.FOLDER_NAME)
     return [
@@ -321,22 +339,41 @@ def about_sections() -> list[tuple[str, str]]:
             "除此以外，截图只在内存中识别，不会自动保存（筹码三选一有候选筹码没识别出来时，最近一次的那一帧也只留在内存里，"
             "您点击「导出诊断」时才写进诊断包）。\n"
             f"{PRIVACY_SELECT_SHOTS.format(you='您')}\n"
+            f"{PRIVACY_FINISH_SHOT.format(you='您')}\n"
             f"{PRIVACY_STORAGE.format(logs=paths.shown('logs'), folder=paths.FOLDER_NAME)}"
-            f"识别记录（{games} 文件夹）：对局中识别到的读数和判定（文字和数字，不含截图）按局记在本机，用于导出诊断，"
-            "只保留最近 10 个记录文件（约 5 局）；其中的玩家名字记为不可还原的代号；可以随时删除这个文件夹。"
+            f"识别记录（{games} 文件夹）：对局中识别到的读数和判定（文字和数字，不含截图）按局记在本机，用于导出诊断；"
+            "其中记着找到游戏窗口时对上的是哪个客户端（只有「AstralParty_CN」「AstralParty_INT」「吉星派对」三个固定"
+            "标题之一），不读、不记别的窗口的标题；只保留最近 10 个记录文件（约 5 局）；其中的玩家名字记为不可还原的代号；"
+            "可以随时删除这个文件夹。"
+            f"{PRIVACY_USAGE.format(logs=paths.shown('logs'))}"
             f"诊断包（{reports} 文件夹）在您点击「导出诊断」时生成，"
             "包含当时的游戏截图（这次运行中筹码三选一有候选筹码没识别出来时，另带最近一次的那一帧截图）、"
-            "对局和界面状态、本局和上一局的识别记录与推荐日志、推荐全文、设置和筹码方案文件，以及版本和系统信息、换版本的记录"
+            "对局和界面状态、本局和上一局的识别记录与推荐日志、识别记录里最近 12 小时的每分钟统计、推荐全文、设置和筹码方案文件、"
+            "错误记录和崩溃记录、"
+            "最近 12 小时每分钟的处理器占用和电源状态、导出时各线程的占用（只有百分比和拾星助手运行时的文件名、函数名，"
+            "没有别的程序的信息），"
+            "以及版本和系统信息、查更新、下载和换版本的记录"
             "（其中的用户目录和应用数据目录写作 %USERPROFILE%、%APPDATA%、%LOCALAPPDATA%，路径里的账户名写作 %USERNAME%，不含账户名）；您点击「撤销」新的一局的判定时，"
             "也会自动保存一份不含截图的诊断包（自动保存的只保留最近 20 份），用于查找误判的原因。本工具不会把这些文件发送到任何地方，"
             "是否发给他人由您决定。\n"
-            "本工具的联网行为有两项。一是首次运行或识别用的图片缺失时，从吉星派对 WIKI 下载这些图片"
+            "本工具的联网行为有三项。一是首次运行或识别用的图片缺失时，从吉星派对 WIKI 下载这些图片"
             "（悬浮窗上显示下载进度）；下载请求不包含任何个人信息。"
-            "二是检查和下载新版本：启动约 15 秒后在后台检查有没有新版本（一天最多一次），您点击「检查更新」时立即检查，"
+            "二是检查和下载新版本：每次启动约 15 秒后在后台检查有没有新版本，您点击「检查更新」时立即检查，"
             "点击「更新」后才下载。连接的是 Cloudflare 提供的下载镜像 dl.astral-chip-compass.com 和 GitHub"
             "（api.github.com 和发布页面上的附件）；请求中只带本工具的名字、版本号和源代码地址，不包含个人信息；"
             "和打开任何网页一样，对方的服务器能看到您的网络地址（IP 地址）。"
-            "在「拾星助手设置」中关掉「启动时自动检查更新」以后，只在您点击「检查更新」时检查。\n"
+            "在「拾星助手设置」中关掉「启动时自动检查更新」以后，只在您点击「检查更新」时检查。"
+            "三是发送对局报告：「拾星助手设置」最下面的「帮助拾星助手改善推荐准确度」开着时，会向官方发送对局筹码选择偏好，"
+            "本数据仅用于统计和改善拾星助手内置推荐引擎的准确度。\n"
+            "报告里有：每次筹码三选一的候选、推荐的排序和各项分数、您的选择（含刷新，以及按「查看筹码」面板改正的、补录的）；"
+            "当时的局面（角色、星级、轮次、地图、难度、队友的角色、畸变组件、已有筹码等）；您选的不是首推时，点的原因"
+            "（照顾队友、地图因素、推荐有误、想试别的玩法）；这一局用的筹码方案的分享码（不含方案名称，用来数分享出去的方案被用了多少局）；"
+            "这一局结束时的情况（怎么判断结束的、通关还是失败、地图、难度、轮次、星级、进度和已有筹码）；这一局开始的时间；"
+            "本工具的版本、"
+            "资料日期和游戏客户端（国服、国际服或 TapTap）；以及第一次开启时在这台电脑上随机生成的一个编号"
+            "（只用来数有多少人、多少局，和电脑的硬件无关）。报告里没有截图、玩家和队友的名字、电脑信息和文件路径。\n"
+            f"收到的报告只用来统计和改进推荐，单份报告不公开。还未发出的报告存在 {upload} 文件夹，每局一个文件。"
+            "关掉这一项以后，不再存、不再发，还没发出的报告和随机编号一并删掉。\n"
             "附带的文字识别组件 ONNX Runtime（微软）的官方构建默认开启遥测，本工具在开始识别前将其关闭。"
             "在 Windows 上，它在初始化时仍可能经系统的诊断数据通道记录一条初始化事件，"
             f"是否发送给微软取决于 Windows 的「诊断数据」设置（见 {onnx_notes} 所附的隐私说明）。",

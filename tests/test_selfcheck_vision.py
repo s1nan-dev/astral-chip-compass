@@ -37,12 +37,13 @@ SPECS = {spec["file"]: spec for spec in build_release.VISION_SAMPLES}
 # 打包自检选的对局画面样本：一张上读得最多（轮次、进度条、角色、自己的星数、星币、玩家列表都在这一张上）
 SAMPLE = "20261002_213811_hud_round7_own_turn_real.jpg"
 SAMPLE_HINTS = SPECS[SAMPLE]["hints"]
-# 覆盖清单要正好是这些项：read_frame 会记的每一项
-READOUT_KEYS = {"prefilter", "select", "reread", "pick", "pregame", "panel", "hud", "task_panel", "progress", "cap",
-                "hero", "stars", "coins", "players"}
+# 覆盖清单要正好是这些项：read_frame 会记的每一项，另加 pregame 里奖励页的星币数（reward_coins）
+READOUT_KEYS = {"prefilter", "select", "reread", "pick", "pregame", "panel", "hud", "round_crop", "task_panel", "progress",
+                "cap", "hero", "stars", "coins", "players", "finish", "victory", "game_over", "reward_coins"}
 
 HAVE_SAMPLES = samples.samples_ok("labels.json")
 SAMPLES_SKIP = samples.samples_reason("labels.json")
+COVERED_FILES = sorted(set(build_release.VISION_COVERAGE.values()))
 ASSETS_SKIP = "没有识别用的图片（assets/）"
 HAVE_ASSETS = (
     any(assets_dir("heroes").glob("UT_Hero_RolePhoto_*.png"))
@@ -61,8 +62,10 @@ def load(name: str) -> np.ndarray:
 def covered(got: dict, key: str) -> bool:
     """这一项读出真东西了吗：悬浮窗真拿到读数的那种，而且走到了这一项里真正干活的那几步（例如组队房间要读出勾选的
     难度：找到「选择难度」下面的难度名、量了字高、看了勾选框；星币要挑出数字、做了文字识别），不只是调了入口就返回。"""
+    if key == "reward_coins":
+        return ((got.get("pregame") or {}).get("screen") or {}).get("coins") is not None
     value = got.get(key)
-    if key in ("prefilter", "task_panel"):
+    if key in ("prefilter", "task_panel", "victory", "game_over"):
         return value is True
     if not value:
         return False
@@ -78,6 +81,10 @@ def covered(got: dict, key: str) -> bool:
         return value.get("is_panel") is True
     if key == "hud":
         return value.get("round") is not None and value.get("map") is not None
+    if key == "round_crop":
+        return isinstance(value, int)
+    if key == "finish":
+        return value.get("banner") is True  # 走到了量斜带形状那一步
     if key == "progress":
         return isinstance(value, list) and len(value) == 2 and value[0] is not None
     if key == "cap":
@@ -99,9 +106,12 @@ class ReadFrameTest(unittest.TestCase):
         """一张对局画面上各项识别都读出来了、没有出错，结果能写进 JSON。"""
         got = readout.read_frame(load(SAMPLE), dict(SAMPLE_HINTS))
         self.assertEqual(got["errors"], {})
-        for key in ("prefilter", "pick", "pregame", "panel", "hud", "task_panel", "progress", "cap",
-                    "hero", "stars", "coins", "players"):
+        for key in ("prefilter", "pick", "pregame", "panel", "hud", "round_crop", "task_panel", "progress", "cap",
+                    "hero", "stars", "coins", "players", "finish"):
             self.assertIn(key, got, key)
+        # 通关画面、打输横幅的认字只在颜色和形状对上时才读
+        self.assertNotIn("victory", got)
+        self.assertNotIn("game_over", got)
         self.assertIsInstance(got["prefilter"], bool)
         self.assertIsNotNone(got["hud"]["round"])
         self.assertIsNotNone(got["hero"])
@@ -379,8 +389,9 @@ class VisionSmokeTest(unittest.TestCase):
 
 class VisionCoverageReportTest(unittest.TestCase):
     def test_missing_sample_marked(self):
-        """报告里的覆盖表：选好的那张本机没有时写明这一项这次没覆盖到。"""
-        present = [name for name in SPECS if name != SAMPLE]
+        """报告里的覆盖表：选好的那张本机没有时写明这一项这次没覆盖到。交来的是文件名（vision_smoke 按文件名记读了哪几张），
+        samples 子文件夹里的图也认得。"""
+        present = [Path(name).name for name in SPECS if name != SAMPLE]
         got = build_release.vision_coverage(present)
         self.assertEqual(set(got), set(build_release.VISION_COVERAGE))
         for key, name in build_release.VISION_COVERAGE.items():
@@ -448,7 +459,9 @@ class SelfCheckVisionItemTest(unittest.TestCase):
         out.unlink()
 
 
-@unittest.skipUnless(HAVE_SAMPLES and HAVE_ASSETS, SAMPLES_SKIP if not HAVE_SAMPLES else ASSETS_SKIP)
+@unittest.skipUnless(samples.samples_ok("labels.json", *COVERED_FILES) and HAVE_ASSETS,
+                     samples.samples_reason("labels.json", *COVERED_FILES) if not samples.samples_ok(
+                         "labels.json", *COVERED_FILES) else ASSETS_SKIP)
 class CoverageTest(unittest.TestCase):
     def test_samples_cover_every_readout(self):
         """打包自检选的样本，每一个识别读数都至少有一张图读出真东西。"""

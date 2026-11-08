@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from ...data import TIER_LABEL, TIERS
-from .. import theme
+from .. import lang, names, theme
 from . import specs
 from .items import _EdgeHint, _HeaderItem, _InlineHost, _Item, _RowItem
 from .specs import (
@@ -46,6 +46,9 @@ from ..theme import CANVAS_OBJECT, LIST_OBJECT
 from ..theme import LIST as L
 
 # ------------------------------------------------------------ 界面文字（列表自己出的提示；块、组、行的文字由窗口交进来）
+
+# 档名是资料库的键（必选、推荐、可选、不选），照旧简体，显示处再转
+HANT_KEEP = ("TIER_LABEL",)
 
 HINT_TIER = "已移到{tier}第 {rank} 位"  # 改档位后要去的块不在画面里：tier 为档名（必选、推荐、可选、不选），rank 为顺位
 HINT_UNMARKED = "已移到未标记的「{group}」组"  # 取消标记、回到未标记里的组（流派名、通用、地图专属）
@@ -422,7 +425,9 @@ class SchemeList(QScrollArea):
 
     def _m(self) -> _Metrics:
         if self._metrics is None:
-            self._metrics = _Metrics(self.font(), self.db.chips, self._school_w)
+            # 筹码名一栏按行首实际画的名字量（繁体界面是游戏的繁体名，见 items.py 的 shown_name）
+            shown = [names.chip_name(chip) for chip in self.db.chips.values()]
+            self._metrics = _Metrics(self.font(), shown, self._school_w)
         return self._metrics
 
     def _item_x(self) -> int:
@@ -501,7 +506,7 @@ class SchemeList(QScrollArea):
             for spec in block.rows:
                 self._take_row(spec, block.key, None, block.draggable)
                 where[spec.chip] = (block.key, None)
-                widest = max(widest, m.fm_small.horizontalAdvance(spec.school))
+                widest = max(widest, m.fm_small.horizontalAdvance(lang.t(spec.school)))  # 按显示的流派名量（items.py）
             for group in block.groups:
                 key = ("group", block.key, group.key)
                 header = self._headers.get(key) or self._new_header(key)
@@ -511,7 +516,7 @@ class SchemeList(QScrollArea):
                 for spec in group.rows:
                     self._take_row(spec, block.key, group.key, False)
                     where[spec.chip] = (block.key, group.key)
-                    widest = max(widest, m.fm_small.horizontalAdvance(spec.school))
+                    widest = max(widest, m.fm_small.horizontalAdvance(lang.t(spec.school)))
         for chip in [c for c in self._rows if c not in where]:
             self._drop(self._rows.pop(chip))
         for key in [k for k in self._headers if k not in headers_seen]:
@@ -892,11 +897,11 @@ class SchemeList(QScrollArea):
             spec = self._block_spec(block)
             chips = [r.chip for r in spec.rows] if spec is not None else []
             if item.chip in chips:
-                return HINT_TIER.format(tier=TIER_LABEL[block], rank=chips.index(item.chip) + 1)
+                return HINT_TIER.format(tier=lang.t(TIER_LABEL[block]), rank=chips.index(item.chip) + 1)
         if group is not None and block == BLOCK_UNMARKED:
-            return HINT_UNMARKED.format(group=group)
+            return HINT_UNMARKED.format(group=lang.t(group))
         if group is not None and block == BLOCK_OTHER:
-            return HINT_OTHER.format(group=group)
+            return HINT_OTHER.format(group=lang.t(group))
         return ""
 
     def _group_texts(self, moved: dict[str, tuple[str, str]]) -> list[tuple[str, str]]:
@@ -1443,3 +1448,6 @@ class SchemeList(QScrollArea):
     def hideEvent(self, event) -> None:
         self._end_drag(cancel=True)
         super().hideEvent(event)
+
+
+lang.localize(globals())

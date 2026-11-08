@@ -39,13 +39,14 @@ from tools import build_cv  # noqa: E402
 COVERED_NAMES = (
     "BORDER_CONSTANT", "BORDER_REPLICATE", "CC_STAT_AREA", "CC_STAT_HEIGHT", "CC_STAT_LEFT", "CC_STAT_TOP",
     "CC_STAT_WIDTH", "CHAIN_APPROX_SIMPLE", "COLOR_BGR2BGRA", "COLOR_BGR2GRAY", "COLOR_BGR2HSV", "COLOR_BGRA2BGR",
-    "COLOR_GRAY2BGR", "COLOR_GRAY2BGRA", "COLOR_RGB2BGR", "HOUGH_GRADIENT", "HOUGH_GRADIENT_ALT", "HoughCircles",
-    "IMREAD_COLOR", "IMREAD_GRAYSCALE", "IMREAD_UNCHANGED", "IMWRITE_PNG_COMPRESSION", "INTER_AREA", "INTER_CUBIC",
-    "INTER_LINEAR", "INTER_NEAREST", "RETR_LIST", "TM_CCOEFF_NORMED",
+    "COLOR_GRAY2BGR", "COLOR_GRAY2BGRA", "COLOR_RGB2BGR", "FONT_HERSHEY_SIMPLEX", "HOUGH_GRADIENT", "HOUGH_GRADIENT_ALT",
+    "HoughCircles", "IMREAD_COLOR", "IMREAD_GRAYSCALE", "IMREAD_UNCHANGED", "IMWRITE_PNG_COMPRESSION", "INTER_AREA",
+    "INTER_CUBIC", "INTER_LINEAR", "INTER_NEAREST", "LINE_AA", "MORPH_CLOSE", "RETR_LIST", "TM_CCOEFF_NORMED",
     "add", "bitwise_and", "bitwise_not", "boxPoints", "circle", "connectedComponentsWithStats", "copyMakeBorder",
-    "cvtColor", "dilate", "error", "fillPoly", "findContours", "getPerspectiveTransform", "getRotationMatrix2D",
-    "imdecode", "imencode", "inRange", "invertAffineTransform", "matchTemplate", "mean", "medianBlur", "minAreaRect",
-    "minMaxLoc", "resize", "rotate", "setNumThreads", "warpAffine", "warpPerspective",
+    "cvtColor", "dilate", "error", "fillPoly", "findContours", "findNonZero", "getPerspectiveTransform",
+    "getRotationMatrix2D", "imdecode", "imencode", "inRange", "invertAffineTransform", "matchTemplate", "mean",
+    "medianBlur", "minAreaRect", "minMaxLoc", "morphologyEx", "putText", "resize", "rotate", "setNumThreads",
+    "warpAffine", "warpPerspective",
 )
 # COVERED_NAMES 里不以「cv2.名字」出现在探针里、但已经比到了的：异常类 error（两边出错时比的是异常的类名）；
 # 连通域统计表的列号 CC_STAT_*（connectedComponentsWithStats 整张统计表逐字节比了）；COLOR_RGB2BGR 和探针里的
@@ -210,6 +211,16 @@ def one(img_path: Path) -> dict:
     opt("fillPoly", fill)
     opt("mean", lambda: cv2.mean(bitmap, mask))
     opt("dilate", lambda: cv2.dilate(bitmap, np.ones((3, 3), np.uint8)))
+    # vision/victory 认打输时的蓝色斜带：闭运算把带子连成一块，再取这一块的点算外接矩形
+    opt("morphologyEx_close", lambda: cv2.morphologyEx(bitmap, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8)))
+    opt("findNonZero", lambda: cv2.findNonZero((bitmap > 0).astype(np.uint8)))
+
+    def put_text():  # vision/ocr_check 画文字识别线程数自检用的合成图
+        canvas = np.full((64, 480, 3), 28, np.uint8)
+        cv2.putText(canvas, "Round 12 Chip", (12, 44), cv2.FONT_HERSHEY_SIMPLEX, 0.95, (235, 235, 225), 2, cv2.LINE_AA)
+        return canvas
+
+    opt("putText", put_text)
     opt("bitwise_not", lambda: cv2.bitwise_not(bgra))
     opt("bitwise_and", lambda: cv2.bitwise_and(img, img, mask=mask))
     opt("add", lambda: cv2.add(img, cv2.cvtColor(cv2.bitwise_not(mask), cv2.COLOR_GRAY2BGR)))

@@ -28,11 +28,13 @@
   - 真的联网会话（`CheckLiveTest`）：用真的 `winhttp.Session` 问本机的假服务器，请求头真的发出去了，回话按块收齐，版本文件超过上限（`LATEST_LIMIT`）不收。
   - 下整包（`DownloadTest`）：按认下的地址先后下到 `update\ACC-X.Y.Z.zip`，边下边写 `.part`、边算 SHA-256；第一个地址回 404 或内容不对时换下一个，都不行时写明每个地址为什么不行、`update` 里不留东西；跟重定向；进度；中途、开始以前、收齐的那一刻停止都作废、不换地址；上次下好的同一个包直接用，在却不对的重新下，上次留下的 `.part` 覆盖；`.part` 写不进时不换地址、不发请求，下到一半磁盘满了说空间不够；不给会话时自己建、用完关掉；错误里的来源名（下载镜像、GitHub、主机名）。
   - 解压备好（`PrepareTest`）：核对、解到 `update\new.part`、改名成 `update\new`、删压缩包，最后才写 `ready.json`；名字不对（`..`、绝对路径、盘符、`:`、Windows 上不能当文件名的、不分大小写重名、文件和文件夹同名）、缺 `app\ACC.exe` 或 `拾星助手.exe`、项数和解开后的大小超上限（`MAX_FILES`、`MAX_UNPACKED`）、加密的和不认的压缩方式、坏包、`ACC.exe` 的文件版本号和要换的版本不一样时都不备好；出错时收拾干净，之前备好的那一份作废；`update` 以外的压缩包不删。
-  - 下载前的检查（`PreflightTest`）：程序文件夹写不进、空闲空间不到 `FREE_SPACE`（800 MB）时给出原因；`free_space` 在真的文件夹上取得到数。
+  - 下载前的检查（`PreflightTest`）：程序文件夹写不进、空闲空间不到 `FREE_SPACE`（800 MB）时给出原因，没过也记一笔进 `update.log`；`free_space` 在真的文件夹上取得到数。
+  - 更新记录（`CheckLogTest`、`DownloadLogTest`）：自动检查和手动「检查更新」分得出；两边各回了哪个版本或为什么没拿到、认下哪一版、有了新版本还是比当前旧、被跳过、一版都认不下都写进 `update.log`；下载记来源（下载镜像、GitHub，别的地址写「其他地址」）、文件名、实际下了多少字节、没成的原因和整包下载好；记录里不出现用户目录和 IP 形状的地址，写不进（logs 是一个文件而不是文件夹）不影响检查和下载的结果；超过上限时裁剪。
+  - 记录里的一行（`LogTextTest`，`update_log.rows`）：程序目录里的路径写成 `%程序目录%`（程序文件夹在用户目录里时也是，换版本程序换的是给的那个根），别处的用户目录写成 `%USERPROFILE%`、账户名不出现；IP 形状的主机名写成「其他地址」，程序文件的四段版本号照写。
   - 程序文件的版本号（`ExeVersionTest`）：读本机 Python 的 `python.exe` 的版本资源试真的；没有版本资源、文件不在时为空；`version.dll` 只从 System32 加载。
   - 导入和对外的名字（`ImportTest`）：导入它不带进界面库和识别用的库（在子进程里核对）；它自己不看是不是发行版（开发版不查、不下、不换由调用的一方先看）；对外的名字、几个地址常量、`Release` 和 `CheckResult` 的字段和先后。
-- **检证对象**：`advisor/update.py` 的 `is_newer`、`sources`、`check`、`preflight`、`free_space`、`download`、`prepare`、`exe_version`，以及它们用到的 `_mirror_release`、`_github_release`、`_decide`、`_files`、`_fetch_json`、`_fetch_to`、`_members`、`_fine_name`、`_unpack`、`_check_version`、`_write_ready`；常量 `MIRROR_BASE`、`MIRROR_SOURCE`、`LATEST_JSON`、`GITHUB_API`、`USE_MIRROR`、`PAGE_PREFIX`、`DOWNLOAD_PREFIX`、`USER_AGENT`、`MIN_SIZE`、`MAX_SIZE`、`LATEST_LIMIT`、`MAX_FILES`、`MAX_UNPACKED`、`FREE_SPACE`、`NO_DIGEST`、`NO_SOURCE`；下载用的 `advisor/winhttp.py` 的 `Session`。
-- **什么时候要跑**：改了 `advisor/update.py` 的查、认、下整包、备好、下载前的检查，改了 `advisor/winhttp.py` 的会话，改了源代码地址（`advisor/version.py` 的 `SOURCE_URL`）。改了 `obtain`（只下变了的文件那条路）另跑 `test_update_obtain`；改了 `latest.json` 的写法另跑 `test_upload_r2` 和 `test_update_flow`，改了 `ready.json` 的写法、`update\new` 的位置另跑 `test_update_apply` 和 `test_update_flow`。
+- **检证对象**：`advisor/update.py` 的 `is_newer`、`sources`、`check`、`preflight`、`free_space`、`download`、`prepare`、`exe_version`，以及它们用到的 `_mirror_release`、`_github_release`、`_decide`、`_files`、`_fetch_json`、`_fetch_to`、`_members`、`_fine_name`、`_unpack`、`_check_version`、`_write_ready`；常量 `MIRROR_BASE`、`MIRROR_SOURCE`、`LATEST_JSON`、`GITHUB_API`、`USE_MIRROR`、`PAGE_PREFIX`、`DOWNLOAD_PREFIX`、`USER_AGENT`、`MIN_SIZE`、`MAX_SIZE`、`LATEST_LIMIT`、`MAX_FILES`、`MAX_UNPACKED`、`FREE_SPACE`、`NO_DIGEST`、`NO_SOURCE`；`advisor/update_log.py` 的 `note`、`rows`、`append`、`trim`、`tail`、`KEPT_LOG_MAX`；下载用的 `advisor/winhttp.py` 的 `Session`。
+- **什么时候要跑**：改了 `advisor/update.py` 的查、认、下整包、备好、下载前的检查或更新记录，改了 `advisor/update_log.py`，改了 `advisor/winhttp.py` 的会话，改了源代码地址（`advisor/version.py` 的 `SOURCE_URL`）。改了 `obtain`（只下变了的文件那条路）另跑 `test_update_obtain`；改了 `latest.json` 的写法另跑 `test_upload_r2` 和 `test_update_flow`，改了 `ready.json` 的写法、`update\new` 的位置另跑 `test_update_apply` 和 `test_update_flow`。
 - **怎么单独跑**：`python -B tools/run_tests.py --only test_update`（上次约 3 秒）。
 - **需要什么**：要在 Windows 上跑：`CheckLiveTest`、`DownloadTest` 用真的 WinHTTP 问 127.0.0.1 上自己起的 http.server（不经代理），`ExeVersionTest` 读本机 Python 的 `python.exe`。别的查和认用假的会话（`FakeSession`：按地址给回话或抛错）；备好时换掉 `exe_version`（造的压缩包里的 `ACC.exe` 不是真的程序）。不联网。
 - **输出怎么看**：同总则；错误记录指到每个用例自己的临时文件，用例里核对写了几条、标题是什么。
@@ -56,6 +58,7 @@
   - 停止（`StopTest`）：中途、对照本机文件时、开始以前停止都抛 `winhttp.Stopped`，不留 `new.part` 和 `.part`，不改下整包，不写错误记录。
   - 进度（`MeterTest`）：只下变了的文件这条路第一次报进度时先报 phase `"delta"`；中途按收到的字节报，交出去的只增不减、不超过总数；要取的是 0 时也报一次 phase 和进度。
   - 接口（`InterfaceTest`）：`obtain` 的参数名、先后和「后四个只能按名字传、默认为空」不变，界面照这个接口调用。
+  - 更新记录（`LogTest`）：差分走通时记清单和要取、实际取了多少字节；差分走不通改下整包时记原因（含按段取不认 Range、换下一个地址）和整包要下多少字节，没有清单只下整包时同样记要下多少；镜像换 GitHub 时记换路；核对失败时记失败原因（程序文件的四段版本号照写）；写记录失败（logs 是一个文件而不是文件夹）不影响下载；记录里不出现用户目录和 IP 形状的地址，程序文件夹在用户目录里时本机文件的路径写成 `%程序目录%`。
 - **检证对象**：`advisor/update.py` 的 `obtain` 和它用到的 `_delta`、`_fetch_manifest`、`_range`、`_flush_tree`、`_DeltaMeter`、`DELTA_RATIO`（整包那条路照样走 `download`、`prepare`）；拼新版本用的 `advisor/update_files.py` 的 `assemble`。
 - **什么时候要跑**：改了 `obtain` 或只下变了的文件那条路（取清单、按段取、改下整包的条件、进度和 phase），改了 `advisor/update_files.py` 的 `assemble`、`parse_manifest`，改了 `advisor/winhttp.py` 的会话。
 - **怎么单独跑**：`python -B tools/run_tests.py --only test_update_obtain`（上次约 5 秒）。
@@ -116,7 +119,7 @@
 - **出错时一般是哪里不对**：
   - `ApplyTest` 某项失败 → `_Apply` 的步骤（等旧进程、复制成 `app.next`、两次改名、搬用户数据、换根目录的两个文件、起新版本、退回、最后一道）或结果的写法改了；有意改步骤时，软件维护说明「软件内更新」的「全过程」一起改。
   - `PendingTest`、`LaunchTest`、`TakeResultTest` 失败 → 什么时候交出备好的版本、什么时候起换版本程序、没换上的次数怎么记（`MAX_FAILED`）改了；界面按这几个函数的结果提示，另跑 `test_update_ui`。
-  - `AfterStartTest` 失败 → 收尾删哪些、什么时候不删、记录的上限（`KEPT_LOG_MAX`）改了。
+  - `AfterStartTest` 失败 → 收尾删哪些、什么时候不删、记录的上限（`KEPT_LOG_MAX`）改了；追加（`update_log.note`）和收尾整份重写共用一把锁、共用裁剪写法，改了其中一处时两边的上限要一起看。
   - `SafetyTest` 失败 → 能删、能另起名的名字范围变宽了：先确认不会删到用户自己放在发行版文件夹里的东西。
   - `RealProcessTest` 失败 → `_Win32` 里调 Windows 的那几处（命名事件、等进程、起进程、读版本资源）改了，或这台电脑上 Python 起子进程受限。
   - `LayoutTest.test_user_files_cover_every_name` 失败 → `paths.USER_DATA_NAMES` 加了新的一项：这里搭的用户数据跟着加上。
@@ -125,32 +128,34 @@
 ## test_update_ui.py：测软件内更新在界面这一边——控制模块、悬浮窗上的提示行、设置窗口里「启动时自动检查更新」那一行、启动时交给换版本程序
 
 - **测试观点**（按测试类）：
-  - 设置文件里的三项（`SettingsFieldsTest`）：自动检查的开关、上次检查的日期、跳过的版本；默认开着自动检查、没查过、没跳过；旧设置文件没有这三项时照默认、不记警告；存了再读一样；三项都跨对局沿用；类型不对的按默认。
+  - 设置文件里的两项（`SettingsFieldsTest`）：自动检查的开关、跳过的版本；默认开着自动检查、没跳过；旧设置文件没有这两项时照默认、不记警告；旧设置文件里上次检查的日期（`update_checked`）读的时候忽略，下次保存时去掉；存了再读一样；两项都跨对局沿用；类型不对的按默认。
   - 文字（`WordingTest`）：出错的那一句按种类选、原因去掉末尾的句号、没有原因时写「原因不明」；大小按整数 MB 写（至少 1），有文件清单时写成上限；下载中那一句按下到哪一步选（比对本机的文件不写大小，只下变了的部分带 x / y MB，要下载的是 0 时写用本机的文件拼出新版本、不写「0 / 0 MB」）。
-  - 提示行（`RowsTest`，`update_rows`）：各种状态排出的提示行的文字、级别、按钮和动作：有新版本（四个按钮，「更新」是主按钮；只能手动下载时换成「手动下载」）、下载中的几步（都带「停止」）、解压核对中、下好了、已经是最新、出错（⚠ 橙色）、刚换上新版本；都不让边框变色。
-  - 控制模块（`DevTest`、`AutoCheckTest`、`ManualCheckTest`、`DownloadTest`、`RestartTest`、`ResultTest`、`OpenTest`，`UpdateControl`）：
+  - 提示行（`RowsTest`，`update_rows`）：各种状态排出的提示行的文字、级别、按钮和动作：有新版本（四个按钮，「更新」是主按钮；只能手动下载时换成「手动下载」）、下载中的几步（都带「停止」）、解压核对中、下好了（这次点了「更新」下好的：马上重启、等对局结束两种，没有按钮；上次已下好的那一版：「重启更新」「关闭本条提示」）、已经是最新、出错（⚠ 橙色）、刚换上新版本（换上的正是列了改动的那一版时，下面一条一行列出主要改动；版本号对不上、列表空着时只写一句）；都不让边框变色。
+  - 控制模块（`DevTest`、`AutoCheckTest`、`ManualCheckTest`、`DownloadTest`、`AutoRestartTest`、`RestartTest`、`ResultTest`、`OpenTest`，`UpdateControl`）：
     - 开发版不查、不下、不换，「检查更新」只说一句开发版不检查更新。
-    - 自动检查：一天最多一次（日期往回调了也算没查过）、关了不查、带上跳过的版本、连不上和程序出错都不出声（程序出错照样记进错误记录）、发行版里缺了查和下载的模块时手动检查说一句。
-    - 手动检查：跳过的版本照样提示，已经是最新、两边都连不上、源代码地址推不出查更新的地址（`NO_SOURCE`）、一版都认不下（`NO_DIGEST`）、程序出错各说一句；检查中、下载中、下好了时不再查；「跳过这个版本」「以后再说」；对局中先攒着、下载在后台照常进行；查到的这一版已经备好时直接提示「重启更新」。
+    - 自动检查：每次启动都查（同一天里已经查过也照查）、关了不查、带上跳过的版本、连不上和程序出错都不出声（程序出错照样记进错误记录）、发行版里缺了查和下载的模块时手动检查说一句；调 `check` 时自动检查传 `manual=False`、手动「检查更新」传 `manual=True`。
+    - 手动检查：跳过的版本照样提示，已经是最新、两边都连不上、源代码地址推不出查更新的地址（`NO_SOURCE`）、一版都认不下（`NO_DIGEST`）、程序出错各说一句；检查中、下载中、下好了时不再查；「跳过这个版本」「以后再说」；对局中先攒着、下载在后台照常进行（中途退出、连着一阵子看不到对局读数的不算对局中）；查到的这一版已经备好时直接提示「重启更新」，不自动重启，点一下就换。
     - 下载（只调 `update.obtain`）：先看程序文件夹写不写得进、空间够不够；比对本机的文件、只下变了的部分、下整包、只下变了的部分没走通改下整包（进度从 0 重新数）、解压核对；进度每多 1 MB 交回一次；停止；下载和核对出错按 `obtain` 最后告诉的那一步算下载失败还是解压核对失败；等启动时的收尾做完再下载，等的上限比收尾等换版本程序的长。
     - 「重启更新」：先起换版本程序，起来了才退出；起不来时提示原因、带「手动下载」，按读到的结果说下次启动会不会再试，次数到了上限时记进跳过。
+    - 下好以后自动重启：点了「更新」、下好时在对局外：提示行写马上重启（没有按钮），排一个 `RESTART_NOTICE_MS` 的定时器，到点起换版本程序、起来了退出；下好时在对局中：不排，回到对局外的那次刷新再排；到点时又进了对局：不重启、接着等；排上以后状态变了（停下、出错等）到点作废；起不来时提示同「重启更新」；问对局中出错按在对局中算（只记一次错误记录）。开着拾星助手的其他窗口：不排，提示行和设置窗口那一行写等窗口关掉（在对局中时照旧写等对局结束），每 `WINDOWS_POLL_MS` 看一次，还开着不刷新，都关掉了刷新一次、照常排上；排上以后到点前开了窗口：到点不重启，关掉以后再排；问开着哪些窗口出错按开着算（只记一次）。点了「停止」、下载线程恰好备好：不自动重启，要点「重启更新」。换版本程序起来以后不再起第二次。收在托盘里的：起换版本程序之前写记号（收着的几张、两个版本号），起不来时删掉，没收着的、手动点「重启更新」的不写，写不进时照常重启。
+    - 收在托盘里启动的记号（`HiddenStartTest`）：写了以后读走、读了就删；没有收着的不写；版本对不上、过时了、格式认不出、内容坏了、太大一律照常显示，记号照样删掉；记号放在更新的工作文件夹里、收尾不把它当成别的下载。
     - 启动时读上一次的结果：换上了说一句，退回的、没换上次数到了上限的记进跳过，收尾放到后台。
     - 打开的地址：只打开发布页面和下载镜像下的地址（判法和 `advisor/update.py` 的一样）；「手动下载」按认下的这一版有没有下载镜像上的地址开压缩包或发布页面；不用下载镜像的版本（复刻的改版）一律开发布页面。
   - 启动时交出去（`HandOverTest`，`hand_over_update`、`run`）：发行版里有下好的新版本时，查过防多开以后、起悬浮窗以前交给换版本程序，交出去了就直接返回、不起悬浮窗；没有、起不来、出错时照常启动；开发版不查，已有一个在运行时不查。
-  - 悬浮窗的接线（`OverlayTest`）：按钮接到控制模块上；按钮多的排在文字下面；对局中不显示；放在标题栏下方、排在「免费软件」声明前面；设置窗口的开关和「检查更新」；退出时叫停下载、没停下记一笔；`main()` 里悬浮窗出来、启动时的几项检查做完以后才读结果、排自动检查。
+  - 悬浮窗的接线（`OverlayTest`）：按钮接到控制模块上；按钮多的排在文字下面；对局中不显示；下好以后自动重启看各张悬浮窗最近一次刷新时这一局结束了没有（`_update_notices` 记下 `last_unfinished`、`_lanes_playing`：本局进行中不排，回到对局外的那次刷新才排，到点前又进了对局不重启；连着一阵子看不到对局读数（`game_quiet`）、提示行照常显示了也不排，写对局结束后自动重启，认出这一局结束或游戏窗口关了（`activity` 为 `nogame`）的那次刷新才排（`test_auto_restart_waits_while_quiet`）；两个客户端同时识别时另一张还在对局中也不排；取快照有几项读出错、整块出错的那一轮也不排，提示行照常显示；开着对话框时不排、关掉以后排上）；开着其他窗口按窗口的种类认（对话框、最小化的算，悬浮窗自己、藏着的、工具提示、弹出的、不接收焦点的小提示框不算）；收在托盘里的几张按各自藏没藏着算；收着时刚换上新版本那一条留着；放在标题栏下方、排在「免费软件」声明前面；设置窗口的开关和「检查更新」；退出时叫停下载、没停下记一笔；`main()` 里悬浮窗出来、启动时的几项检查做完以后才读结果、排自动检查，托盘图标建好以后才定收着启动的几张。`HandOverTest` 另核对 `run()` 在查过防多开以后、换版本以前读走收在托盘里启动的记号，交给 `main()`（开发版不读）。`tests/test_lanes.py` 的 `HiddenStartTest` 核对收着启动：接线时不显示，托盘图标建不出来时照常显示，两张各按自己的，之后加的第二张照常显示。
   - 七套皮肤的设置窗口（`SkinRowTest`）：每套都有这一行（分页的在「关于」页），开关和「检查更新」在这一行里、看得见、不超出窗口；检查的结果代替说明显示、放得下；忙的时候「检查更新」不能点；点开关、点按钮按名字调用悬浮窗的方法。
-- **检证对象**：`advisor/ui/overlay_parts/updates.py` 的 `UpdateControl`、`UpdateNotice`、`has_manifest`、`_url_under`；`advisor/ui/overlay_parts/notices.py` 的 `update_rows`；`advisor/ui/overlay_parts/wording.py` 里 `UPDATE_` 开头的文字和 `update_` 开头的几个函数；`advisor/ui/overlay_parts/app.py` 的 `UiSettings`（`update_auto`、`update_checked`、`update_skipped`）和 `main`；`advisor/ui/settings/dialog.py` 里「启动时自动检查更新」那一行（`UPDATE_TITLE`、`UPDATE_DESC`、`UPDATE_CHECK_ACTION`、`SettingsValues.update_note`）和各套皮肤的设置窗口；`advisor/ui/overlay.py` 的接线（`set_update_auto`、`check_updates`、退出）；`advisor/ui/__init__.py` 的 `hand_over_update`、`run`。
+- **检证对象**：`advisor/ui/overlay_parts/updates.py` 的 `UpdateControl`、`UpdateNotice`、`has_manifest`、`_url_under`；`advisor/ui/overlay_parts/notices.py` 的 `update_rows`；`advisor/ui/overlay_parts/wording.py` 里 `UPDATE_` 开头的文字和 `update_` 开头的几个函数；`advisor/ui/overlay_parts/app.py` 的 `UiSettings`（`update_auto`、`update_skipped`）和 `main`；`advisor/ui/settings/dialog.py` 里「启动时自动检查更新」那一行（`UPDATE_TITLE`、`UPDATE_DESC`、`UPDATE_CHECK_ACTION`、`SettingsValues.update_note`）和各套皮肤的设置窗口；`advisor/ui/overlay.py` 的接线（`set_update_auto`、`check_updates`、退出，对局中没有：`_update_notices`、`_lanes_playing`）；`advisor/ui/__init__.py` 的 `hand_over_update`、`run`。
 - **什么时候要跑**：改了上面这些地方；改了 `advisor/update.py`、`advisor/update_apply.py` 对外的名字、参数或结果（这里的替身照它们写）。改了更新那几句文字另跑 `test_ui_no_raw_errors`（界面文字里不出现原始的报错）；改了设置窗口那一行的文字另跑 `test_settings_window`（设置窗口各项的文字逐字核对），按钮名还写在「设置」按钮的悬停说明里，另跑 `test_project_consistency`；在 `advisor/ui/settings` 包里增删这一行用到的名字另跑 `test_settings_package`；改了某套皮肤的设置窗口排版另跑那套皮肤的测试（见「皮肤和界面控件」一章）。
 - **怎么单独跑**：`python -B tools/run_tests.py --only test_update_ui`（上次约 4 秒）。
 - **需要什么**：Qt 的 offscreen 平台（不弹窗口）；查和下载（`advisor/update.py`）、换版本（`advisor/update_apply.py`）一律换成假的（`FakeNet`、`FakeApply`：对外的名字和参数照真的，记下调用、按测试给的结果回），不联网、不起进程、不碰程序文件夹；设置文件写在测试沙箱的临时文件夹里。整个模块先装好随软件带的字体；`SkinRowTest` 结束时换回默认皮肤和原来的字体。
 - **输出怎么看**：同总则；错误记录指到每个用例自己的文件，用例结束时还有没核对过的就算失败。
 - **出错时一般是哪里不对**：
-  - `SettingsFieldsTest` 失败 → `UiSettings` 那三项的名字、默认值或校验改了（设置文件里的名字改了时旧设置文件就读不到了）。
+  - `SettingsFieldsTest` 失败 → `UiSettings` 那两项的名字、默认值或校验改了（设置文件里的名字改了时旧设置文件就读不到了）。
   - `WordingTest`、`RowsTest` 失败 → 更新那几句文字、`update_rows` 排出的按钮和动作名改了；有意改文字时，这里的预期、使用说明里引用的文字一起改。
-  - `AutoCheckTest`、`ManualCheckTest`、`DownloadTest`、`RestartTest`、`ResultTest` 失败 → `UpdateControl` 的状态切换改了：什么时候查、提示什么、下载的几步、出错算哪一步、「重启更新」的先后、读上一次的结果。
+  - `AutoCheckTest`、`ManualCheckTest`、`DownloadTest`、`AutoRestartTest`、`RestartTest`、`ResultTest` 失败 → `UpdateControl` 的状态切换改了：什么时候查、提示什么、下载的几步、出错算哪一步、「重启更新」的先后、下好以后什么时候自动重启、读上一次的结果。
   - `OpenTest` 失败 → 打开地址前的核对（`updates._url_under`）和 `advisor/update.py` 的 `_url_under` 判得不一样了，或「手动下载」开哪个地址的规矩改了。这两份核对要一起改。
   - `HandOverTest` 失败 → `hand_over_update` 或 `run()` 里交给换版本程序的位置改了（要在防多开之后、起悬浮窗之前）。
-  - `OverlayTest` 失败 → 悬浮窗上提示行的位置、排法、按钮的接线（`overlay.py` 里动作名到 `UpdateControl` 方法的那张表）或 `main()` 里的先后改了。
+  - `OverlayTest` 失败 → 悬浮窗上提示行的位置、排法、按钮的接线（`overlay.py` 里动作名到 `UpdateControl` 方法的那张表）、自动重启之前看的这一局结束没有（`_update_notices` 记下的 `last_unfinished`、`_lanes_playing` 合起来；`test_auto_restart_waits_while_quiet` 失败多半是又认了 `game_quiet`）或 `main()` 里的先后改了。
   - `SkinRowTest` 失败 → 某一套皮肤的设置窗口排版放不下这一行、少了这一行，或按钮调用的方法名（`UPDATE_CHECK_ACTION`、`set_update_auto`）改了。
 
 ## test_upload_r2.py：测发版上传脚本（tools/upload_r2.py）——签名、令牌文件、上传的顺序和中途停下
@@ -177,7 +182,7 @@
 ## test_update_flow.py：测软件内更新从发版到下好走一遍，两边都用真的代码（不用替身、不联网）
 
 - **测试观点**（按测试类）：
-  - 只下变了的文件（`DeltaFlowTest`）：查到新版本（清单的三项都认出来，「更新」写成最多约多少）→ 点「更新」→ 比对本机的文件 → 只按段取变了的那几个 → 最后核对 → 下好；没点「重启更新」、下次启动再查到这一版时直接是「重启更新」，不再下载。镜像不认 Range 时换 GitHub 的地址（跳到文件服务器，Range 头照样带着）按段取；两边都不认 Range 时比对以后改下整包（记一条错误记录，不提示），照样下好；按段取的时候点「停止」：回到有新版本那一条，什么都不留下，不改下整包。
+  - 只下变了的文件（`DeltaFlowTest`）：查到新版本（清单的三项都认出来，「更新」写成最多约多少）→ 点「更新」→ 比对本机的文件 → 只按段取变了的那几个 → 最后核对 → 下好（在对局外时排上自动重启，测试里不到点）；没换上、下次启动再查到这一版时直接是「重启更新」，不再下载。镜像不认 Range 时换 GitHub 的地址（跳到文件服务器，Range 头照样带着）按段取；两边都不认 Range 时比对以后改下整包（记一条错误记录，不提示），照样下好；按段取的时候点「停止」：回到有新版本那一条，什么都不留下，不改下整包。
   - 没有清单（`FullFlowTest`）：加清单以前的 `latest.json`、GitHub 上也没有清单附件：下整包 → 解压核对 → 下好。
   - 复刻的版本（`ForkFlowTest`）：镜像上照样放着这一版，却一次都不请求；查、下清单、按段取都只走 GitHub，照样下好。
   - 出错的分法（`FailureFlowTest`）：`advisor/update.py` 抛的错按出错时做到哪一步算下载失败、解压核对失败，原因照它给的写；只下变了的文件那条路走不通只记错误记录，不交给界面。

@@ -143,8 +143,8 @@ class ClassPointsTest(Base):
         names = ("优雅之羽与安全气囊", "探天卫星与出牌数")
         plain = dataclasses.replace(self.db, combos=tuple(c for c in self.db.combos if c.name not in names))
         for chip in ("安全气囊", "电流核心"):
-            a = [p.score for p in self.parts("美咲", chip, star=1) if p.origin == "charge_build"]
-            b = [p.score for p in self.parts("美咲", chip, db=plain, star=1) if p.origin == "charge_build"]
+            a = [p.score for p in self.parts("美咲", chip, star=1) if p.origin == "school_build"]
+            b = [p.score for p in self.parts("美咲", chip, db=plain, star=1) if p.origin == "school_build"]
             with self.subTest(chip=chip):
                 self.assertTrue(a)
                 self.assertEqual(a, b)
@@ -250,9 +250,9 @@ class HealDiscountTest(Base):
         self.assertAlmostEqual(disc[0].score, -35 * (1 - p))
         self.assertEqual((disc[0].label, disc[0].short), ("组合", HEAL_DISCOUNT_SHORT))
         self.assertIn(f"概率约 {p:.0%}", disc[0].reason)
-        # 排在组合规则之后（组合规则的扣分仍是第一个「组合」）
+        # 排在组合规则之后（组合规则的扣分仍是第一个「组合」，之后是提前加分、折算两项）
         labels = [x.origin for x in self.parts("墨影", "美工刀-锋利", owned=("磨刀石",), star=1, round=4) if x.label == "组合"]
-        self.assertEqual(labels, ["半血筹码与美工刀冲突", HEAL_DISCOUNT_ORIGIN])
+        self.assertEqual(labels, ["半血筹码与美工刀冲突", "heal_advance", HEAL_DISCOUNT_ORIGIN])
 
     def test_full_with_heal_source_or_healer(self):
         for kw in (dict(owned=("缓冲盾牌",)), dict(owned=("医疗箱-紧急治疗",)), dict(teammates=(Teammate("潘大猛", True),)),
@@ -298,7 +298,7 @@ class HealDiscountTest(Base):
         self.assertIn("概率不到 1%", disc[0].reason)
 
     def test_knife_anticipation_unchanged(self):
-        # 治愈来源预判美工刀（①）时，「会不会选美工刀」按不计治愈来源折算的总分判断：和关掉折算时相同
+        # 治愈来源预判美工刀（①）时，「会不会选美工刀」按不计治愈来源提前加分和折算的总分判断：和关掉这两项时相同
         off = self.with_rules("heal_knife", exclude_traits=["半血", "物理输出"])
         for hero in ("邦妮", "墨影", "Z3000"):
             for chip in ("医疗箱-紧急治疗", "医疗箱-完备治疗"):
@@ -396,13 +396,17 @@ class OpinionValuesTest(Base):
                 self.assertEqual([p.score for p in sat], [15])
 
     def test_bank_card_late(self):
-        cfg = self.db.rules["income"]
+        # 纯收入筹码的正分只有内置分，现在没有可折的分：用内置分照旧计入的资料库副本
+        rules = {k: dict(v) if isinstance(v, dict) else v for k, v in self.db.rules.items()}
+        rules["official"]["scale"] = 0.5
+        db = dataclasses.replace(self.db, rules=rules)
+        cfg = db.rules["income"]
         self.assertEqual((cfg["late"], cfg["late_factor"]),
                          ({"银行卡-余额少": 3, "银行卡-余额多": 7, "银行卡-用不完": 7}, 0.5))
 
         def income(hero, chip, rnd):
             """（收入折算那一项或 None，折算的基数，按剩余兑现次数的折算系数）。"""
-            sc = self.scorer(hero, star=1, round=rnd)
+            sc = self.scorer(hero, star=1, round=rnd, db=db)
             parts = sc.parts(chip, (), rnd)
             base = sum(p.score for p in parts if p.score > 0 and p.label != "成长分")
             every = cfg["reward_every"]

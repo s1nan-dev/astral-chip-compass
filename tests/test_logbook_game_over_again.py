@@ -78,6 +78,24 @@ class GameOverAgainTest(unittest.TestCase):
         got = logbook.records_between(datetime(2026, 10, 10, 20, 0, 0))
         self.assertEqual([r.get("rounds") for r in got if r["t"] == "gameover"], [8, 10])
 
+    def test_rejoined_game(self):
+        """主菜单结束的局（中途退出、断线），之后又连回同一局：悬浮窗不换局（不调 new_game、undo_new_game），接着记三选一，
+        真正结束时再记一条。同一局两条结束只算一局；真正结束之前重启接回这一局，之后不再接。"""
+        game = logbook.new_game()
+        self.offer(6, "o1")
+        self.later()
+        self.assertEqual(logbook.record_game_over(why="检测到主菜单", rounds=6), game)
+        self.assertEqual(self.offer(7, "o2"), game)  # 连回来以后的三选一记在同一局
+        logbook._reset_for_tests()  # 真正结束之前重启：接回这一局
+        self.assertEqual(logbook.resumable(), game)
+        self.assertEqual(self.offer(8, "o3"), game)
+        self.later()
+        logbook.record_game_over(why="检测到结算画面", rounds=10)
+        self.assertEqual([r["rounds"] for r in self.game_overs(game)], [6, 10])
+        self.assertEqual(logbook.stats()["games"], 1)
+        logbook._reset_for_tests()
+        self.assertIsNone(logbook.resumable())
+
 
 if __name__ == "__main__":
     unittest.main()

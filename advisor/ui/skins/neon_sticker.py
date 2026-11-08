@@ -54,6 +54,8 @@ def _neon_sticker() -> Skin:
         f"QPushButton[accent=\"map\"], QPushButton[accent=\"primary\"], QPushButton[accent=\"capture\"] {{ {yellow} }}\n"
         f"QPushButton[accent=\"map\"]:hover, QPushButton[accent=\"primary\"]:hover {{ background: {p['yellow_hover']}; }}\n"
         f"QLabel#summary {{ font-weight: bold; }}\n"
+        f"QLabel#laneTag {{ background: {p['card']}; color: {p['white']}; {_sticker_edges(ink, 10, 2, 3)} "
+        f"padding: 0px 8px; font-weight: bold; }}\n"
         f"QPushButton[accent=\"warn\"] {{ background: {p['pink']}; color: {p['white']}; }}\n"
         f"QPushButton#closeButton {{ background: transparent; border: none; color: {p['white']}; font-size: 16pt; "
         f"font-weight: 900; padding: 0px 4px 2px 4px; }}\n"
@@ -81,7 +83,7 @@ def _neon_sticker() -> Skin:
         "info": (ink, p["off"], p["soft"]), "muted": (p["tile_border"], p["tile"], p["dim"]),
         "button": (ink, p["tile"], p["white"]), "plus": (ink, p["green"], ink), "minus": (ink, p["pink"], p["white"]),
     }
-    settings_extra = pill + _scrollbar(p["track"], p["yellow"]) + (
+    settings_extra = pill + combo + _scrollbar(p["track"], p["yellow"]) + (
         f"QPushButton {{ min-height: 22px; font-size: 10pt; }}\n"
         f"QPushButton#exportButton {{ {yellow} }}\n"
         f"QPushButton#exportButton:hover {{ background: {p['yellow_hover']}; }}\n"
@@ -125,6 +127,10 @@ def _neon_sticker() -> Skin:
         f"padding: 4px 8px; }}\n"
         f"QPlainTextEdit#preview {{ background: {ink}; color: {p['cyan']}; font-size: 11pt; font-weight: bold; "
         f"$NUMBER_FONT }}\n"
+        # 按编号导入的输入框：和粘贴框同一种粗黑描边（高度跟着右边的胶囊按钮，不算投影）
+        f"QLineEdit {{ background: {p['field']}; color: {p['white']}; border: 2px solid {ink}; border-radius: 10px; "
+        f"padding: 0px 8px; }}\n"
+        f"QLineEdit:disabled {{ color: {p['dim']}; }}\n"
     )
     editor_extra = pill + combo + _scrollbar(p["track"], p["yellow"]) + (
         f"QPushButton#small {{ padding: 1px 10px; font-size: 9pt; border-radius: 9px; }}\n"
@@ -162,6 +168,7 @@ def _neon_sticker() -> Skin:
     return make_skin(
         NEON_STICKER_KEY, NEON_STICKER_LABEL, common=common, fonts=fonts, layouts=layouts,
         overlay=dict(
+            WIDTH=546,  # 比默认的 459 宽：最长的角色名、最长的方案名在「筹码方案」卡片的下拉框里要写得下
             PANEL_MARGINS=(12, 12, 22, 20), PANEL_SPACING=10, HEAD_SPACING=8,
             PANEL_BG="transparent", PANEL_BORDER="transparent", PANEL_RADIUS=16, PANEL_PAUSED_BG="transparent",
             PANEL_PAUSED_BORDER="transparent", PANEL_ATTENTION_BORDER=p["pink"], PANEL_OPAQUE_BG="transparent",
@@ -185,8 +192,8 @@ def _neon_sticker() -> Skin:
             TOGGLE_PRESSED_BG=p["off_pressed"],
             REMOVE_PADDING="0px 6px", REMOVE_RADIUS=9, SCROLL_WIDTH=8, SCROLL_HANDLE=p["yellow"], SCROLL_RADIUS=4,
             SCROLL_HANDLE_MIN=24, CLOSE_PADDING="0px 4px 2px 4px",
-            SCHEME_TOOL_ICON_PX=20, SCHEME_TOOL_COLOR=p["white"], SCHEME_TOOL_DISABLED=p["disabled"], SCHEME_TOOL_GAP=3,
-            SCHEME_TOOL_PADDING=(10, 6),
+            SCHEME_TOOL_ICON_PX=14, SCHEME_TOOL_COLOR=p["white"], SCHEME_TOOL_DISABLED=p["disabled"], SCHEME_TOOL_GAP=2,
+            SCHEME_TOOL_PADDING=(10, 4),
             MARK_BEST_COLOR=p["white"], MARK_COLOR=p["white"],
             NAME_BORDER_ALPHA=255, UNREADABLE_BORDER_ALPHA=255, NAME_PADDING="1px 10px", NAME_WEIGHT_BEST=900,
             NAME_WEIGHT=700, PICKED_WEIGHT=700, GRID_DIAMETER=26,
@@ -268,7 +275,7 @@ def _neon_sticker() -> Skin:
             BLOCK_TAG_TEXT=p["white"], BLOCK_TAG_SHAPE="slant", BLOCK_TAG_FILL=ink,
         ),
         share=dict(
-            SIZE=(600, 672), SCREEN_MARGIN=0, SHEET_EXTRA=share_extra, WINDOW_BG=p["top"],
+            SIZE=(600, 700), SCREEN_MARGIN=0, SHEET_EXTRA=share_extra, WINDOW_BG=p["top"],
             BOX_BG="transparent", BOX_BORDER="transparent", INPUT_BG=p["field"], INPUT_BORDER=ink, INPUT_RADIUS=10,
             INPUT_PADDING="4px 10px", INPUT_HOVER_BORDER=p["yellow"], POPUP_BG=p["card"], POPUP_SELECTION=p["off"],
             PREVIEW_BG=ink, PREVIEW_TEXT=p["cyan"], LIST_BG=p["field"], LIST_BORDER=ink, INDICATOR_ON=p["yellow"],
@@ -280,10 +287,12 @@ def _neon_sticker() -> Skin:
             TILE_BG=p["tile"], TILE_BORDER=p["tile_border"], TILE_HOVER_BORDER="#7a6cc0", TILE_ON_BG=p["yellow"],
             TILE_PEN=2, TILE_ON_PEN=2.4, TILE_RADIUS=12, TILE_MARGINS=(12, 8, 12, 10), TILE_SPACING=12,
             RADIO_SIZE=18, RADIO_GAP=8, RADIO_PEN=2, RADIO_DOT=3.4, RADIO_OFF_COLOR=ink, SELECTED_COLOR=ink,
+            LEVEL_COLOR={"easy": p["green"], "normal": p["cyan"], "danger": p["yellow"],
+                         "critical": "#ff9f2e", "overload": "#ff4d5e"},
             TILE_ON_TEXT=(p["yellow_ink"], p["olive"]),
             ICON_BOX=34, ICON_PX=15, ICON_RADIUS=17, ICON_BG=p["off"], ICON_COLOR=p["white"],
             ICON_TINTS={"mode": (p["cyan"], ink), "hotkey": (p["yellow"], ink), "capture": (p["green"], ink),
-                        "lowend": (p["pink"], p["white"]), "skin": (p["pink"], p["white"]),
+                        "lowend": (p["pink"], p["white"]), "big_cores": (p["cyan"], ink), "skin": (p["pink"], p["white"]),
                         "opaque": (p["off"], p["white"]), "export": (p["cyan"], ink), "update": (p["green"], ink),
                         "about": (p["white"], ink)},
             KEYCAP_BG=p["white"], KEYCAP_BORDER=ink, KEYCAP_EDGE=ink, KEYCAP_RADIUS=8, KEYCAP_EDGE_WIDTH=5,

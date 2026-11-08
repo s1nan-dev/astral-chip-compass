@@ -571,7 +571,9 @@ class NightmareHelmetTest(Base):
     """噩梦及以上（State.difficulty_level 为 LEVEL_NIGHTMARE）只提高摩托头盔-高级（rules.toml [survival] nightmare_*）：
     困难及以上的随机局面里，同一局面按噩梦及以上算时，它的「难度」分项更高、总分不低于读不到难度时；
     同时出现的其他候选筹码的「难度」分项不变。其他候选的分值本身可能随之变化（必拿补分按同一次三选一里未列入玩家思路的
-    筹码计，循环往复按之后三选一的期望最高分计），这里不比较。
+    筹码计，循环往复按之后三选一的期望最高分计），这里不比较。之后任务三选一的等级另按难度那一列取（噩梦及以上按
+    噩梦那一列，context.task_level_column），和「难度」分项无关：按噩梦及以上算时也取读不到难度时那一列，只比「难度」
+    分项带来的差别。
     [survival] skip_maps 里的地图（水乡古镇）摩托头盔不加「难度」分，两种算法都是 0。"""
 
     @staticmethod
@@ -592,7 +594,8 @@ class NightmareHelmetTest(Base):
                 plain = dataclasses.replace(st, difficulty=None, difficulty_level=None, difficulty_name=None)
                 night = dataclasses.replace(plain, difficulty_level=LEVEL_NIGHTMARE)
                 a = self.by_name(advise(self.db, plain, offer))
-                b = self.by_name(advise(self.db, night, offer))
+                with mock.patch.object(engine_mod.context, "task_level_column", lambda s: None):
+                    b = self.by_name(advise(self.db, night, offer))
                 with self.subTest(case=repro(night, offer)):
                     checked += 1
                     before = sum(s for s, _, _ in self.difficulty_parts(a[helmet]))
@@ -625,7 +628,7 @@ class SeriesSanityTest(Base):
     # （局面, 候选, 低一级, 高一级）：没有同系列筹码表时低一级总分更高的已知局面
     INVERTED = (
         (State(hero="璐璐", star=0, rerolls=2), ("夹心饼干-一般", "夹心饼干-可口", "书签"), "夹心饼干-一般", "夹心饼干-可口"),
-        (State(hero="邦妮", star=1, round=1, rerolls=3), ("美工刀-初级", "美工刀-锋利", "书签"), "美工刀-初级", "美工刀-锋利"),
+        # 邦妮那一组（美工刀-初级 / -锋利）在推荐流派只留标记、内置分不计入以后不再倒挂
     )
 
     def check_pair(self, st: State, offer, low_name: str, high_name: str, plain_db) -> bool:
@@ -937,7 +940,7 @@ class CoreFirstTest(Base):
 class SupportFlyingStarTest(Base):
     """阿尔以外的 9 名辅助角色在任何星数、轮次下，金色飞星和星币锤同时出现时金色飞星总分更高
     （大部分辅助角色不能和首领硬碰硬，金色飞星优于星币锤）。
-    阿尔在部分局面下两张几乎持平：他的星光层数直接换成属性，星币锤是他的适配筹码。
+    阿尔单独查：他的星光层数直接换成属性，星币锤是他的适配筹码，内置分计入总分时两张接近。
 
     玩家思路覆盖自动层的角色：芬妮的玩家思路把金色飞星列为必拿（星币锤未列入，按必拿补分），金色飞星照样更高，照常检查。
     """
@@ -982,25 +985,32 @@ class SupportFlyingStarTest(Base):
                 bad = self.losses(hero)
                 self.assertEqual(bad, [], f"{len(bad)} 处\n" + "\n".join(bad[:5]))
 
-    # 阿尔：不计成长分、收入折算和前瞻时星币锤高 16 分（星币锤：基础 15、角色分 +50、「星光成长」+40 另叠「经济」12、
-    # 「辅助定位」-20、推荐流派 +15 = 112；金色飞星：基础 15、「辅助定位」+60 另叠 6、推荐流派 +15 = 96）。
-    # 第 5 轮以前金色飞星有成长分 +25，0~1 星时领先约 9~12 分；第 6 轮起没有成长分，星币锤领先，收入折算星币锤扣得更多，
-    # 差距随轮次缩小。轮次待识别时没有成长分（园林中庭读不到轮次）。
-    # 2 星时前瞻影响的 1.5 次里，1 次是升到 3 星那次：最左格是金色，星币锤在辅助职业筹码池的金色一栏，拿走后银行卡-用不完
-    # 下次出现率 21% → 39%；金色飞星不在任何职业筹码池。多出的半次按 2 星时的任务和筹码商店（任务三格全随机，筹码商店的
-    # 最左格是紫色），这一项小得多。3 星以后之后多是任务，只有筹码商店的最左格是金色（8% → 14%）。前瞻：轮次待识别时 2 星
-    # 星币锤约 +28、金色飞星约 +23，3 星约 +16 / +14；轮次越靠后越小。
-    # 所以两张最接近的是 2 星、轮次待识别、没有已有筹码时（地图已知和待识别 × 普通和困难及以上），金色飞星只高约 2 分；
-    # 其余局面金色飞星至少高 4 分。其余 9 名辅助角色在这张网格里金色飞星至少高 30 分。
-    def test_al_hammer_close_in_some_states(self):
+    # 阿尔：不计收入折算和前瞻时金色飞星高 57 分（金色飞星：角色专属 +65、另叠「辅助定位」「星光成长」+24、推荐流派 +15，
+    # 还没有星光筹码时另有开套预判；星币锤：「星光成长」+40 另叠「经济」12、「辅助定位」-20、推荐流派 +15）。
+    # 这张网格里金色飞星至少高 54 分（3 星、后面的轮次，前瞻和收入折算都小的时候）。
+    def test_al_hammer_far_behind(self):
         margins = []
         for st in self.states("阿尔"):
             ev = self.by_name(advise(self.db, st, self.OFFER))
+            margins.append(ev["金色飞星"].total - ev["星币锤"].total)
+        self.assertGreater(min(margins), 50)  # 网格里没有星币锤更高的局面，也没有两张接近的局面
+
+    # 内置分按 ×0.5 计入总分、前瞻不打折时两张才接近（星币锤有角色分 +50、前瞻也大）：这时最接近的是 2 星、轮次待识别、
+    # 已持有银行卡-余额少的局面（已进入星光，金色飞星不预判），差约 6.3 分，网格里仍没有星币锤更高的局面。这一条查的是
+    # 分项加起来的先后，用内置分照旧计入、前瞻不打折的资料库副本
+    def test_al_hammer_never_ahead_with_official_score(self):
+        rules = {k: dict(v) if isinstance(v, dict) else v for k, v in self.db.rules.items()}
+        rules["official"]["scale"] = 0.5
+        rules["lookahead"]["weight"] = 1.0
+        db = dataclasses.replace(self.db, rules=rules)
+        margins = []
+        for st in self.states("阿尔"):
+            ev = self.by_name(advise(db, st, self.OFFER))
             margins.append((ev["金色飞星"].total - ev["星币锤"].total, st))
-        close = [st for m, st in margins if m < 3]
-        self.assertTrue(close)  # 星币锤是阿尔的适配筹码：有的局面里和金色飞星几乎持平
-        self.assertEqual({(st.star, st.round, st.owned) for st in close}, {(2, None, ())})
-        self.assertGreater(min(m for m, _ in margins), 0)  # 网格里没有星币锤更高的局面
+        closest, st = min(margins, key=lambda x: x[0])
+        self.assertEqual((st.star, st.round, st.owned), (2, None, ("银行卡-余额少", "缓冲盾牌")))
+        self.assertGreater(closest, 5)
+        self.assertGreater(min(m for m, _ in margins), 0)
 
 
 class PoolTest(Base):
@@ -1102,7 +1112,7 @@ class PoolTest(Base):
                         continue
                     scorer = Scorer(self.db, st, offer=[c.name])
                     la = scorer.lookahead(c.name, owned)
-                    charge = [p for p in scorer.parts(c.name, owned, st.round) if p.origin == "charge_build"]
+                    charge = [p for p in scorer.parts(c.name, owned, st.round) if p.origin == "school_build"]
                     if abs(la) > 0.5 or charge:  # 前瞻失真可正可负
                         bad.append((la, f"{hero} 已有 {owned}：{c.name} 前瞻 {la:+.1f}"
                                         f"{'，开套预判 %+.1f' % charge[0].score if charge else ''}"

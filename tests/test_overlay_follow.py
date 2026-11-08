@@ -12,12 +12,14 @@ from PySide6.QtGui import QGuiApplication  # noqa: E402
 from PySide6.QtWidgets import QWidget  # noqa: E402
 from advisor.data import load_db  # noqa: E402
 from advisor.session import Event  # noqa: E402
+from advisor.vision import capture  # noqa: E402
 from advisor.ui.overlay_parts import follow as follow_mod
 from advisor.ui.overlay import Overlay
-from advisor.ui.overlay_parts.wording import RUNNING_BIT, SETTLE_MAX_TICKS, SETTLE_TICKS
+from advisor.ui.overlay_parts.wording import NO_GAME, RUNNING_BIT, SETTLE_MAX_TICKS, SETTLE_TICKS
 from advisor.ui.overlay_parts.wording import COVER_POLLS, DEFAULT_REL
 from advisor.ui.overlay_parts.app import UiSettings, OverlaySession
-from advisor.ui.overlay_parts.geometry import live_placement, overlay_position, rel_point, window_plan, fit_on_any_screen, probe_state, WindowPlan
+from advisor.ui.overlay_parts.geometry import (PLACE_GAP, WindowPlan, beside, fit_on_any_screen, live_placement,
+                                               overlay_position, pair_position, probe_state, rel_point, window_plan)
 from advisor.ui.services import Services  # noqa: E402
 from advisor.ui import winapi as winapi_module  # noqa: E402
 from advisor.ui.winapi import covering, TopWindow, GameProbe  # noqa: E402
@@ -221,6 +223,129 @@ class LivePlacementTest(unittest.TestCase):
         pos = live_placement(game, self.SIZE, DEFAULT_REL, [game])
         refresh = pick_zones(game)[1][0]
         self.assertTrue(QRect(pos, QSize(*self.SIZE)).intersected(refresh).isEmpty())
+
+    def test_avoid_moves_off_companion(self):
+        """同时识别时另一张悬浮窗也算不该挡住的地方：默认位置正好压在它上面时换个位置；不给 avoid 时照旧。"""
+        from PySide6.QtCore import QRect, QSize
+
+        from advisor.ui.overlay_parts.geometry import live_placement, rel_point
+
+        game = QRect(0, 0, 3840, 2054)  # 4K：默认位置本来不挡三选一
+        default = rel_point(game, DEFAULT_REL, self.SIZE)
+        self.assertEqual(live_placement(game, self.SIZE, DEFAULT_REL, [game]), default)
+        other = QRect(default, QSize(*self.SIZE))
+        pos = live_placement(game, self.SIZE, DEFAULT_REL, [game], [other])
+        self.assertNotEqual(pos, default)
+        self.assertTrue(QRect(pos, QSize(*self.SIZE)).intersected(other).isEmpty())
+        self.assertEqual(self.cost(game, pos), 0)
+
+
+class BesideTest(unittest.TestCase):
+    """挨着另一张悬浮窗放：依次试左边、右边、下边、上边，取第一个整个在屏幕里、又不和它相交的。"""
+
+    SIZE = (100, 50)
+
+    @staticmethod
+    def rect(pos):
+        from PySide6.QtCore import QRect, QSize
+
+        return QRect(pos, QSize(*BesideTest.SIZE))
+
+    def test_left_first(self):
+        from PySide6.QtCore import QRect, QPoint
+
+        other = QRect(300, 300, 200, 100)
+        pos = beside(other, self.SIZE, [QRect(0, 0, 1000, 800)])
+        self.assertEqual(pos, QPoint(300 - PLACE_GAP - self.SIZE[0], 300))
+        self.assertFalse(self.rect(pos).intersects(other))
+
+    def test_right_when_left_offscreen(self):
+        from PySide6.QtCore import QRect, QPoint
+
+        other = QRect(50, 300, 200, 100)
+        pos = beside(other, self.SIZE, [QRect(0, 0, 1000, 800)])
+        self.assertEqual(pos, QPoint(50 + 200 + PLACE_GAP, 300))
+
+    def test_below_when_no_room_beside(self):
+        from PySide6.QtCore import QRect, QPoint
+
+        other = QRect(0, 300, 1000, 100)
+        pos = beside(other, self.SIZE, [QRect(0, 0, 1000, 800)])
+        self.assertEqual(pos, QPoint(0, 300 + 100 + PLACE_GAP))
+
+    def test_above_when_below_offscreen(self):
+        from PySide6.QtCore import QRect, QPoint
+
+        other = QRect(0, 700, 1000, 100)
+        pos = beside(other, self.SIZE, [QRect(0, 0, 1000, 800)])
+        self.assertEqual(pos, QPoint(0, 700 - PLACE_GAP - self.SIZE[1]))
+
+    def test_none_when_no_room(self):
+        from PySide6.QtCore import QRect
+
+        other = QRect(0, 0, 100, 50)
+        self.assertIsNone(beside(other, self.SIZE, [QRect(0, 0, 100, 50)]))
+
+    def test_prefer_right_tries_right_first(self):
+        """prefer="right"：右边、左边都放得下时取右边（「重置悬浮窗」时第二张排在第一张右边）。"""
+        from PySide6.QtCore import QRect, QPoint
+
+        other = QRect(300, 300, 200, 100)
+        pos = beside(other, self.SIZE, [QRect(0, 0, 1000, 800)], prefer="right")
+        self.assertEqual(pos, QPoint(300 + 200 + PLACE_GAP, 300))
+        self.assertFalse(self.rect(pos).intersects(other))
+
+
+class PairPositionTest(unittest.TestCase):
+    """「重置悬浮窗」时第二张的位置：先只在主显示器上紧挨着第一张（右边优先），放不下时把右边、上沿对齐的位置
+    挪进屏幕，再不行到别的屏幕上找，都不行时叠着放。"""
+
+    SIZE = (100, 50)
+
+    @staticmethod
+    def rect(pos, size=None):
+        from PySide6.QtCore import QRect, QSize
+
+        return QRect(pos, QSize(*(size or PairPositionTest.SIZE)))
+
+    def test_right_beside(self):
+        from PySide6.QtCore import QRect, QPoint
+
+        area = QRect(0, 0, 1000, 800)
+        first = QRect(400, 300, 200, 100)
+        self.assertEqual(pair_position(first, self.SIZE, area, [area]),
+                         QPoint(400 + 200 + PLACE_GAP, 300))
+
+    def test_moves_up_when_taller(self):
+        """右边、左边都放不下（第二张比第一张高、下边出了屏幕），往上挪一挪就放得下：贴在第一张右边、上沿跟着上移。"""
+        from PySide6.QtCore import QRect, QPoint
+
+        area = QRect(0, 0, 1000, 800)
+        first = QRect(0, 500, 600, 250)
+        size = (100, 600)
+        pos = pair_position(first, size, area, [area])
+        self.assertEqual(pos, QPoint(606, 200))
+        self.assertFalse(self.rect(pos, size).intersects(first))
+        self.assertTrue(area.contains(self.rect(pos, size)))
+
+    def test_other_screen(self):
+        """主显示器上怎么都放不下，另一块屏幕放得下：到那块屏幕上紧挨着第一张。"""
+        from PySide6.QtCore import QRect, QPoint
+
+        area = QRect(0, 0, 1000, 800)
+        screens = [area, QRect(1000, 0, 1000, 800)]
+        first = QRect(0, 0, 1000, 800)
+        self.assertEqual(pair_position(first, self.SIZE, area, screens), QPoint(1006, 0))
+
+    def test_overlaps_when_no_room_anywhere(self):
+        """都放不下时叠着放，但整个还在主显示器的可用区域里。"""
+        from PySide6.QtCore import QRect, QPoint
+
+        area = QRect(0, 0, 1000, 800)
+        first = QRect(0, 0, 1000, 800)
+        pos = pair_position(first, self.SIZE, area, [area])
+        self.assertEqual(pos, QPoint(900, 0))
+        self.assertTrue(area.contains(self.rect(pos)))
 
 
 class OverlayAlwaysOnScreenTest(unittest.TestCase):
@@ -738,6 +863,62 @@ class WindowPlanTest(unittest.TestCase):
         self.assertEqual(window_plan("background", "window", False, False, 5).layer, "below")
         self.assertEqual(window_plan("game", "window", False, False, 5).layer, "top")  # 只在切出时才查盖住
 
+    def test_nogame_with_companion(self):
+        """同时识别时找不到游戏窗口的那张看另一张：另一张的游戏或拾星助手自己的窗口在前台时这张也置顶，才看得见
+        「未找到」的提示；另一张的游戏切到后台、最小化、也找不到或者没有另一张时照旧不置顶。识别照旧暂停、热键照旧
+        不登记、胶囊和悬停说明不变。两种截取方式、自动和手动都核。"""
+        for layer_state in (None, "none", "background", "minimized", "game", "own"):
+            for method in ("window", "screen"):
+                for manual in (False, True):
+                    with self.subTest(companion=layer_state, method=method, manual=manual):
+                        plan = window_plan("nogame", method, manual, False, 0, layer_state)
+                        top = layer_state in ("game", "own")
+                        self.assertEqual(plan, WindowPlan(True, "nogame", "top" if top else "none", False, "", ""))
+
+    def test_companion_ignored_elsewhere(self):
+        """别的状态不管另一张是什么状态：结果和没有另一张时一样。另一张在前台（game、own）只影响 background、
+        covered 和 nogame（这几格另有测试：test_background_with_other_game_front、test_nogame_with_companion）；
+        另一张的游戏切到后台、最小化、也找不到或者没有另一张时，哪一种状态
+        都照旧。"""
+        for state in ("game", "own", "minimized"):
+            for method in ("window", "screen"):
+                for manual in (False, True):
+                    for live in (False, True):
+                        for companion in ("game", "own", "background", "minimized", "nogame", None):
+                            with self.subTest(state=state, method=method, manual=manual, live=live, companion=companion):
+                                covered = COVER_POLLS if state == "covered" else 0
+                                name = "background" if state == "covered" else state
+                                self.assertEqual(window_plan(name, method, manual, live, covered, companion),
+                                                 window_plan(name, method, manual, live, covered))
+        for state in ("background", "covered", "nogame"):
+            for method in ("window", "screen"):
+                for manual in (False, True):
+                    for live in (False, True):
+                        for companion in ("background", "minimized", "nogame", None):
+                            with self.subTest(state=state, method=method, manual=manual, live=live, companion=companion):
+                                covered = COVER_POLLS if state == "covered" else 0
+                                name = "background" if state == "covered" else state
+                                self.assertEqual(window_plan(name, method, manual, live, covered, companion),
+                                                 window_plan(name, method, manual, live, covered))
+
+    def test_background_with_other_game_front(self):
+        """同时识别时玩家在玩另一个游戏（这一张的游戏在后台）：这一张照样置顶，被别的窗口盖住也不退到后面；三选一
+        显示着时照旧排到最前面。截取屏幕时照旧暂停，但也置顶。自动、手动都核。"""
+        for state in ("background", "covered"):
+            for companion in ("game", "own"):
+                for manual in (False, True):
+                    for live in (False, True):
+                        with self.subTest(state=state, companion=companion, manual=manual, live=live):
+                            covered = COVER_POLLS if state == "covered" else 0
+                            plan = window_plan("background", "window", manual, live, covered, companion)
+                            running = not manual or live
+                            self.assertEqual(plan, WindowPlan(
+                                False, "", "front" if live else "top", False,
+                                "running" if running else "", "away" if running else ""))
+                            screen = window_plan("background", "screen", manual, live, covered, companion)
+                            self.assertEqual(screen, WindowPlan(True, "screen-background", "top", False,
+                                                                "paused", "screen"))
+
     def test_probe_state(self):
         """前台状态判断（winapi.GameProbe）→ 状态：找不到 > 最小化 > 游戏在前台 > 自己在前台 > 其他程序在前台。"""
         self.assertEqual(probe_state(None), "nogame")
@@ -1089,6 +1270,154 @@ class TrayShowRefreshTest(BehaviorBase):
         self.assertEqual(spy.call_count, 1, "原来收着的：显示出来刷新一次")
 
 
+class TrayResetTest(BehaviorBase):
+    """托盘菜单的「重置悬浮窗」：菜单项的顺序、全部展开并清掉收起记录、放到主显示器正中、记住位置、识别记录。"""
+
+    AREA = QRect(120, 60, 1000, 700)
+
+    def setUp(self):
+        super().setUp()
+        # 测试环境的真屏幕大小不定：主显示器可用区域和各块屏幕都换成假的
+        self.w._primary_area = lambda: self.AREA
+        self.w._screens = lambda: [self.AREA]
+
+    def reset(self) -> None:
+        self.w.reset_overlay()
+        APP.processEvents()  # 延后 0 毫秒的居中
+        APP.processEvents()
+
+    def tray_menu(self, enabled: bool = False):
+        """建托盘图标、菜单（图标换成假的，不往任务栏放东西），返回菜单。"""
+        from PySide6.QtWidgets import QSystemTrayIcon
+
+        icon = SimpleNamespace(setContextMenu=lambda m: None, activated=SimpleNamespace(connect=lambda f: None),
+                               setToolTip=lambda t: None, show=lambda: None)
+        self.w.tray_part.make_icon = lambda: icon
+        self.addCleanup(APP.setQuitOnLastWindowClosed, APP.quitOnLastWindowClosed())
+        with mock.patch.object(follow_mod.hub, "ENABLED", enabled), \
+                mock.patch.object(QSystemTrayIcon, "isSystemTrayAvailable", return_value=True):
+            self.assertTrue(self.w.tray_part.setup_tray())
+        self.addCleanup(setattr, self.w.tray_part, "tray", None)
+        menu = self.w.tray_part.menu
+        self.addCleanup(menu.deleteLater)
+        return menu
+
+    def test_menu_items(self):
+        """hub.ENABLED 关着：「显示」「重置悬浮窗」「设置」「导出诊断」、分隔线、「退出」；开着时「导出诊断」后面多
+        「打开作业站」。"""
+        menu = self.tray_menu()
+        self.assertEqual([a.text() if not a.isSeparator() else None for a in menu.actions()],
+                         ["显示", "重置悬浮窗", "设置", "导出诊断", None, "退出"])
+        menu = self.tray_menu(True)
+        self.assertEqual([a.text() if not a.isSeparator() else None for a in menu.actions()],
+                         ["显示", "重置悬浮窗", "设置", "导出诊断", "打开作业站", None, "退出"])
+
+    def test_menu_item_resets(self):
+        """点「重置悬浮窗」：收在托盘里的显示出来，全部展开。"""
+        self.w.hide()
+        self.w.set_expanded(False)
+        self.tray_menu().actions()[1].trigger()
+        APP.processEvents()
+        self.assertFalse(self.w.isHidden())
+        self.assertTrue(self.w.expanded)
+
+    def test_expands_cards_and_clears_collapsed(self):
+        """一行显示、用户单独收起了「已有筹码」：重置以后全部展开，这张卡片也展开，收起记录清空并存成空表。"""
+        self.w.set_expanded(False)
+        self.w.cards["owned"].toggle.click()
+        self.assertEqual(self.session.settings.collapsed_cards, ["owned"])
+        self.assertFalse(self.w.expanded)
+        self.w.hide()
+        self.reset()
+        self.assertTrue(self.w.expanded)
+        self.assertTrue(self.w.card_open("owned"))
+        self.assertEqual(self.w._collapsed, set())
+        self.assertEqual([v for v in self.w._dismissed.values() if v], [])
+        self.assertEqual(self.session.settings.collapsed_cards, [])
+
+    def test_centers_on_primary_area(self):
+        """没有游戏窗口：外框的中心在主显示器可用区域的正中（允许差 1 像素），位置存进 window_pos。"""
+        self.w.show()
+        self.reset()
+        geom = self.w.frameGeometry()
+        self.assertLessEqual(abs(geom.center().x() - self.AREA.center().x()), 1, geom)
+        self.assertLessEqual(abs(geom.center().y() - self.AREA.center().y()), 1, geom)
+        self.assertEqual(self.session.settings.window_pos, [geom.x(), geom.y()])
+
+    def test_hidden_one_line_centers_with_final_size(self):
+        """收在托盘里、一行显示时点：显示出来、全部展开以后才居中，按展开以后的大小算（不是一行显示时的大小）。"""
+        self.w.show()
+        self.w.set_expanded(False)
+        one_line = self.w.frameGeometry().height()
+        self.w.hide()
+        self.reset()
+        geom = self.w.frameGeometry()
+        self.assertGreater(geom.height(), one_line)
+        self.assertLessEqual(abs(geom.center().x() - self.AREA.center().x()), 1, geom)
+        self.assertLessEqual(abs(geom.center().y() - self.AREA.center().y()), 1, geom)
+
+    def test_clamps_when_larger_than_area(self):
+        """悬浮窗比可用区域还大：左上角对齐可用区域左上角。"""
+        small = QRect(300, 200, 200, 150)
+        self.w._primary_area = lambda: small
+        self.w._screens = lambda: [small]
+        self.w.show()
+        self.reset()
+        self.assertEqual(self.w.frameGeometry().topLeft(), small.topLeft())
+
+    def test_with_game_window_remembers_new_position(self):
+        """有游戏窗口：重置以后当作用户拖到了那里（rel_custom、window_rel、window_pos），之后按游戏窗口重算仍在正中。"""
+        self.w.follower.update_game(probe(rect=(0, 0, 1400, 900)))
+        self.w.show()
+        self.assertFalse(self.w.follower.rel_custom)
+        self.reset()
+        geom = self.w.frameGeometry()
+        self.assertLessEqual(abs(geom.center().x() - self.AREA.center().x()), 1, geom)
+        self.assertLessEqual(abs(geom.center().y() - self.AREA.center().y()), 1, geom)
+        self.assertTrue(self.w.follower.rel_custom)
+        self.assertEqual(self.session.settings.window_rel, list(self.w.follower.rel))
+        self.assertEqual(self.session.settings.window_pos, [geom.x(), geom.y()])
+        before = self.w.pos()
+        self.w.follower.reposition()
+        self.assertLessEqual(abs(self.w.pos().x() - before.x()), 1, (before, self.w.pos()))
+        self.assertLessEqual(abs(self.w.pos().y() - before.y()), 1, (before, self.w.pos()))
+
+    def test_during_pick_stops_moving_aside(self):
+        """正在显示三选一、没拖动过（三选一期间自动让开）时点：放到正中并当作拖动过，三选一期间再按游戏窗口重算也留在正中，
+        不再让开。"""
+        area = QRect(0, 0, 1920, 1040)  # 三选一期间全部展开时比 AREA 高：换一块放得下的
+        self.w._primary_area = lambda: area
+        self.w._screens = lambda: [area]
+        self.w.follower.update_game(probe(rect=(0, 0, 1400, 900)))
+        self.w.show()
+        self.enter()
+        self.offer()
+        self.assertTrue(self.w.live_state.on)
+        self.assertFalse(self.w.follower.rel_custom)
+        self.reset()
+        geom = self.w.frameGeometry()
+        self.assertLess(geom.height(), area.height())
+        self.assertLessEqual(abs(geom.center().x() - area.center().x()), 1, geom)
+        self.assertLessEqual(abs(geom.center().y() - area.center().y()), 1, geom)
+        self.assertTrue(self.w.live_state.on)
+        # 没当作拖动过的话，三选一期间会按 live_placement 挪开（正中挡着三个候选筹码）
+        aside = live_placement(self.w.follower.game_rect, (geom.width(), geom.height()), self.w.follower.rel, [area])
+        self.assertNotEqual(aside, geom.topLeft())
+        self.w.follower.reposition()
+        self.assertEqual(self.w.frameGeometry().topLeft(), geom.topLeft())
+
+    def test_records_reset(self):
+        """记一条 reset 的用户操作识别记录：hidden 为点之前是否收在托盘里，game 为有没有游戏窗口。"""
+        self.w.follower.update_game(probe())
+        self.w.hide()
+        self.reset()
+        records = [e for e in self.session.recent_events(600)
+                   if e.get("kind") == "read:user" and e.get("action") == "reset"]
+        self.assertEqual(len(records), 1)
+        self.assertTrue(records[0]["hidden"])
+        self.assertTrue(records[0]["game"])
+
+
 class WinapiFlagsTest(unittest.TestCase):
     """窗口层次的三种调用都只设自己的窗口，带 SWP_NOACTIVATE、不移动、不改大小（不激活任何窗口）。"""
 
@@ -1162,6 +1491,90 @@ class WinapiFlagsTest(unittest.TestCase):
                 info = winapi_module.probe_game(**kw)
                 self.assertFalse(info.covered)
                 above.assert_not_called()
+
+    def test_probe_ignores_other_game_window(self):
+        """同时识别时另一张跟的游戏窗口不算盖住这张：它和浏览器都盖住悬浮窗时，退后插在浏览器下面；只有它盖住时不算
+        被盖住；不给 ignore 时和原来一样（取最下面那个）。"""
+        game, other_game, overlay, fg = 0x100, 0x110, 0x200, 0x300
+        u = winapi_module._user32
+        browser = TopWindow(0x400, (0, 0, 500, 500))
+        other = TopWindow(other_game, (0, 0, 500, 500))
+        with mock.patch.object(u, "FindWindowW", return_value=game), \
+                mock.patch.object(u, "GetForegroundWindow", return_value=fg), \
+                mock.patch.object(u, "IsIconic", return_value=0), \
+                mock.patch.object(u, "GetAncestor", side_effect=lambda h, f: h), \
+                mock.patch("advisor.ui.winapi._client_rect", return_value=(0, 0, 1920, 1080)), \
+                mock.patch("advisor.ui.winapi._pid", side_effect=lambda h: os.getpid() if h == overlay else 1), \
+                mock.patch("advisor.ui.winapi.frame_rect", return_value=(100, 100, 530, 400)), \
+                mock.patch("advisor.ui.winapi.window_class", side_effect=lambda h: {other_game: "UnityWndClass"}.get(h, "X")), \
+                mock.patch("advisor.ui.winapi.windows_above", return_value=[browser, other]):
+            # 另一个游戏窗口在最下面：不忽略时退到它后面，忽略时退到浏览器后面
+            self.assertEqual(winapi_module.probe_game(cover=overlay).cover_below, other_game)
+            info = winapi_module.probe_game(cover=overlay, ignore=other_game)
+            self.assertEqual((info.covered, info.cover_below, info.cover_class), (True, 0x400, "X"))
+            # 只有另一个游戏窗口盖住：不算被盖住
+            with mock.patch("advisor.ui.winapi.windows_above", return_value=[other]):
+                info = winapi_module.probe_game(cover=overlay, ignore=other_game)
+            self.assertFalse(info.covered)
+            self.assertIsNone(info.cover_below)
+
+
+class MissingGameNoticeTest(unittest.TestCase):
+    """找不到游戏窗口时悬浮窗上显示的那一句：用定时查看游戏窗口时探针带回来的 notice（设了游戏平台、开着的是另一个端
+    时点明是设置的原因；没有这一项时是 NO_GAME）；一直是找不到、这一句变了时换成新的；显示着别的提示时不盖掉；游戏
+    窗口又看得到时收起。"""
+
+    def setUp(self):
+        self.db = load_db()
+        self.session = OverlaySession(self.db, UiSettings(hero="凛"))
+        self.session.game.seen_hero = "凛"
+        self.w = Overlay(self.db, self.session, threading.Lock())
+        self.addCleanup(self.w.hide)
+
+    @staticmethod
+    def platform_notice(name: str = "TapTap端") -> str:
+        return capture.NOT_FOUND_PLATFORM.format(name=name)
+
+    def test_shows_probe_notice(self):
+        notice = self.platform_notice()
+        self.w.follower.update_activity(probe(found=False, notice=notice))
+        self.assertEqual((self.w.follower.activity, self.w.message.text), ("nogame", notice))
+        self.assertIn(notice, self.w.status.status_text())
+
+    def test_falls_back_to_no_game(self):
+        """探针没带这一项（或为空）时照旧是「未找到游戏窗口，请先启动游戏。」。"""
+        self.w.follower.update_activity(probe(found=False))
+        self.assertEqual(self.w.message.text, NO_GAME)
+
+    def test_notice_change_while_nogame(self):
+        """一直是找不到游戏窗口：这一句变了（在设置里改了游戏平台，或另一个端开了、关了）就换成新的、重画一次；
+        同一句不再重画。"""
+        self.w.follower.update_activity(probe(found=False))
+        notice = self.platform_notice()
+        with refreshes() as spy:
+            self.w.follower.update_activity(probe(found=False, notice=notice))
+        self.assertEqual(self.w.message.text, notice)
+        self.assertEqual(spy.call_count, 1)
+        with refreshes() as spy:
+            self.w.follower.update_activity(probe(found=False, notice=notice))
+        self.assertEqual(self.w.message.text, notice)
+        self.assertEqual(spy.call_count, 0)
+
+    def test_other_message_not_covered(self):
+        """显示着别的提示（一次性的操作结果等）时：换了这一句也不盖掉。"""
+        self.w.follower.update_activity(probe(found=False))
+        text = "已从已有筹码中移出「测试筹码」"
+        self.w.message.say(text, "owned")
+        self.w.follower.update_activity(probe(found=False, notice=self.platform_notice()))
+        self.assertEqual(self.w.message.text, text)
+
+    def test_platform_notice_cleared_when_game_found(self):
+        """游戏窗口又看得到了：平台那一句收起，换成平时的等待提示。"""
+        notice = self.platform_notice()
+        self.w.follower.update_activity(probe(found=False, notice=notice))
+        self.w.follower.update_activity(probe("game"))
+        self.assertNotEqual(self.w.message.text, notice)
+        self.assertEqual(self.w.message.text, self.w.follower.waiting_text())
 
 
 if __name__ == "__main__":

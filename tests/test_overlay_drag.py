@@ -88,6 +88,36 @@ class ClickTest(DragBase):
         self.assertIsNotNone(valid_rel(rel))
 
 
+def drag_widget(widget, start: QPoint, *moves: QPoint) -> None:
+    """在 widget 上按在屏幕坐标 start 处、移过 moves（事件交给 widget，没接住的照常往上传给悬浮窗）。"""
+    origin = widget.mapToGlobal(QPoint(0, 0))
+
+    def send(kind, at: QPoint) -> None:
+        button = Qt.LeftButton if kind in (QEvent.MouseButtonPress, QEvent.MouseButtonRelease) else Qt.NoButton
+        buttons = Qt.NoButton if kind == QEvent.MouseButtonRelease else Qt.LeftButton
+        local = QPointF(at - origin)
+        QApplication.sendEvent(widget, QMouseEvent(kind, local, QPointF(at), button, buttons, Qt.NoModifier))
+
+    send(QEvent.MouseButtonPress, start)
+    for at in moves:
+        send(QEvent.MouseMove, at)
+    send(QEvent.MouseButtonRelease, moves[-1] if moves else start)
+
+
+class LaneTagDragTest(DragBase):
+    def test_drag_from_lane_tag(self):
+        """按在标题栏的端标签上也能拖动悬浮窗（标签不接文字交互，鼠标事件照常往上传）。"""
+        self.w.set_lane_tag("Steam", "这张悬浮窗跟的是「Steam端」的游戏窗口。")
+        self.with_game()
+        tag = self.w.lane_tag
+        self.assertFalse(tag.isHidden())
+        before = self.w.pos()
+        start = tag.mapToGlobal(tag.rect().center())
+        drag_widget(tag, start, start + QPoint(-30, 0), start + QPoint(-200, 40))
+        self.assertEqual(self.w.pos(), before + QPoint(-200, 40))
+        self.assertIsNotNone(valid_rel(self.session.settings.window_rel))
+
+
 class OffScreenTest(DragBase):
     def screen(self):
         return QGuiApplication.primaryScreen().availableGeometry()

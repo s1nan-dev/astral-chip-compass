@@ -36,11 +36,11 @@ class StaticOutOfGameTest(unittest.TestCase):
 
         patches = [
             mock.patch.object(pipeline, "looks_like_overlay_screen", return_value=False),
-            mock.patch.object(pipeline, "read_hud", side_effect=lambda img, db, full: Hud(round=self.round)),
+            mock.patch.object(pipeline, "read_hud", side_effect=lambda img, db, full, **kw: Hud(round=self.round)),
             mock.patch.object(pipeline, "read_progress", return_value=Progress()),
             mock.patch.object(pipeline, "is_select_screen", return_value=False),
             mock.patch.object(pipeline, "read_hero", side_effect=lambda img, db: SimpleNamespace(hero="凛")),
-            mock.patch.object(pipeline, "read_own_stars", side_effect=lambda img, who: self.stars),
+            mock.patch.object(pipeline, "read_own_stars", side_effect=lambda img, who, **kw: self.stars),
             mock.patch.object(pipeline, "read_players", return_value=None),
             mock.patch.object(pipeline, "read_chip_panel", None),
             mock.patch.object(pipeline, "read_pregame", side_effect=pregame),

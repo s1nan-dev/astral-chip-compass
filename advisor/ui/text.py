@@ -20,13 +20,14 @@ from ..engine import SUPERSEDED as FULL_SUPERSEDED  # 诊断包推荐全文的�
 from ..engine import NEED_ORIGIN, REROLL, ChipEval, Part, compare_text, tie_key
 from ..engine import rival_word as _rival_word
 from ..engine import SHORT_LIMIT as ENGINE_SHORT_LIMIT
+from ..engine import LOOKAHEAD_MIN as ENGINE_LOOKAHEAD_MIN
 # 自己的方案（Advice.ranking）：位次、「选择后无法获得……」、刷新那一行的比较依据（engine 算好，界面只拼文字）
 from ..engine import (BASIS_UNMARKED, LOSS_NOW, LOSS_ONE_LEFT, LOSS_TIP, LOST_CORE, MOVE_AHEAD, MOVE_BEHIND, MOVE_LAST,
                       MOVE_LEAD, MOVE_MIXED, MOVE_NEAR, PLACE_LOCKED, PLACE_MARKED, PLACE_STRAYED, PLACE_UNMARKED_TEXT,
                       SCHEME_TIER_ORIGINS, SCHEME_TIER_WORD, VERDICT_BETTER, VERDICT_EVEN_BETTER, VERDICT_EVEN_WORSE,
                       VERDICT_WORSE, place_text)
 from ..session import DIFFICULTY_SOURCE_LABEL
-from . import theme
+from . import lang, names, theme
 from .theme import COMMON as C
 
 # 颜色和字号（RARITY_COLOR、OK_COLOR、WARN_COLOR、DIM_COLOR、MAP_COLOR、TEXT_COLOR、SOFT_COLOR、CAPTION_COLOR、
@@ -56,7 +57,8 @@ ALERT = "warn"
 # 分值只留在命令行和诊断包里。
 # 引擎没给短句的理由不超过这么多字时照写，超过时只写分项名（和引擎给自由文本理由出短句的长度一致，engine.SHORT_LIMIT）
 SHORT_LIMIT = ENGINE_SHORT_LIMIT
-LOOKAHEAD_MIN = 3  # 前瞻分的绝对值达到这么多才显示（理由标签、悬停明细），和 ChipEval.reasons 的门槛一致
+LOOKAHEAD_MIN = ENGINE_LOOKAHEAD_MIN  # 前瞻分的绝对值达到这么多才显示（理由标签、悬停明细），和 ChipEval.reasons 的门槛一致
+TIER_AHEAD_MIN = 3  # 档位前瞻的显示门槛：档位前瞻不打折（[lookahead] tier_weight），门槛按没打折的分定，比 LOOKAHEAD_MIN 高
 # 悬停说明一行大约排多少个字（整句不超过 TIP_LINE + 4 个字时排成一行），和估算宽度用的每字宽度（逻辑像素，10pt 微软雅黑约 13.3）
 TIP_LINE, TIP_CHAR = 32, 14
 # 超过这么多字的悬停说明不再找最优分法（耗时随字数增长得很快，4000 字、不带标点要几秒）：按每行 TIP_LINE 个字均分
@@ -916,6 +918,11 @@ TIP_TERMS = (
     "必选、推荐",  # 筹码方案的两档连写（档位前瞻、同一档先后、拿不到的悬停等，不拆成「必选、 / 推荐」）
     # 卡片里自动换行的提示和附注（keep_words，例如不拆成「打 / 开任务栏」「不 / 计前瞻」）
     "任务栏", "进度条", "资料库", "适配度",
+    # 设置窗口「只用大核」一项的说明、性能自检查到的原因（处理器名称长、窗口窄时不拆成「有大小 / 核」「可能略受影 / 响」）
+    "大小核", "受影响",
+    # 标题栏下方软件内更新的提示（窄的皮肤上不拆成「下次启动拾 / 星助手」，「有新版本」那一句末行不只剩「上。」、
+    # 也不拆成「下 / 好后」）
+    "拾星助手", "下好后自动重启换上",
     # 筹码效果和适配表理由里的首领名、状态名（「已有筹码」小卡片的效果描述同样按 keep_words 换行）
     "天川苍鲤", "天川真梦梓", "苍鲤", "青之诅咒", "赤红之毒", "鸳鸯连理", "温焰", "彩羽",
 )
@@ -929,11 +936,18 @@ TIP_NAME_MIN = 2  # 名称至少几个字才收进名称表（一个字的「凛
 
 
 def tip_names(db) -> list[str]:
-    """资料库里断行时整体不拆开的名称：筹码名、地图名、畸变组件名，角色的名称、全名和别名（TIP_NAME_MIN 个字及以上）。"""
-    names = set(db.chips) | set(db.maps) | set(db.mutators)
+    """资料库里断行时整体不拆开的名称：筹码名、地图名、畸变组件名，角色的名称、全名和别名（TIP_NAME_MIN 个字及以上）。
+    繁体界面显示的名字也收进来，繁体名同样不从中间拆开。"""
+    found = set(db.chips) | set(db.maps) | set(db.mutators)
+    for info in db.map_info.values():
+        found.add(info.hant)
+    for mutator in db.mutators.values():
+        found.add(mutator.hant)
+    for chip in db.chips.values():
+        found.add(chip.hant)
     for hero in db.heroes.values():
-        names |= {hero.name, hero.full_name, *hero.aliases}
-    return sorted(n for n in names if n and len(n) >= TIP_NAME_MIN)
+        found |= {hero.name, hero.full_name, hero.hant, hero.hant_title, hero.hant_full_name, *hero.aliases}
+    return sorted(n for n in found if n and len(n) >= TIP_NAME_MIN)
 
 
 def set_tip_names(names) -> tuple[str, ...] | None:
@@ -947,7 +961,7 @@ def set_tip_names(names) -> tuple[str, ...] | None:
         _tip_names, _tip_pattern = None, None
         return old
     _tip_names = tuple(sorted({n for n in names if n and len(n) >= TIP_NAME_MIN}))
-    words = sorted({*_tip_names, *TIP_TERMS}, key=lambda w: (-len(w), w))  # 长的在前：每个位置取最长的一个
+    words = sorted({*_tip_names, *_terms_for(lang.is_hant())}, key=lambda w: (-len(w), w))  # 长的在前：每个位置取最长的一个
     _tip_pattern = re.compile("(?=(" + "|".join(map(re.escape, words)) + "))")
     return old
 
@@ -986,10 +1000,24 @@ _WORDS = frozenset("""
 """.split())
 
 
+@lru_cache(maxsize=2)
+def _words_for(hant: bool) -> frozenset[str]:
+    """断行时整体不拆开的双字词。繁体界面用转过的一份：检查只看相邻两个字，转出来不是两个字的丢掉。"""
+    if not hant:
+        return _WORDS
+    return frozenset(word for word in (lang.t(w) for w in _WORDS) if len(word) == 2)
+
+
+@lru_cache(maxsize=2)
+def _terms_for(hant: bool) -> tuple[str, ...]:
+    """断行时整体不拆开的术语。繁体界面用转过的一份。"""
+    return tuple(lang.t(term) for term in TIP_TERMS) if hant else TIP_TERMS
+
+
 def _can_break(text: str, p: int, after: frozenset = _BREAK_AFTER) -> bool:
     """能不能在 text[p - 1] 和 text[p] 之间断行。after：断在它们后面的字符（路径太长时加上「\\」，_PATH_BREAK_AFTER）。"""
     a, b = text[p - 1], text[p]
-    if b in _NO_LINE_START or a in _NO_LINE_END or a + b in _WORDS:
+    if b in _NO_LINE_START or a in _NO_LINE_END or a + b in _words_for(lang.is_hant()):
         return False
     return a in after or not (_glued(a) or _glued(b))
 
@@ -1025,8 +1053,9 @@ def keep_words(text: str) -> str:
         return text
     blocked = _protected(text)
     out = [KEEP_SPACE if _number_space(text, 0) else text[0]]
+    words = _words_for(lang.is_hant())
     for p in range(1, len(text)):
-        if blocked[p] or text[p - 1] + text[p] in _WORDS:
+        if blocked[p] or text[p - 1] + text[p] in words:
             out.append(KEEP_JOINER)
         out.append(KEEP_SPACE if _number_space(text, p) else text[p])
     return "".join(out)
@@ -1262,32 +1291,46 @@ def ordered_options(adv) -> list[tuple[float, int, object]]:
     return sorted(rows, key=lambda r: (bool(getattr(r[2], "superseded_by", None)), -tie_key(r[0])))
 
 
-def rival_word(adv, name: str, me=None) -> str:
+def rival_word(adv, name: str, me=None, display: bool = False) -> str:
     """同系列对比时对方筹码的称呼：稀有度的颜色词（「金色」）；本次候选里除了这个选项自己（me）以外和对方同稀有度的
     不止一张时，颜色词后加括注写对方的筹码名（「金色（摩托头盔-高级）」）；稀有度未知时写筹码名。
-    对方一定在同一次三选一里。写法在 engine.rival_word（命令行同一写法）。"""
-    return _rival_word(adv.evals, name, me)
+    对方一定在同一次三选一里。写法在 engine.rival_word（命令行同一写法）。display 为真时筹码名按繁体界面显示
+    （只有悬浮窗传真，命令行和诊断包照旧用简体名）。"""
+    word = _rival_word(adv.evals, name, me)
+    if not display:
+        return word
+    chip = next((e.chip for e in adv.evals if e.chip.name == name), None)
+    shown = names.chip_name(chip) if chip is not None else name
+    if shown == name:
+        return word
+    if word == name:
+        return shown
+    return word.replace(f"（{name}）", f"（{shown}）")
 
 
-def superseded_text(adv, item) -> str:
+def superseded_text(adv, item, display: bool = False) -> str:
     """被同系列高一级上位替代时选项块第一行的文字「被金色上位替代」（同色的候选不止一张时「被金色（摩托头盔-高级）上位替代」）；
-    没有被替代时为空。"""
+    没有被替代时为空。display 见 rival_word。"""
     by = getattr(item, "superseded_by", None)
-    return SUPERSEDED.format(x=rival_word(adv, by, item)) if by else ""
+    return SUPERSEDED.format(x=rival_word(adv, by, item, display=display)) if by else ""
 
 
-def superseded_tip(item, scheme: bool = False) -> str:
+def superseded_tip(item, scheme: bool = False, better: str | None = None) -> str:
     """「被X上位替代」的悬停说明：哪一张包含它的全部效果，后接两张的效果对照（series.toml 那一对的 tip）。
-    scheme：按自己的方案计算（卡片上写位次、不写推荐度），说「不参与比较」。"""
+    scheme：按自己的方案计算（卡片上写位次、不写推荐度），说「不参与比较」。better：对方筹码的显示名（悬浮窗传，繁体
+    界面为繁体名），给了时这一张也写显示名，同一句里两张的写法一致；不给时两张都写简体名（item.superseded_by、
+    item.chip.name）。"""
     template = SUPERSEDED_TIP_SCHEME if scheme else SUPERSEDED_TIP
-    return template.format(better=item.superseded_by, name=item.chip.name,
+    name = names.chip_name(item.chip) if better else item.chip.name
+    return template.format(better=better or item.superseded_by, name=name,
                            detail=getattr(item, "superseded_tip", "") or "")
 
 
-def compare_pills(adv, item) -> list[ReasonPill]:
+def compare_pills(adv, item, display: bool = False) -> list[ReasonPill]:
     """同系列的对比行（ChipEval.versus）：「比金色多 4 层星光」（engine.compare_text，X 是对方稀有度的颜色词，
-    同色的候选不止一张时加括注写对方的筹码名，见 rival_word），悬停显示两张的效果对照。只是说明，不分加分扣分（INFO）。"""
-    return [ReasonPill(compare_text(rival_word(adv, other, item), gain), INFO, tip)
+    同色的候选不止一张时加括注写对方的筹码名，见 rival_word），悬停显示两张的效果对照。只是说明，不分加分扣分（INFO）。
+    display 见 rival_word。"""
+    return [ReasonPill(compare_text(rival_word(adv, other, item, display=display), gain), INFO, tip)
             for other, gain, tip in getattr(item, "versus", None) or ()]
 
 
@@ -1296,7 +1339,7 @@ class OptionView:
     """推荐区的一个选项块：第一行（推荐度、名称），下面是同系列的对比行和理由标签。不写总分。"""
 
     slot: int  # 第几个候选筹码（从 0 数）；刷新为 -1
-    name: str  # 选项名（筹码名或「刷新」）
+    name: str  # 选项名（筹码名或「刷新」）；繁体界面下是繁体名
     color: str  # 名称的颜色：筹码按稀有度，刷新为绿色
     percent: float  # 推荐度（没取整，排序用）
     best: bool
@@ -1314,6 +1357,8 @@ class OptionView:
     # 刷新、被上位替代的、默认推荐时为空
     place: str = ""
     place_tip: str = ""
+    # 程序用的简体名（筹码名；刷新为 REROLL）：name 是显示名，按它找资料库、图标等仍用 key
+    key: str = ""
 
     @property
     def label(self) -> str:
@@ -1476,14 +1521,14 @@ def loss_pills(loss, name: str, names=()) -> list[ReasonPill]:
 def scheme_ahead(adv, slot: int):
     """自己的方案里标了档位的候选，前瞻那一条改按档位前瞻写（engine.Ranking.aheads）：返回（标签或 None, 排序用的值）；
     未标记、资料库未收录、默认推荐等返回 None（照常按前瞻）。标签是 TierAhead.short（选了以后，下一次三选一里至少出现一张
-    必选、推荐的机会怎么变），悬停整句是 TierAhead.reason；这个机会取整后没变、或档位前瞻的绝对值不到 LOOKAHEAD_MIN 时不做
-    标签（和前瞻同一个门槛）。颜色按机会变高（绿）、变低（橙）。"""
+    必选、推荐的机会怎么变），悬停整句是 TierAhead.reason；这个机会取整后没变、或档位前瞻的绝对值不到 TIER_AHEAD_MIN 时
+    不做标签（档位前瞻不打折，门槛和前瞻不同）。颜色按机会变高（绿）、变低（橙）。"""
     ranking = getattr(adv, "ranking", None)
     aheads = getattr(ranking, "aheads", None) or ()
     found = aheads[slot] if 0 <= slot < len(aheads) else None
     if found is None:
         return None
-    if not found.short or abs(found.value) < LOOKAHEAD_MIN:
+    if not found.short or abs(found.value) < TIER_AHEAD_MIN:
         return None, 0.0
     tone = PLUS if found.after > found.before else MINUS if found.after < found.before else INFO
     return ReasonPill(found.short, tone, found.reason), found.value
@@ -1569,26 +1614,30 @@ def _scheme_views(adv, ranking, fixed=()) -> list[OptionView]:
     按档位前瞻写（scheme_ahead）。刷新那一行见 scheme_reroll_pills。被同系列上位替代的照旧写「被X上位替代」（悬停说明不提
     推荐度）。"""
     name = scheme_name(adv)
-    names = [e.chip.name for e in adv.evals]
+    chip_names = [e.chip.name for e in adv.evals]
     rerolls = getattr(adv.state, "rerolls", None)
     views = []
     for percent, slot, item in ordered_options(adv):
         if item is adv.reroll:
-            views.append(OptionView(slot=-1, name=REROLL_LABEL, color=C.OK_COLOR, percent=percent,
+            views.append(OptionView(slot=-1, name=REROLL_LABEL, key=REROLL, color=C.OK_COLOR, percent=percent,
                                     best=adv.best == REROLL, reroll=True, pills=scheme_reroll_pills(adv, rerolls)))
             continue
         best = item.chip.name == adv.best
-        replaced = superseded_text(adv, item)
+        replaced = superseded_text(adv, item, display=True)
+        by = getattr(item, "superseded_by", None)
+        better = next((e.chip for e in adv.evals if e.chip.name == by), None)
         place = ranking.places[slot] if slot < len(ranking.places) else None
         loss = ranking.losses[slot] if slot < len(ranking.losses) else None
         demoted = demotion_pills(ranking, slot)
         pills = [] if replaced else [
-            *loss_pills(loss, name, names), *demoted, *move_pills(adv, ranking, slot),
+            *loss_pills(loss, name, chip_names), *demoted, *move_pills(adv, ranking, slot),
             *option_pills(item, best, scheme_ahead(adv, slot), ("income",) if demoted else ())]
         views.append(OptionView(
-            slot=slot, name=item.chip.name, color=C.RARITY_COLOR.get(item.chip.rarity, C.TEXT_COLOR),
+            slot=slot, name=names.chip_name(item.chip), key=item.chip.name,
+            color=C.RARITY_COLOR.get(item.chip.rarity, C.TEXT_COLOR),
             percent=percent, best=best, reroll=False, pills=pills, fixed=slot in fixed, superseded=replaced,
-            superseded_tip=superseded_tip(item, scheme=True) if replaced else "", compare=compare_pills(adv, item),
+            superseded_tip=superseded_tip(item, scheme=True, better=names.chip_name(better)) if replaced else "",
+            compare=compare_pills(adv, item, display=True),
             place="" if replaced or place is None else place_text(place),
             place_tip="" if replaced or place is None else place_tip(place, name, loss),
         ))
@@ -1612,12 +1661,16 @@ def option_views(adv, fixed=()) -> list[OptionView]:
             ))
             continue
         best = item.chip.name == adv.best
-        replaced = superseded_text(adv, item)
+        replaced = superseded_text(adv, item, display=True)
+        by = getattr(item, "superseded_by", None)
+        better = next((e.chip for e in adv.evals if e.chip.name == by), None)
         views.append(OptionView(
-            slot=slot, name=item.chip.name, color=C.RARITY_COLOR.get(item.chip.rarity, C.TEXT_COLOR),  # 未收录的可能不知道稀有度
+            slot=slot, name=names.chip_name(item.chip), key=item.chip.name,
+            color=C.RARITY_COLOR.get(item.chip.rarity, C.TEXT_COLOR),  # 未收录的可能不知道稀有度
             percent=percent, best=best, reroll=False, pills=[] if replaced else option_pills(item, best),
-            fixed=slot in fixed, superseded=replaced, superseded_tip=superseded_tip(item) if replaced else "",
-            compare=compare_pills(adv, item), percent_text=shown.get(slot, ""),
+            fixed=slot in fixed, superseded=replaced,
+            superseded_tip=superseded_tip(item, better=names.chip_name(better)) if replaced else "",
+            compare=compare_pills(adv, item, display=True), percent_text=shown.get(slot, ""),
         ))
     return views
 
@@ -1646,7 +1699,7 @@ def best_view(adv) -> tuple[str, str, str]:
         return option_name(adv.best), "", C.TEXT_COLOR
     item = adv.evals[slot]
     mark = (option_place_text(adv, slot) or "") if scheme else option_percent_text(adv, slot)
-    return item.chip.name, mark, C.RARITY_COLOR.get(item.chip.rarity, C.TEXT_COLOR)
+    return names.chip_name(item.chip), mark, C.RARITY_COLOR.get(item.chip.rarity, C.TEXT_COLOR)
 
 
 def unreadable_slots(db: DB, names, unrecorded=()) -> list[int]:
@@ -1670,16 +1723,17 @@ class CandidateView:
     fixed: bool = False
 
 
-def candidate_views(db: DB, names, raw, fixed=(), unrecorded=()) -> list[CandidateView]:
+def candidate_views(db: DB, found, raw, fixed=(), unrecorded=()) -> list[CandidateView]:
     """有候选筹码无法识别时列出三个候选筹码，无法识别的标橙色。
 
     unrecorded：识别模块判为「资料库未收录」的格，写「X（资料库未收录）」，不标橙色（推荐时按中性分计算）。
     """
     flags = list(unrecorded or ())
     rows = []
-    for slot, (name, text) in enumerate(zip(names, raw)):
+    for slot, (name, text) in enumerate(zip(found, raw)):
         if name in db.chips:
-            rows.append(CandidateView(slot, name, C.RARITY_COLOR.get(db.chips[name].rarity, C.TEXT_COLOR), False))
+            chip = db.chips[name]
+            rows.append(CandidateView(slot, names.chip_name(chip), C.RARITY_COLOR.get(chip.rarity, C.TEXT_COLOR), False))
         elif name and slot < len(flags) and flags[slot]:
             rows.append(CandidateView(slot, f"{name}（资料库未收录）", C.TEXT_COLOR, False))
         else:
@@ -1747,8 +1801,8 @@ def breakdown_html(item: ChipEval, best: bool = False, superseded: str = "", per
         else:
             head = BREAKDOWN_PERCENT.format(percent=percent if percent is not None else f"{item.percent:.0%}")
         last = f'<div><b>{html.escape(head)}</b>{BREAKDOWN_BEST if best else ""}</div>'
-    return (
-        f'<div style="white-space:normal"><b style="color:{color}">{html.escape(chip.name)}</b>'
+    return lang.t(
+        f'<div style="white-space:normal"><b style="color:{color}">{html.escape(names.chip_name(chip))}</b>'
         f'<span style="color:{C.CAPTION_COLOR}">（{html.escape("｜".join(meta))}）</span></div>'
         f'<div style="color:{C.CAPTION_COLOR}">效果：{html.escape(chip.effect)}</div>'
         f'<table cellspacing="0" cellpadding="0" width="460">{"".join(rows)}</table>'
@@ -1760,8 +1814,8 @@ def chip_tip(chip) -> str:
     """已有筹码（图标格子、筹码小卡片）的悬停说明：筹码名（稀有度｜流派），效果。"""
     meta = [chip.rarity or "稀有度：待识别", f"流派：{chip.school}" if chip.school else "不属于任何流派"]
     color = C.RARITY_COLOR.get(chip.rarity, C.NAME_FALLBACK)
-    return (
-        f'<b style="color:{color}">{html.escape(chip.name)}</b>'
+    return lang.t(
+        f'<b style="color:{color}">{html.escape(names.chip_name(chip))}</b>'
         f'<span style="color:{C.CAPTION_COLOR}">（{html.escape("｜".join(meta))}）</span>'
         f'<div style="color:{C.CAPTION_COLOR}">效果：{html.escape(chip.effect)}</div>'
     )

@@ -14,7 +14,7 @@ from PySide6.QtCore import QThread, Signal
 
 from ... import perfstats
 from ...session import WatchHints
-from .. import log_error
+from .. import lang, log_error
 from .state import CLOSED, EV_MISSED_PICK, EV_NEWGAME, EV_PICKED
 from .wording import (FOLLOW_FRAMES, RECOG_CAPTURE, RECOG_FRAME, RECOG_ITEMS, RECOG_REPEAT_S, RECOG_STARTUP,
                       recog_items_text)
@@ -49,6 +49,9 @@ class Watcher(QThread):
     不改它的节奏：只在三选一显示着时查，每次只截一小块、几毫秒。
     线程里出了没接住的错（开头导入识别库、建识别流程出错等）时线程就此结束，不再自动重试：记进错误记录，发 recog_stopped，
     界面上常驻「识别已停止」（见 run）。会自动重试的（识别组件启动失败、截取出错、识别出错）照旧只提示一下。
+    platform 给了 capture.STEAM、capture.TAPTAP 时这个识别线程只识别这个端：取帧对象（FrameSource，以及快速盯绿框的 BandSource）
+    查游戏窗口时都只找这个端，找不到时的提示也按它说（capture.NOT_FOUND_ONE）；两个客户端同时识别时每路固定跟一个端。
+    不给（None）时照旧按游戏平台设置找。
     """
 
     # 一帧识别出来的全部事件（照先后）一次交出：界面在一个合并范围里逐个处理，处理完只刷新一次（Overlay.handle_events）。
@@ -56,7 +59,8 @@ class Watcher(QThread):
     events = Signal(object)
     status = Signal(str)
     # 一次性的操作结果提示（按热键识别时画面不是筹码三选一）：界面收到后按 FLASH_MS 自动收起
-    # （Overlay.set_flash_status）。和 status 分开：status 发的是截取那边约定的两句固定中文，由截取状态管、留到窗口还原
+    # （Overlay.set_flash_status）。和 status 分开：status 发的是截取那边约定的几句固定中文（找不到游戏窗口、最小化、
+    # 按游戏平台找时点明设置的那一句），由截取状态管、留到窗口还原
     flash_status = Signal(str)
     # 识别出错的提示：固定中文，不含报错原文；界面收到后按 RECOG_ERROR_MS 自动收起。和 status 分开，
     # 不靠开头的字符串认（见 Overlay.set_recog_error）
@@ -71,10 +75,12 @@ class Watcher(QThread):
     NO_FRAME_WAIT_MS = 100
 
     def __init__(self, db: DB, session: Session, lock: threading.Lock, manual: bool = False, source=None,
-                 band_source=None):
+                 band_source=None, platform=None):
         super().__init__()
         self.db, self.session, self.lock = db, session, lock
         self.manual = manual
+        # 这个识别线程只识别哪个端（capture.STEAM、capture.TAPTAP）：取帧对象查游戏窗口时只找它；None 时按游戏平台设置找
+        self.platform = platform
         # 取帧对象：有 grab()、state、close()、retry() 的对象（ui/screen.py 的 FrameSource）。None 时在线程开始时建一个，
         # 并做窗口截取的线程初始化（测试传入假的取帧对象，不碰系统组件）
         self.source = source
@@ -82,15 +88,24 @@ class Watcher(QThread):
         # 测试传入了假的 source、没给这一项时没有快速盯绿框
         self.band_source = band_source
         self._pick = None  # 快速盯绿框的线程（vision.pick_watch.PickWatcher），这个线程开始时建、结束时停下
-        # 最近一次记下选中项用的那一帧、被临时盖住而没有采用的那一帧（识别流程留的，FrameProcessor.pick_shot、covered_shot；
-        # 导出诊断时另存）：同 unread_shot，每帧识别完照识别流程的换，识别流程重建以后照旧留着
+        # 最近一次记下选中项用的那一帧、被临时盖住而没有采用的那一帧、对局中途像一局打完的那一帧（识别流程留的，
+        # FrameProcessor.pick_shot、covered_shot、finish_shot；导出诊断时另存）：同 unread_shot，每帧识别完照识别流程的换，
+        # 识别流程重建以后照旧留着
         self.pick_shot = None
         self.covered_shot = None
+        self.finish_shot = None
+        # 两个客户端同时识别时两路共用的「谁的三选一正显示着」（vision.pipeline.SelectBoard）：两张悬浮窗的接线（Lanes）在
+        # 线程开始前设上，识别流程建好时交给它（FrameProcessor.board），一路的三选一显示着时另一路暂停要做文字识别的读数。
+        # None 时不让路（只有一路、测试）
+        self.select_board = None
         self._wake = threading.Event()
         # 两个请求（按了热键要求识别一次；游戏窗口换了、游戏重启时请取帧对象再试一次直接截取）：别的线程设上、这个线程取走，
         # 设和取都在 _plock 里做，取走的同时别的线程设上的不会被清掉
         self._requested = False
         self._retry = False
+        # 换了端（set_platform）：取帧对象、快速盯绿框的取帧对象要在下一圈开始前按新的端重建。取帧对象只能在这个线程里建、用、关，
+        # 所以别的线程只设这个标志，关和重建都由这个线程做
+        self._switch = False
         self._lowend = False  # 低配模式开着（set_lowend 在 _plock 里设，这个线程每一帧开始前在 _plock 里读）
         self._paused: set[str] = set()
         self._paused_at: float | None = None  # 这一次暂停从什么时候开始（time.monotonic）
@@ -127,6 +142,17 @@ class Watcher(QThread):
             self._retry = True
         self._wake.set()
 
+    def set_platform(self, platform) -> None:
+        """运行中换端：识别线程下一圈开始前关掉现在的取帧对象（先关会话、再收尾），按新的端重建；快速盯绿框的取帧对象
+        也一起换。正在识别的那一帧不受影响。参数和构造时一样（None、capture.STEAM、capture.TAPTAP）；和现在的值相同时
+        什么都不做。哪个线程调用都可以（界面线程在识别线程跑着时改「同时识别」设置的就是这个）。"""
+        with self._plock:
+            if platform == self.platform:
+                return
+            self.platform = platform
+            self._switch = True
+        self._wake.set()
+
     def trigger(self) -> None:
         """立即截图识别一次。哪个线程调用都可以。"""
         with self._plock:
@@ -144,6 +170,12 @@ class Watcher(QThread):
         with self._plock:
             retry, self._retry = self._retry, False
         return retry
+
+    def _take_switch(self) -> bool:
+        """取走换端的请求（返回有没有）。"""
+        with self._plock:
+            switch, self._switch = self._switch, False
+        return switch
 
     def _due(self, keys) -> list[str]:
         """这几项里这一次该显示的（照先后）：从来没显示过，或者距离这一项上一次出错已满 RECOG_REPEAT_S（同一项这次
@@ -252,6 +284,12 @@ class Watcher(QThread):
         self._wake.set()
         return bool(self.wait(timeout_ms))
 
+    def request_stop(self) -> None:
+        """只请线程停下、不等（退出时先两张一起发请求，再一起等）。"""
+        self.stopping = True
+        self.requestInterruption()
+        self._wake.set()
+
     def current_stack(self) -> str:
         """线程现在停在哪里（调用栈的文字，退出时等不到它停下时写进错误记录）；没在跑、取不到时为空。"""
         frame = sys._current_frames().get(self._ident) if self._ident is not None else None
@@ -356,6 +394,17 @@ class Watcher(QThread):
             return None
         return None if wait is None else max(float(wait), 0.05) * 1000
 
+    def _finder(self):
+        """这个识别线程的取帧对象查游戏窗口用的函数（ui/screen.py 的 finder）：platform 给了 STEAM、TAPTAP 时只找这个端
+        （capture.find_game(platform=...)），找不到时照它的提示说（NOT_FOUND_ONE）；没给时为 None，取帧对象照旧按游戏
+        平台设置找。"""
+        platform = self.platform
+        if platform is None:
+            return None
+        from ...vision import capture
+
+        return lambda: capture.find_game(platform=platform)
+
     def _open_source(self):
         """取帧对象和用完时的收尾：传入的（测试）直接用；否则做窗口截取的线程初始化，建 screen.FrameSource。
         建不了时记进错误记录，返回 (None, 收尾)，稍后再试。"""
@@ -373,7 +422,7 @@ class Watcher(QThread):
             log_error("窗口截取组件的线程初始化出错（拾星助手仍在运行）", traceback.format_exc(), append=True)
             wc = None
         try:
-            source = screen.FrameSource()
+            source = screen.FrameSource(finder=self._finder())
         except Exception:  # noqa: BLE001
             log_error("取帧对象初始化出错（拾星助手仍在运行）", traceback.format_exc(), append=True)
             self._emit_recog(RECOG_STARTUP)
@@ -428,7 +477,13 @@ class Watcher(QThread):
             from .. import screen
 
             def make():
-                return screen.BandSource(self._active, log=lambda title, detail: log_error(title, detail, append=True))
+                main = self._active
+                if main is None:
+                    # 这个线程的取帧对象还没建成（换端时重建没成）：先不建，盯绿框的线程下一次要查时再来取。建了的话它一直
+                    # 认不出截取方式（BandSource 不再回头取），三选一开着时又不会空闲到关掉重建
+                    return None
+                return screen.BandSource(main, finder=self._finder(),
+                                         log=lambda title, detail: log_error(title, detail, append=True))
         try:
             from ...vision.pick_watch import PickWatcher
 
@@ -441,7 +496,7 @@ class Watcher(QThread):
         return pick
 
     def _stop_pick(self) -> None:
-        """停下快速盯绿框的线程（这个线程结束时）。等不到它停下、出错时只记错误记录。"""
+        """停下快速盯绿框的线程（这个线程结束、换端时）。等不到它停下、出错时只记错误记录。"""
         pick, self._pick = self._pick, None
         if pick is None:
             return
@@ -485,6 +540,21 @@ class Watcher(QThread):
         except RuntimeError:  # 退出时 Qt 那边的对象已经删掉：界面也不在了，不用再告诉
             pass
 
+    def _switch_source(self, processor) -> None:
+        """换了端：先停快速盯绿框的线程（它关掉自己的取帧对象），再按 _open_source 的收尾关掉现在的取帧对象（先关会话、
+        再做窗口截取的线程收尾），然后按新的端重建两者。识别流程（processor，还没建时为 None）不重建，它记着的时刻和结论
+        接着用：只换它查独占全屏时用的端，新的快速盯绿框的线程接到它的交换上（_attach_pick；不接的话新线程一直没有要查的，
+        直到识别流程重建都不再快速盯绿框）。在这个线程里调用（取帧对象只能在这个线程里建、用、关）。"""
+        self._stop_pick()
+        self._finish()
+        self._active = None
+        self._finish = lambda: None
+        self._ensure_source()
+        self._pick = self._start_pick_watch()
+        if processor is not None:
+            processor.platform = self.platform
+            self._attach_pick(processor)
+
     def _ensure_source(self):
         """正在用的取帧对象；还没有时建一个（线程开始时，或上次没建成），建好后发一次截取状态。"""
         if self._active is None:
@@ -496,7 +566,7 @@ class Watcher(QThread):
 
     def _loop(self) -> None:
         from ...vision.capture import WindowGone
-        from ...vision.chip_select import use_lowend_threads
+        from ...vision.chip_select import lowend_threads, use_lowend_threads
         from ...vision.pipeline import FrameProcessor, limit_cv_threads
         from .. import screen
 
@@ -510,9 +580,8 @@ class Watcher(QThread):
         no_frame = getattr(screen, "NoFrame", None) or ()  # 暂时没有画面（不当出错）
         processor = None
         paced = False  # 识别流程现在是不是按低配模式的节奏（新建的按 [watch] 的原值）
-        # 文字识别现在是不是按低配模式的线程数（chip_select.use_lowend_threads）：引擎是全进程共用的，不跟着识别流程重建，
-        # 和 paced 分开记
-        threads_lowend = False
+        # 文字识别的线程数不在这里另记：引擎是全进程共用的，不跟着识别流程重建，开关也只有一份（chip_select.lowend_threads），
+        # 每帧开始前和它比（见下面换线程数的那一处）
         manual_told = None  # 告诉过识别流程的手动模式开关（set_manual；None 为还没告诉过，识别流程刚建）
         resumed = False  # 刚从暂停恢复：下一帧之前告诉识别流程（resumed）
         # 识别流程上一帧还有排到下一帧的读数（FrameProcessor.pending）：不等 idle_ms，紧接着取下一帧接着做
@@ -525,6 +594,10 @@ class Watcher(QThread):
         self._pick = self._start_pick_watch()  # 快速盯绿框的线程（三选一显示着时才查）
 
         while not self.isInterruptionRequested():
+            if self._take_switch():
+                # 换了端：这一圈开头关掉旧的取帧对象、按新的端重建（正在识别的那一帧已经做完）。识别流程不重建，只换它查
+                # 独占全屏时用的端、接上新的快速盯绿框的线程
+                self._switch_source(processor)
             requested = self._take_request()
             if self.paused:
                 was_paused = True
@@ -555,7 +628,14 @@ class Watcher(QThread):
 
                     reset_caches()
                 self._reload = False
+                board = self.select_board
+                if processor is not None and board is not None:
+                    board.note(processor, False, 0.0)  # 换下来的那一份不再算显示着三选一（另一路不用等记号过期）
                 processor = FrameProcessor(self.db, self.session, self.lock)
+                # 跟哪个端建好以后再设（换端时也只改这一项，见 _switch_source）：不按位置挤进构造参数，构造参数以后增减
+                # 也不会错位。两路共用的牌子（SelectBoard）同样建好以后再设
+                processor.platform = self.platform
+                processor.board = board
                 self._attach_pick(processor)
                 paced = False
                 manual_told = None
@@ -580,10 +660,11 @@ class Watcher(QThread):
                 if callable(set_pace):
                     set_pace(factor if lowend else 1)
                 paced = lowend
-            if lowend != threads_lowend:
-                # 文字识别的线程数也在这里、两帧之间换：引擎的线程数不同时丢掉，下一次识别按新的线程数重建
+            if lowend != lowend_threads():
+                # 文字识别的线程数也在这里、两帧之间换：引擎的线程数不同时丢掉，下一次识别按新的线程数重建。和全进程的那一份开关
+                # 比，不和自己上次换的比：同一进程里别处换过（性能测试测完换回测之前的样子）时，这里下一帧照自己的低配模式
+                # 再换回来。开关没开过时两边都是关，照旧不调用
                 use_lowend_threads(lowend)
-                threads_lowend = lowend
             idle = idle_ms * factor if paced else idle_ms
             if self._take_retry():
                 try:
@@ -607,10 +688,11 @@ class Watcher(QThread):
                 self._sleep(active_ms if following else idle)
                 continue
             except WindowGone as e:
-                # 找不到游戏窗口、窗口最小化：截取那边约定的两句固定中文（capture.WindowGone.notice），原样显示。别的
+                # 找不到游戏窗口、窗口最小化、按游戏平台找时点明设置的那一句：截取那边约定的几句固定中文
+                # （capture.WindowGone.notice），照界面语言显示（一次性提示交给悬浮窗时已是显示用的写法）。别的
                 # RuntimeError 不算这一种，走下面截取出错的分支（原文只进错误记录）
                 self._note_state(source)
-                self.status.emit(e.notice)
+                self.status.emit(lang.t(e.notice))
                 following = retries = 0
                 self._sleep(2000)
                 continue
@@ -646,7 +728,7 @@ class Watcher(QThread):
             perfstats.record("frame", (time.monotonic() - frame_at) * 1000.0)
             # 只认真的 True：测试里的 MagicMock 这类不算，不然一直不等
             pending = getattr(processor, "pending", False) is True
-            for name in ("unread_shot", "pick_shot", "covered_shot"):
+            for name in ("unread_shot", "pick_shot", "covered_shot", "finish_shot"):
                 shot = getattr(processor, name, None)
                 if isinstance(shot, tuple):  # 只认元组：识别流程刚重建、还没有时为 None，测试里的假对象也不算
                     setattr(self, name, shot)
@@ -664,7 +746,7 @@ class Watcher(QThread):
             hidden = getattr(processor, "select_hidden", False) is True
             if (requested and not visible and not unknown and not hidden
                     and not kinds & {EV_PICKED, EV_MISSED_PICK, EV_NEWGAME}):
-                self.flash_status.emit("已截图识别：当前画面不是筹码三选一界面")
+                self.flash_status.emit(lang.t("已截图识别：当前画面不是筹码三选一界面"))
             if requested:
                 # 仍是同一个三选一界面时 Session 不发事件，界面靠这个信号收起「正在识别…」
                 self.capture_done.emit()
@@ -698,3 +780,7 @@ class Watcher(QThread):
             # 没显示三选一、还有排到下一帧的读数（pending）时不等：一帧只做一项读数，做完一项马上取下一帧，先看是不是三选一
             # 再接着读
             self._sleep(active_ms if visible else (2000 if failed else (0 if pending else idle)))
+        board = self.select_board
+        if processor is not None and board is not None:
+            # 线程停下（退出、收掉第二张）：自己不再算显示着三选一，另一路马上接着读，不用等记号过期
+            board.note(processor, False, 0.0)

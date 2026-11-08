@@ -37,8 +37,8 @@ MANUAL_DIR = PROJECT / "docs" / "manual"
 LAUNCHER = build_release.LAUNCHER_EXE  # 根目录双击的启动程序：工具的中文名加 .exe（app 里的程序本体叫 ACC.exe）
 # 首页 README 开头用粗体写的那句：docs/使用说明.md 里不重复；发行版里没有首页，使用说明网页的开头照写
 PURE_VISION = f"{version.APP_NAME}为纯视觉方案，不会操作游戏，不会影响游戏收发包，不会注入游戏内存。"
-# 和纯视觉声明并列的一条，下载之前就要看到：国服、国际服都认，拾星助手只认简体中文的游戏界面
-SIMPLIFIED_ONLY = "目前仅支持 PC 端简体中文。支持国服和国际服。"
+# 和纯视觉声明并列的一条，下载之前就要看到：Steam 版的国服、国际服和 TapTap 版都认，拾星助手只认简体中文、繁体中文的游戏界面
+LANGUAGE_NOTE = "目前仅支持 PC 端，游戏语言为简体中文或繁体中文。支持 Steam 版（国服和国际服）和 TapTap 版。"
 # 使用说明的各节（「### 」标题）：先是简介和系统需求（下载、解压之前就要知道电脑够不够），再是简短的上手和
 # 界面导览，长篇的详细说明等放在后面
 SECTIONS = ["简介", "系统需求", "三步上手", "界面导览", "一局中的操作", "常见问题", "详细说明", "隐私", "反馈问题", "声明"]
@@ -333,16 +333,16 @@ class ReadmeManualTest(unittest.TestCase):
         return self.section[start:end.start() if end else len(self.section)]
 
     def test_pure_vision_first(self):
-        """纯视觉声明（不操作游戏、不影响游戏收发包、不注入游戏内存）和「目前仅支持 PC 端简体中文」各用一行粗体写在首页 README 开头
+        """纯视觉声明（不操作游戏、不影响游戏收发包、不注入游戏内存）和「游戏语言为简体中文或繁体中文」各用一行粗体写在首页 README 开头
         （第一个「## 」标题前面），纯视觉声明在 docs/使用说明.md 里不重复；发行版里没有首页，生成的网页开头（目录前面，
         一打开就看得到）照写这两句。"""
         front = (PROJECT / "README.md").read_text(encoding="utf-8").split("\n## ", 1)[0]
         self.assertIn(f"\n**{PURE_VISION}**\n", front)
-        self.assertIn(f"\n**{SIMPLIFIED_ONLY}**\n", front)
+        self.assertIn(f"\n**{LANGUAGE_NOTE}**\n", front)
         self.assertNotIn(PURE_VISION, self.doc)
-        self.assertEqual(build_release.front_note(), [f"**{PURE_VISION}**", "", f"**{SIMPLIFIED_ONLY}**", ""])
+        self.assertEqual(build_release.front_note(), [f"**{PURE_VISION}**", "", f"**{LANGUAGE_NOTE}**", ""])
         main = self.page.split("<main>\n", 1)[1]
-        lead = (f'<div class="lead">\n<p><strong>{PURE_VISION}</strong></p>\n<p><strong>{SIMPLIFIED_ONLY}</strong></p>\n'
+        lead = (f'<div class="lead">\n<p><strong>{PURE_VISION}</strong></p>\n<p><strong>{LANGUAGE_NOTE}</strong></p>\n'
                 '</div>\n<nav id="toc"')
         self.assertTrue(main.startswith(lead), main[:300])
 
@@ -505,7 +505,7 @@ class ReadmeManualTest(unittest.TestCase):
             text = re.sub(r"\]\(#[^)]*\)", "]", line)
             with self.subTest(line=line[:30]):
                 if re.match(r"^\d+\. ", line):
-                    self.assertLessEqual(len(text), 70)  # 图注：一个编号一行
+                    self.assertLessEqual(len(text), 72)  # 图注：一个编号一行，连编号不超过 72 个字
                 elif line.strip() and not line.startswith(("#", "![")):
                     self.assertLessEqual(len(text), 120)
 
@@ -620,7 +620,7 @@ class TrayMenuTest(unittest.TestCase):
         setup = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "setup_tray")
         texts = [n.value for n in ast.walk(setup) if isinstance(n, ast.Constant) and isinstance(n.value, str)]
         items = [t for t in make_manual_images.TRAY_MENU if t is not None]
-        self.assertEqual(items, ["显示", "设置", "导出诊断", "使用说明", "关于", "退出"])
+        self.assertEqual(items, ["显示", "重置悬浮窗", "设置", "导出诊断", "退出"])
         for text in items:
             with self.subTest(item=text):
                 self.assertIn(text, texts)

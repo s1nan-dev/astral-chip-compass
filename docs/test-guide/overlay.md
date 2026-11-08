@@ -39,7 +39,7 @@
 
 - **测试观点**：只用公开探针（摘要、状态行、提示行、各卡片的开合、是否让边框变色等）断言屏幕上看得见的东西；事件全部由真实 Session 产生，按识别流程的顺序交给悬浮窗。
   - 三选一给出推荐：打开「推荐」卡片、列出三个候选筹码、首推标「★」、摘要有「刷新 ×N」；三选一期间收起这张卡片后同一次里不再自动展开，下一次三选一时自动展开（`AdviceEventTest`）。
-  - 选中后关闭：记下选择；选的是首推时「推荐」卡片收起、可回看上一次推荐；选的不是首推时问「未选择首推的原因」并给出三个原因按钮（`PickedEventTest`）。
+  - 选中后关闭：记下选择；选的是首推时「推荐」卡片收起、可回看上一次推荐；选的不是首推时问「未选择首推的原因」并给出四个原因按钮和问句右边的「×」（`PickedEventTest`）。
   - 一个都没认出来就关了时不请补录；候选筹码没读全时列出改正入口；点刷新后的中间帧保留刷新前的推荐、只标「正在刷新」（`IdleEventTest`、`UnreadableEventTest`、`RefreshingEventTest`）。
   - 角色待识别时推荐暂停，请用户在「筹码方案」卡片的角色下拉框里选角色，并让边框变色（`HeroNeededEventTest`）。
   - 漏记时补录行列出候选筹码按钮；同一组候选再次出现时撤销刚记下的筹码，补录行的说法写明是「再次出现、已撤销」（`MissedPickEventTest`、`PickRevertedEventTest`）。
@@ -66,7 +66,7 @@
 
 ## test_overlay_parts.py：不建窗口，单独测悬浮窗拆出去的几个纯计算模块
 
-- **测试观点**：从四个测试类检查——① `TakeViewTest`：刷新时取的会话快照（`state.take_view`）里列表是复制的；本局已结束时不再请用户选地图、补录；读不到的项按读不到算；星币拆账是「取走」式、只在要时取一次；升星花费只在读到星币数和星数时算、算错只写星币数；读某一项时抛异常只让那一组按读不到算。② `StatusTest`：状态胶囊与一行摘要的纯计算——识别本身状态的先后（已暂停 ＞ 暂不可用 ＞ 照常进行）；各项的先后与写法（写明主体、对局中待识别标橙）；一行摘要的取舍与缩短；状态胶囊悬停说明的分行；角色胶囊的写法；等待文字。③ `NoticeModelTest`：提示行怎么组装——对局中途判定的新一局两种写法与所属区域；面板提示的几种写法；补录与皮肤可用的提示；全局提示的顺序（「免费软件」声明排最后）。④ `OfferLogTest`：推荐日志的编号与记账——同一次三选一沿用编号；刷新换编号并记「刷新」；撤销、改正、撤销新一局；对局结束只记一次；三选一刚出现时读错（刷新次数读成 0、候选筹码名也读错）、补认改正后重算的推荐仍沿用同一个编号（不当成刷新）；记账认作另一次三选一（推荐事件的 `select_no` 变了，例如紧接着出现、概率行一样的两次）时换新编号、不按刷新次数另判（界面仍算显示着也一样），同一次里照旧按刷新次数判刷新（`test_session_says_another_select`）；同一组候选关了又出现、`select_no` 加了一时照旧沿用原来的编号（`test_reopened_keeps_id_with_select_no`）。
+- **测试观点**：从四个测试类检查——① `TakeViewTest`：刷新时取的会话快照（`state.take_view`）里列表是复制的；本局已结束时不再请用户选地图、补录；读不到的项按读不到算；星币拆账是「取走」式、只在要时取一次；升星花费只在读到星币数和星数时算、算错只写星币数；读某一项时抛异常只让那一组按读不到算。② `StatusTest`：状态胶囊与一行摘要的纯计算——识别本身状态的先后（已暂停 ＞ 暂不可用 ＞ 照常进行）；各项的先后与写法（写明主体、对局中待识别标橙）；一行摘要的取舍与缩短；状态胶囊悬停说明的分行；角色胶囊的写法；等待文字。③ `NoticeModelTest`：提示行怎么组装——对局中途判定的新一局两种写法与所属区域；面板提示的几种写法；补录与皮肤可用的提示；全局提示的顺序（「免费软件」声明排最后）。④ `OfferLogTest`：推荐日志的编号与记账——同一次三选一沿用编号；刷新换编号并记「刷新」；撤销、改正、撤销新一局；对局结束只记一次；三选一刚出现时读错（刷新次数读成 0、候选筹码名也读错）、补认改正后重算的推荐仍沿用同一个编号（不当成刷新）；记账认作另一次三选一（推荐事件的 `select_no` 变了，例如紧接着出现、概率行一样的两次）时换新编号、不按刷新次数另判（界面仍算显示着也一样），同一次里照旧按刷新次数判刷新（`test_session_says_another_select`）；同一组候选关了又出现、`select_no` 加了一时照旧沿用原来的编号（`test_reopened_keeps_id_with_select_no`）；补录的选择记 `via="supplement"`；认得出这一局的客户端时随三选一传给推荐日志（`client`），认不出时不传这个参数。
 - **检证对象**：`advisor/ui/overlay_parts/state.py`（`take_view`、`egg_inputs`、`SessionView`）、`advisor/ui/overlay_parts/status.py`（`capsule_bit`、`activity_tip`、`status_bits`、`pill_bits`、`status_tip`、`hero_pill`、`waiting_text`、`line_items`、`summary_tip`）、`advisor/ui/overlay_parts/notices.py`（`NoticeModel.rows/area/tips/needs_action`）、`advisor/ui/overlay_parts/records.py`（`OfferLog`）、`advisor/ui/overlay_parts/geometry.py`（`window_plan`）、`advisor/ui/overlay_parts/wording.py`（各文案常量）；`advisor/ui/services.py` 的 `Services`；`tests/support/fakes.py` 的 `FakeLogbook`。
 - **什么时候要跑**：改了上面这些纯计算函数或 `wording.py` 的文案常量；改了会话快照读的那些字段（`SessionView`、`take_view` 读的接口）或 `Services` 的接口时。
 - **怎么单独跑**：`python -B tools/run_tests.py --only test_overlay_parts`（上次约 0.006 秒）。
@@ -156,8 +156,8 @@
 
 ## test_overlay_room_undo.py：房间画面结束的局，之后判出的新一局能撤销
 
-- **测试观点**：组队房间要隔一会儿连续读到两次才结束本局（只读到一次不算）；结束后按轮次开始的新一局和对局中途判出的新一局一样带「撤销」、按「需要您操作」显示，撤销后恢复上一局的已有筹码、「对局 已结束」一起撤回；从选角界面开始的不可撤销（只在开局时出现），只作一次性说明。
-- **检证对象**：`advisor/ui/overlay.py`（`undo_new_game`、提示行）、`advisor/session`（`on_out_of_game` 读组队房间、`on_select_screen`、`on_hud`、`can_undo_new_game`、`game_over`）、`advisor/ui/overlay_parts/wording.py`（`NEWGAME_TEXT`、`NEWGAME_MIDGAME`、`NEWGAME_OWNED`）；搭法和 `tests/test_overlay_behavior.py` 的 `BehaviorBase` 相同。
+- **测试观点**：组队房间要隔一会儿连续读到两次才结束本局（只读到一次不算）；结束后按轮次开始的新一局和对局中途判出的新一局一样带「撤销」、按「需要您操作」显示，撤销后恢复上一局的已有筹码、「对局 已结束」一起撤回；从选角界面开始的不可撤销（只在开局时出现），只作一次性说明。`RejoinAfterMenuTest`：主菜单结束的局又连回同一局时不开新的一局，悬浮窗回到结束之前的样子（「对局 已结束」和等下一局的那句收起、换回等三选一的那句，已有筹码在，「查看筹码」面板提示按结束前放回），不另加提示；推荐日志不换局，真正结束时再记一条结束。
+- **检证对象**：`advisor/ui/overlay.py`（`undo_new_game`、提示行）、`advisor/session`（`on_out_of_game` 读组队房间和主菜单、`on_select_screen`、`on_hud`、`can_undo_new_game`、`game_over`）、`advisor/ui/overlay_parts/dispatch.py`（`on_status` 的 `rejoined`）、`advisor/ui/overlay_parts/wording.py`（`NEWGAME_TEXT`、`NEWGAME_MIDGAME`、`NEWGAME_OWNED`）；搭法和 `tests/test_overlay_behavior.py` 的 `BehaviorBase` 相同。
 - **什么时候要跑**：改了「房间画面结束本局」的判定（连续两次读到）、结束后新一局的依据或可撤销性、撤销后恢复的状态，或改这几句文案时。
 - **怎么单独跑**：`python -B tools/run_tests.py --only test_overlay_room_undo`（上次约 0.8 秒）。
 - **需要什么**：Qt 离屏平台。
@@ -166,10 +166,11 @@
   - `end_by_room` 相关失败 → 「组队房间要连续两次读到才结束本局」的判定改了。
   - `test_select_after_room_not_undoable` 失败 → 从选角界面开始的新一局被误当成可撤销，或说明文字改了。
   - `test_round_after_room_undoable` 失败 → 误认出的房间结束后、按轮次开新一局的显示或撤销恢复改了。
+  - `test_rejoin_restores_view` 失败 → 连回同一局时悬浮窗的处理（`dispatch.py` 的 `on_status` 里 `rejoined` 那一支、`records.py` 的 `OfferLog.end_revoked`），或记账那边连回的条件（`advisor/session/offgame.py` 的 `rejoinable`）改了。
 
 ## test_overlay_scheme_card.py：「筹码方案」卡片
 
-- **测试观点**：从多个测试类检查——① `SchemeCardTest`：卡片布局（角色下拉框在上、方案下拉框在下，两个按钮跨两行）、下拉框不加颜色、只列当前角色的方案、切换方案立即按当前三选一重算、编辑窗口与导入/导出窗口的接线、在编辑窗口里给当前角色新建/复制后悬浮窗当场换用（没有三选一时只出前半句提示，有三选一时按新方案重算；给别的角色建的不换，角色待识别时给卡片上显示的角色建的照样换）、方案下拉框换用后编辑窗口重标「使用中」、导入后「使用这套方案」三种结果（当场换用、记下给别的角色、方案已删掉）、方案文件读取结果与个人目录退回的提示、方案名/说明里的网页标记原样显示、滚轮不切换方案、识别记录。② `SchemeCardHeightTest`：全部展开的高度与三选一期间的位置。③ `SchemeOptionTextTest`：用自己的方案时推荐卡片上的文字（位次、马上拿不到（算少拿的橙色、悬停后接能保住的几张，避免不了的灰色）、只剩一个流派名额、只写悬停、全部必选、走偏、同系列、刷新那一行（含收入降档按低一档比、未标记时刷新次数紧的「预计不如」、刷新有多出来的「留 2 次，多出 3 次不必留」（悬停写之后的三选一按几次留、另多留 1 次以防估少）、剩余刷新次数没读出来时「消耗 1 次刷新」的悬停写明是估计的）），不开窗口。④ `SchemeAdviceCardTest`：这些文字画在卡片上的样子（位次在候选第一行、首推样式、同一档按档位前瞻排先后的标签、摘要与回看）。⑤ `AdviceBasisTest`：「推荐」卡片头那段「角色 · 方案」（默认推荐和我的方案、手动指定的角色后接「（手动指定）」、按推荐自己算的角色和方案写而不跟下拉框、角色待识别和卡片收起时不显示、回看上一次推荐时写上一次的、七套皮肤在窄的悬浮窗里截短后放得下且不挤掉区域名）。⑥ `HeroBoxGroupsTest`：角色下拉框的组名行（每组前面一行、不能选、按角色找下标和选中项都对；键盘上下、滚轮、按首字母跳都跳过组名；推荐暂停时点选同一个角色照样算选了一次）。⑦ `ComboRowDrawingTest`：下拉列表每一行的画法（鼠标所在行的高亮框、当前值左侧的强调色短条、不能选的分组标题不高亮并画成粗体淡色的标题、行高）。
+- **测试观点**：从多个测试类检查——① `SchemeCardTest`：卡片布局（角色下拉框在上、方案下拉框在下，三个按钮跨两行，「作业站」打开当前角色的方案列表）、下拉框不加颜色、只列当前角色的方案、切换方案立即按当前三选一重算、编辑窗口与导入/导出窗口的接线、在编辑窗口里给当前角色新建/复制后悬浮窗当场换用（没有三选一时只出前半句提示，有三选一时按新方案重算；给别的角色建的不换，角色待识别时给卡片上显示的角色建的照样换）、方案下拉框换用后编辑窗口重标「使用中」、导入后「使用这套方案」三种结果（当场换用、记下给别的角色、方案已删掉）、方案文件读取结果与个人目录退回的提示、方案名/说明里的网页标记原样显示、滚轮不切换方案、识别记录。② `SchemeCardHeightTest`：全部展开的高度与三选一期间的位置。③ `SchemeOptionTextTest`：用自己的方案时推荐卡片上的文字（位次、马上拿不到（算少拿的橙色、悬停后接能保住的几张，避免不了的灰色）、只剩一个流派名额、只写悬停、全部必选、走偏、同系列、刷新那一行（含收入降档按低一档比、未标记时刷新次数紧的「预计不如」、刷新有多出来的「留 2 次，多出 3 次不必留」（悬停写之后的三选一按几次留、另多留 1 次以防估少）、剩余刷新次数没读出来时「消耗 1 次刷新」的悬停写明是估计的）），不开窗口。④ `SchemeAdviceCardTest`：这些文字画在卡片上的样子（位次在候选第一行、首推样式、同一档按档位前瞻排先后的标签、摘要与回看）。⑤ `AdviceBasisTest`：「推荐」卡片头那段「角色 · 方案」（默认推荐和我的方案、手动指定的角色后接「（手动指定）」、按推荐自己算的角色和方案写而不跟下拉框、角色待识别和卡片收起时不显示、回看上一次推荐时写上一次的、七套皮肤在窄的悬浮窗里截短后放得下且不挤掉区域名）。⑥ `HeroBoxGroupsTest`：角色下拉框的组名行（每组前面一行、不能选、按角色找下标和选中项都对；键盘上下、滚轮、按首字母跳都跳过组名；推荐暂停时点选同一个角色照样算选了一次）。⑦ `ComboRowDrawingTest`：下拉列表每一行的画法（鼠标所在行的高亮框、当前值左侧的强调色短条、不能选的分组标题不高亮并画成粗体淡色的标题、行高）。
 - **检证对象**：`advisor/ui/overlay.py`（`_scheme_chosen`、`_use_scheme`、`_scheme_added`、`_use_requested`、`_recompute`、`_schemes_changed`、`_schemes_imported`、`_hero_changed`、`_hero_restore_clicked`、角色/方案下拉框、`diagnostic_state`）、`advisor/ui/overlay_parts/scheme_card.py`（`SchemeCard`）、`advisor/ui/overlay_parts/advice_card.py`（`AdviceCard.basis`、`show_basis`、`fit_basis`）、`advisor/ui/overlay_parts/dialogs.py`（`Dialogs` 打开编辑/导入导出窗口、`show_used`、`show_use_result`）、`advisor/schemes.py`（`SchemeStore`、`Scheme`、`get_catalog`、`default_schools`、`LoadNotice`）、`advisor/ui/text.py`（`option_views`、`advice_summary`、`advice_text`、`scheme_reroll_pills`、`loss_pills`、`place_tip`、`move_pills`、`demotion_pills`、`scheme_ahead` 等）、`advisor/ui/widgets.py`（`ComboRowDelegate`、`draw_combo_rows`、`fill_hero_combo`、`add_combo_header`、`Pill`）、`advisor/engine`（`plan_of`、`Place`、`Loss`、`RerollView` 等）、`advisor/ui/overlay_parts/geometry.py`（`live_placement`）、`advisor/ui/overlay_parts/wording.py`（`SCHEMES_*` 文案）；方案文件放测试沙箱临时文件夹，编辑/导入导出窗口用假窗口。
 - **什么时候要跑**：改了「筹码方案」卡片、方案存储（`advisor/schemes.py`）、自己方案的推荐文字（`text.py` 的位次/拿不到等）、下拉列表画法，或改这几句提示文案时。
 - **怎么单独跑**：`python -B tools/run_tests.py --only test_overlay_scheme_card`（上次约 30.3 秒）。
@@ -189,6 +190,23 @@
   - `test_warn_notes_orange`、`test_advice_text_first_line` 失败 → 方案附注的颜色或诊断包推荐全文的第一行改了。
   - `SchemeOptionTextTest.*` 失败 → 自己方案的位次/拿不到/收入降档/刷新那一行的文字改了（是有意改的就改断言的预期）。`SchemeAdviceCardTest.test_move_pills_on_card` 失败 → 同一档的「前瞻优于 / 不如 / 差不多」标签（`text.py` 的 `move_pills`）或档位前瞻的标签（`scheme_ahead`）改了。
   - `ComboRowDrawingTest.*` 失败 → 下拉列表的鼠标高亮框、当前值短条、分组标题的画法或行高改了。
+
+## test_scheme_map_switch.py：对局里按地图自动换筹码方案（悬浮窗这一层）
+
+- **测试观点**：从三个测试类检查——① `OverlayMapSchemeTest`：三选一开着时认出地图，按换成的方案立即重算（推荐日志记在同一次三选一上），出一次性提示 `MAP_SCHEME_SWITCHED`，方案下拉框和卡片头摘要都是换成的那套，保存的方案不变（不调 `SchemeStore.set_current`），识别记录记一条 scheme（via 为 map，带地图名）；只提示一次，之后刷新不再提示；快照里有「本局按地图换用了……」那一行要的几项，诊断包里有实际用的、保存的、按哪张地图换的。地图从三选一里的地图专属筹码认出来时，那一帧就按换成的方案算。换着的时候点「换回原来的」（`revert_map_scheme`）换回保存的那套、立即重算、出 `MAP_SCHEME_REVERTED`、不改方案文件；没有三选一时照样出提示；再点一次什么都不做。在方案下拉框里选回保存的那套等于点了「换回原来的」；选另一套记下这个角色用它、这一局不再按地图换；编辑窗口新建、复制和导入后「使用这套方案」同样不再按地图换。本局结束回到保存的方案、不出提示、不记识别记录，新的一局认出地图以后照常再换、再提示。地图交回自动识别时回到保存的方案。② `SchemeMapNoticeTest`：「筹码方案」卡片里方案下拉框下面那一行「本局按地图换用了「龙宫专用」」（级别 info，在 `scheme` 这一块）、按钮「换回原来的」和它的悬停说明（保存的是默认推荐时写「默认推荐」）；点按钮调用 `revert_map_scheme`，这一行收起、出 `MAP_SCHEME_REVERTED`、这一局不再按地图换；对局结束、新的一局收起，新的一局认出地图以后照常再出现；方案名里有尖括号、`&`，或像网页标记（`<b>粗</b>`）时按纯文本显示；一行显示时「筹码方案」卡片随这一行出现，全部展开时卡片收起着、要么这一行出现、要么又换了一套，会自动展开；方案下拉框里标了适用地图的那几项，悬停说明最后一段写「适用地图：……」（按 `Scheme.maps` 的先后、用「、」隔开），通用方案不写，行上的文字照旧只有方案名。
+- **检证对象**：`advisor/ui/overlay.py`（`_follow_scheme`、`revert_map_scheme`、`_use_scheme`、`_scheme_chosen`、`_scheme_added`、`_use_requested`，提示行的动作表）、`advisor/ui/overlay_parts/notices.py`（`map_switch` 那一行）、`advisor/ui/overlay_parts/layout.py`（「筹码方案」卡片的提示区、一行显示时出现与否）、`advisor/ui/overlay_parts/scheme_card.py`（`show_schemes` 的悬停说明）、`advisor/ui/overlay_parts/state.py`（`SessionView.map_switched`、`scheme_name`、`saved_scheme_name`、`take_map_switch`）、`advisor/ui/overlay_parts/wording.py`（`MAP_SCHEME_*`、`SCHEME_MAPS_TIP`）；记账那一层（`SessionMapSchemeTest`）见[对局记录](session.md)的同名一节。
+- **什么时候要跑**：改了按地图换方案在悬浮窗上的部分（重算与一次性提示、那一行和「换回原来的」、方案下拉框的悬停说明），或 `Session.scheme_choice`、`Session.take_map_switch`、`Session.stop_map_scheme` 以后。
+- **怎么单独跑**：`python -B tools/run_tests.py --only test_scheme_map_switch`（上次约 3 秒）。
+- **需要什么**：Qt 离屏平台；方案文件写在测试沙箱的临时文件夹里；不用识别样本截图，不弹窗口。
+- **输出怎么看**：同总则。`SchemeMapNoticeTest` 用 `notice_model.notices` 看这一轮排出的提示行，用 `notices.buttons("map_switch")`、`visible_texts` 看按钮和文字。
+- **出错时一般是哪里不对**：
+  - `test_auto_switch`、`test_switch_in_same_frame_as_chips` 失败 → 认出地图以后的重算、一次性提示 `MAP_SCHEME_SWITCHED` 或识别记录（via 为 map）改了。
+  - `test_revert`、`test_revert_without_offer`、`SchemeMapNoticeTest.test_revert_click` 失败 → `revert_map_scheme`（换回、重算、提示、打标记、识别记录）或那一行的按钮接线改了。
+  - `test_dropdown_saved_and_same`、`test_dropdown_other_scheme`、`test_editor_and_import_stop_switch` 失败 → 在方案下拉框、编辑窗口、导入后改用时的「这一局不再按地图换」改了。
+  - `test_game_over_returns_to_saved`、`SchemeMapNoticeTest.test_hides_after_game_and_new_game` 失败 → 本局结束、新的一局回到保存的方案，或那一行收起/再出现的时机改了。
+  - `SchemeMapNoticeTest.test_row_and_button`、`test_saved_default_tip`、`test_special_characters_plain`、`test_markup_name_plain` 失败 → 那一行的文字、按钮、悬停说明，或方案名的转义（提示行没有链接时按纯文本画，`notices.py` 的 `NoticeView.update`）改了。
+  - `test_one_line_and_collapsed` 失败 → 一行显示时卡片出现与否（`CARD_WHEN_COLLAPSED` 的 `scheme`）、卡片收起时的自动展开改了。
+  - `test_dropdown_applicable_maps` 失败 → 方案下拉列表的「适用地图」一段（`SCHEME_MAPS_TIP`、`show_schemes`）改了。
 
 ## test_overlay_shutdown.py：退出时的收尾与后台识别线程的停止、请求
 
@@ -226,12 +244,12 @@
 
 - **测试观点**：从五个测试类检查——① `WindowGoneTest`：「游戏窗口已最小化…」「未找到游戏窗口…」这两句在游戏窗口又看得到后收起，两种先后（识别线程抢在悬浮窗看到之前、或在看到之后才送到）都收得起来，仍最小化/仍找不到时照旧显示；悬浮窗自己说的「未找到游戏窗口，请先启动游戏。」（`NO_GAME`）和后台识别发来的（`capture.NOT_FOUND`）一字不差；要用户处理的出错提示不因查看游戏窗口而收起。`NoGameFitTest`：一行显示时这一句整句放得下（不从末尾省略，「请先启动游戏」看得见；默认皮肤、程序的正文字体）。② `RecognitionErrorTest`：识别出错的提示按固定时长（约 15 秒）自动收起、换回等待文字；一直出错时每次重新计时；后台识别线程发来的一帧子识别出错同样收起、错误记进错误记录；收到就马上画出来。③ `OperationResultExpiryTest`：操作结果的一次性提示按固定时长（约 15 秒）自动收起；要用户处理的出错提示照旧留着；到点时只有还是同一条才收起；15 秒内又来新提示时前一条的计时不清新的；同一句再来一次重新计时；移出筹码的那一条（带「撤销」）不走一次性提示，是「已有筹码」卡片里的提示行，按自己的计时（`REMOVE_UNDO_MS`）收起，前一次移出的计时到点不收后一次的。④ `OperationResultRealTimerTest`：按真实计时器（时长换小）走一遍，确认到点真的收起。
 - **检证对象**：`advisor/ui/overlay.py`（`set_status`/`_flash`/`_unflash`、`set_recog_error`、`set_flash_status`、`follower.poll`）、`advisor/ui/overlay_parts/wording.py`（`RECOG_FRAME`、`RECOG_ITEM`、`MANUAL_SWITCHED`、`REMOVED_TEXT`、`BLOCKED_HOTKEY`、`NO_GAME`）、`advisor/ui/overlay_parts/watcher.py`（`recog_error` 信号）、`advisor/vision/capture.py`（`MINIMIZED`、`NOT_FOUND`）、`advisor/ui/winapi.py`（`GameProbe`）；前台状态由假的探测函数给。
-- **什么时候要跑**：改了一次性提示的收起时长或计时逻辑、「最小化」「未找到窗口」两句的收起条件、识别出错提示的计时，或改这几句文案时。
+- **什么时候要跑**：改了一次性提示的收起时长或计时逻辑、「最小化」「未找到窗口」（含按游戏平台找时点明设置的那一句）的收起条件、识别出错提示的计时，或改这几句文案时。
 - **怎么单独跑**：`python -B tools/run_tests.py --only test_overlay_status_expiry`（上次约 4.7 秒）。
 - **需要什么**：Qt 离屏平台；识别线程用假的（不截屏）；前台状态由假探测函数给。
 - **输出怎么看**：同总则。用假时钟或把时长常量打桩成极小值，不真等 15 秒；收起走的是计时器到点时调用的那一步。
 - **出错时一般是哪里不对**：
-  - `WindowGoneTest.*` 失败 → 「最小化」「未找到窗口」两句的显示或收起条件改了；`test_no_game_same_as_capture` 失败 → `wording.NO_GAME` 和 `capture.NOT_FOUND` 只改了一边。
+  - `WindowGoneTest.*` 失败 → 「最小化」「未找到窗口」（含按游戏平台找时点明设置的那一句）的显示或收起条件改了；`test_no_game_same_as_capture` 失败 → `wording.NO_GAME` 和 `capture.NOT_FOUND` 只改了一边。
   - `NoGameFitTest` 失败 → 「未找到游戏窗口」那句改长了（或悬浮窗变窄了），一行显示时句末被省略。
   - `test_other_messages_untouched` 失败 → 查看游戏窗口时误收了要用户处理的提示。
   - `test_error_collapses_after_a_while`、`test_repeated_error_restarts_timer`、`test_default_is_fifteen_seconds` 失败 → 识别出错提示的计时或默认时长改了。
@@ -242,9 +260,9 @@
 
 ## test_overlay_watcher.py：后台识别线程（取帧、暂停、统计、出错提示）
 
-- **测试观点**：从四个测试类检查——① `WatcherTest`：按热键要求的那一帧识别完发 `capture_done`（画面没变、Session 不发事件时，界面靠它收起「正在识别…」）。② `WatcherCaptureTest`：后台线程用取帧对象取帧——截取状态在线程开始和每次变了时发 `capture_changed`；暂时没有画面（`NoFrame`）不当出错；取帧出错不退出、下次照常；线程结束关掉取帧对象；找不到窗口/最小化按约定两句原样显示、不算出错、不记错误记录；别的运行期错误按截取出错提示固定的中文、原文只进错误记录；窗口换了下次取帧前请取帧对象再试一次；取帧统计与识别统计按时间记录（识别统计紧跟在取帧统计后面）；等待前先请取帧对象关掉空闲的会话并按它给的秒数设上限。③ `WatcherPauseTest`：暂停时不取帧，按热键时也收起「正在识别…」；线程结束关掉取帧对象。④ `RecogErrorTextTest`：识别出错只发固定中文（不带报错原文）、原文只进错误记录；每一项各自去重（这次运行只提示一次，距这一项上一次出错满 10 分钟再提示）；同一帧几项合成一句；没有界面叫法的几项合成笼统那一句；建取帧对象出错时提示固定中文、错误记录照记。
-- **检证对象**：`advisor/ui/overlay_parts/watcher.py`（`Watcher` 的 `run`、`trigger`、`set_paused`、`stop`，以及 `capture_changed`/`status`/`capture_done`/`recog_error` 信号、`_emit_recog`/`_emit_recog_items`、`_log_grab_stats`/`_log_recog_stats`、`_idle_wait`、`_open_source`）、`advisor/ui/overlay_parts/wording.py`（`RECOG_CAPTURE`/`RECOG_FRAME`/`RECOG_ITEM`/`RECOG_ITEMS`/`RECOG_REPEAT_S`/`RECOG_STARTUP`、`recog_items_text`）、`advisor/ui/screen.py`（`FrameSource`、`NoFrame`、截取状态）、`advisor/vision/pipeline.py`（`FrameProcessor`）、`advisor/vision/capture.py`（`WindowGone`、`NOT_FOUND`、`MINIMIZED`）、`advisor/vision/window_capture.py`（`init_thread`）。
-- **什么时候要跑**：改了后台识别线程的取帧、暂停、截取状态上报、取帧/识别统计、识别出错提示与去重，或改这几句文案时。
+- **测试观点**：从六个测试类检查——① `WatcherTest`：按热键要求的那一帧识别完发 `capture_done`（画面没变、Session 不发事件时，界面靠它收起「正在识别…」）。② `WatcherCaptureTest`：后台线程用取帧对象取帧——截取状态在线程开始和每次变了时发 `capture_changed`；暂时没有画面（`NoFrame`）不当出错；取帧出错不退出、下次照常；线程结束关掉取帧对象；找不到窗口/最小化按约定两句原样显示、不算出错、不记错误记录；别的运行期错误按截取出错提示固定的中文、原文只进错误记录；窗口换了下次取帧前请取帧对象再试一次；取帧统计与识别统计按时间记录（识别统计紧跟在取帧统计后面）；等待前先请取帧对象关掉空闲的会话并按它给的秒数设上限。③ `WatcherPauseTest`：暂停时不取帧，按热键时也收起「正在识别…」；线程结束关掉取帧对象。④ `RecogErrorTextTest`：识别出错只发固定中文（不带报错原文）、原文只进错误记录；每一项各自去重（这次运行只提示一次，距这一项上一次出错满 10 分钟再提示）；同一帧几项合成一句；没有界面叫法的几项合成笼统那一句；建取帧对象出错时提示固定中文、错误记录照记。⑤ `WatcherPlatformTest`：取帧对象和快速盯绿框的取帧对象按自己的端去找窗口，不给端时照旧。⑥ `WatcherSwitchPlatformTest`：运行中换端——下一圈开始前关掉现在的取帧对象、按新的端重建，快速盯绿框的也一起换，正在识别的那一帧不受影响，和现在的值相同时不做事；两张悬浮窗共用的牌子（`select_board`）交给建好的识别流程，识别流程重建、线程结束时换下来的那一份在牌子上擦掉（`test_board_handed_to_processor`）。
+- **检证对象**：`advisor/ui/overlay_parts/watcher.py`（`Watcher` 的 `run`、`trigger`、`set_paused`、`stop`、`set_platform`，以及 `capture_changed`/`status`/`capture_done`/`recog_error` 信号、`_emit_recog`/`_emit_recog_items`、`_log_grab_stats`/`_log_recog_stats`、`_idle_wait`、`_open_source`）、`advisor/ui/overlay_parts/wording.py`（`RECOG_CAPTURE`/`RECOG_FRAME`/`RECOG_ITEM`/`RECOG_ITEMS`/`RECOG_REPEAT_S`/`RECOG_STARTUP`、`recog_items_text`）、`advisor/ui/screen.py`（`FrameSource`、`NoFrame`、截取状态）、`advisor/vision/pipeline.py`（`FrameProcessor`、`platform`）、`advisor/vision/capture.py`（`WindowGone`、`NOT_FOUND`、`NOT_FOUND_ONE`、`MINIMIZED`）、`advisor/vision/window_capture.py`（`init_thread`）。
+- **什么时候要跑**：改了后台识别线程的取帧、暂停、换端、截取状态上报、取帧/识别统计、识别出错提示与去重，或改这几句文案时。
 - **怎么单独跑**：`python -B tools/run_tests.py --only test_overlay_watcher`（上次约 4.2 秒）。
 - **需要什么**：Qt 离屏平台；用假的取帧对象和假的识别流程，不真截图、不跑识别、不建悬浮窗。
 - **输出怎么看**：同总则。等待用「处理事件直到条件成立」的方式，不按固定毫秒等。
@@ -256,6 +274,47 @@
   - `test_idle_wait_limit`、`test_idle_session_closed_while_waiting` 失败 → 等待前关空闲会话、设定等待上限的逻辑改了。
   - `RecogErrorTextTest.*` 失败 → 识别出错提示的写法、去重（每项各算各的、满 10 分钟再提示）或合成规则改了。
   - `test_source_init_error` 失败 → 建取帧对象出错时的提示或错误记录改了。
+  - `WatcherPlatformTest`／`WatcherSwitchPlatformTest` 失败 → 取帧对象没按这一张跟的端找窗口，或运行中换端时没关旧的、没按新的重建、快速盯绿框的取帧对象没跟着换（`watcher.py` 的 `_open_source`、`set_platform`）。
+
+## test_lanes.py：两张悬浮窗的接线（`advisor/ui/overlay_parts/lanes.py`）
+
+- **测试观点**：
+  - `StartupTest`：不是同时识别时只有一张、识别线程按设置找窗口；设置是「Steam端+TapTap端」时建两张，第一张的识别线程固定 Steam、第二张固定 TapTap；第二张用 `LaneSettings`、不交解锁记录（`records.track` 为假）、提示行只留本局（`notice_model.lane_only`）、Dialogs 和更新是第一张那份；两张的本局状态各一份。启动时两张各起一次跟随计时器，不多起。这里传的 `Services()` 没有推荐日志模块，所以第二张的 `services.logbook` 为 None。两张的识别线程共用同一块「谁的三选一正显示着」的牌子（`Lanes.select_board`，`vision.pipeline.SelectBoard`），运行中加上的第二张也是同一块。文字识别线程数的自检看第一张的识别线程和前台状态，对局看现在各张的 Session，第二张收掉以后只看第一张（`test_ocr_check_sees_every_lane`）。
+  - `LaneLogbookTest`：第二张接 TapTap 那条推荐日志线（`Lanes._lane_services`）：`services.logbook` 是 `lane("taptap")` 返回的对象，第一张的还是模块本身，`diagnostics`、`assets`、`version` 两张是同一个对象；没有 `lane`、取线抛异常时第二张为 None，抛异常时记一条错误记录；第二张出三选一记在假线上、第一张的模块没收到，选的不是首推时问「未选择首推的原因」，点原因记在假线的 `record_feedback` 上；两张都在问原因时第二张点「×」只收起第二张的，第一张照旧问、点原因记在第一张的模块上（`test_dismiss_per_window`）；第二张拿不到校准计数（`game_count_since_calibration` 为 None）。
+  - `ClientTest`：推荐日志里记的 `client`（对局报告用）每张按自己跟的端取：两开时第一张取 Steam 那一路上一次找到的标题、第二张取 TapTap 那一路的，哪一路最后找过窗口都不串；只开一个客户端时用上一次找到的，还没找到过时不传。
+  - `SwitchTest`：运行中加、收第二张——第一张不重建，第二张的识别线程停下，改回别的设置后第一张按设置找窗口；收第二张时把它那四项存进 `lanes[taptap]`。
+  - `HotkeyTest`：按热键先叫游戏窗口在前台的那一张，它识别完（`capture_done`）再叫另一张。截取屏幕方式、另一张不在前台时不叫它、在它的悬浮窗上写 `SCREEN_BEHIND`；直接截取时被盖住的另一张照样识别。先叫的那张没开始识别时直接叫另一张；5 秒没识别完也照常叫另一张，超时回调在界面线程跑；上一次按热键留下的超时不再叫。第一张正在换热键时不叫另一张。热键登记按两张的愿望合并：任一张要就登记，第一张还要时第二张不要也不注销。
+  - `TrayTest`：第二张的 × 只藏它自己；托盘「显示」把第二张一起显示；第二张 × 的悬停说明是 `LANE_CLOSE_TIP`、长句照样分行；第二张的「设置」「导入/导出」「编辑方案」接到第一张那份窗口（第二张自己那份三个都没建），「编辑方案」用第二张当前的角色。
+  - `SettingsTest`：第二张的 `set_manual`、`set_lowend`、`set_opaque`、`set_platform`、`set_ui_lang` 转给第一张并存进共用设置，不丢别的项（界面语言另抄给第二张），第二张的 `restart_app` 也转给第一张、只起一次新进程；第二张不写 `platform_seen`、皮肤一项写的是共用设置里那一项。第一张改了低配、手动模式以后套到第二张的窗口和识别线程，第二张正显示等待提示时按新模式重写。热键文字和能不能用跟着第一张；第二张也按第一张显示「下载挡着识别」。下载挡着时两张一起暂停、下载完两张一起重建识别流程，这期间按热键不叫另一张；下载挡着时加上第二张，它一开始就暂停。
+  - `SaveTest`：锁被后台识别占着时 `save_secondary` 限时放弃、记错误记录；收第二张时存设置也有上限，不一直等。
+  - `SchemesTest`：一张换了方案，另一张当前角色相同的当场重算；第二张换方案也会让第一张重算；角色不同的不动。编辑窗口新建、复制了第二张当前角色的方案、导入后对第二张的角色点「使用这套方案」，都由第二张当场换用。
+  - `HubTest`：第二张的「作业站」按它自己的角色打开。
+  - `DiagnosticTest`：有第二张时诊断包的 `state.json` 带 `lanes` 段（`taptap` 下是第二张的悬浮窗状态和对局快照），另交给诊断包的 `lanes` 里只有 `taptap`、带第二张最近的画面和读识别记录的函数；只有一张时 `lanes` 不传、也没有这个键；从第二张点「导出诊断」转给第一张、结果和从第一张点一样。走真的 `Background.export_diagnostics`（诊断模块是假的）：第二张的画面和本局、上一局的识别记录交给诊断包的 `lanes`，导出范围写进 `lanes.taptap.export_scope`，第一张自己的照旧；另一张的统计记录同样交给 `lanes`、范围写进 `lanes.taptap.stats_scope`；第二张还没有画面时 `frame` 为 None、照常导出；取第二张的画面、识别记录时出错时记错误记录、不带 `lanes` 照常导出；只有一张时的调用方式和原来一样（`diagnostics.export` 不认 `lanes` 也照样导出）。另用真的诊断模块写盘：诊断包里有 `taptap/frame.png`、`taptap/events.jsonl`、`taptap/stats.jsonl`，`state.json` 的 `lanes.taptap.export_scope`、`stats_scope` 对。推荐日志的取法：另一张的 `since` 更早时用另一张的，第一张更早时用第一张的，另一张是 None 或读不了时不影响，只有一张时和原来一样（`Background._earliest_scope` 交给 `records_between` 的 start）；只有一张、`since` 读不了时照样原样交给 `records_between`；另一张的 `since` 换不成本地时间（年份超出范围）时不算它、诊断包照常导出；按时刻比、不按字面比，带时区和不带时区的混在一起也能比。取出来以后每条只留它那一张自己的导出范围以内的：另一张开始得早时，这段时间里第一张更早的记录不带进来，和起点同一秒的不漏（`test_logbook_each_lane_keeps_its_own_range`）；`Background._lane_starts` 只有一张时为空表（不筛）、读不了的起点不放进来，`_in_own_range` 对起点不知道的线、时刻读不了、不是字典、`"lane"` 不是文字的记录一律留着（`test_lane_starts_and_own_range`）。
+  - `ShutdownTest`：退出时收两张、存第二张；两张都停不下来时总共只等一个期限（不是一张等完再等另一张），各记一条错误记录；第二张先收（第一张还要等下载、更新停下）；先限时叫停文字识别线程数的自检、再停识别线程，限时内没停下算没停下（`test_ocr_check_stopped_before_watchers`）。
+  - `DualTestTest`：开测时两张的识别线程都暂停，测完恢复并回调一次；取消立刻恢复；取消后马上重测，旧的一次结束时只清理、不解开新一次的暂停。
+  - `GamelogFolderTest`、`RecordFolderTest`：`taptap` 子文件夹第一次用时建出来，不参与顶层识别记录的删旧；子文件夹写不进时记一次错误、照样加上第二张。
+  - `LaneTagTest`：只有一张时标题栏的端标签藏着，`_summary_width()` 和没有标签时一样；同时识别时第一张写「Steam」、第二张写「TapTap」，悬停说明写 `LANE_TAG_TIP`；改回只选一个端时第一张的标签去掉、摘要宽度恢复，再改回同时识别时又出现；启动时设置就是同时识别时也有。
+  - `TwoLaneLayerTest`：没找到游戏窗口的那张看另一张（`window_plan` 的 `companion`）：第一张的游戏在前台时第二张置顶、识别仍暂停、热键没因它登记，反过来也一样；第一张切到后台或最小化时第二张退回不置顶并放到前台窗口的正下方；第一张的游戏也关了时第二张不置顶也不放到前台窗口下面；从托盘「显示」回来（`reset_layer`）不放；这张自己的游戏最小化时（不是找不到游戏窗口）也不放；只有一张时永远不置顶。`step_behind_foreground` 的几支（前台是普通窗口时放，是拾星助手自己、置顶窗口、`Progman`/`WorkerW`、没有前台窗口时不动）单独核。同时在玩另一个游戏时（这张 `background`、另一张 `game`/`own`）这张照样置顶、被另一个游戏的窗口盖住也不退到后面（截取屏幕时暂停也置顶）；另一张也在后台时照旧连续两次被盖住就退。`_probe` 交给 `probe_game` 的 `ignore` 是另一张的游戏窗口句柄（另一张找不到游戏窗口、没有另一张时为 None）。`restack` 把游戏在前台的那张排到上面并记 `layer_order`，已经排在下面、不是都置顶、两张都不是 `game`、只有一张、`native` 为假时不动；第二张出三选一跳到最前面、从托盘「显示」、切换游戏以后都再排一次。设置窗口这类独立窗口开着时点回游戏，排完以后它们照旧压在悬浮窗上面；另一张在三选一（`front`）时不放回（`test_restack_keeps_open_windows_above`、`test_restack_other_live_leaves_windows`）。玩着 TapTap 那边时从托盘「显示」，独立窗口也压在两张悬浮窗上面（`test_tray_show_puts_open_windows_above_both`）；第二张的托盘和跟随部件接的是共用的那一份独立窗口，第二张调 `relayer` 照第一张的层次设、不看自己的层次（`test_second_relayer_uses_shared_stack`）；第二张的层次变了不打断第一张关窗口时临时置顶的那一轮（`test_second_keeps_primary_settle_round`）；收掉的第二张不再把第一张当成另一张（`test_removed_second_has_no_companion`）。
+  - `TwoLanePlacementTest`：两个游戏窗口在同一处时，第二张没拖动过就建在第一张旁边、不相交；第一张被拖到第二张身上，第二张下一次 `poll` 挪开；第二张拖动过就放在拖到的地方，叠着也不动；两个游戏窗口分开摆时第二张和只有一张时算出来的一样；三选一时第二张让开第一张、第一张在第二张拖动过时避开它、第二张没拖动过时第一张不看它；找不到游戏窗口时第二张也不和第一张叠在一起；只有一张时位置不变。
+- **检证对象**：`advisor/ui/overlay_parts/lanes.py` 的 `Lanes`（`update_lane_tags`、`_probe`、`_other_game`、`restack`、`diagnostic_lanes`、`diagnostic_sources`）、`Lane`、`LaneHotkey`、`SCREEN_BEHIND`、`LANE_TAG_TIP`、`PENDING_WAIT_S`；`advisor/ui/overlay.py` 的 `set_lane_tag`、`_companion`、`_companion_activity`、`_companion_rect`、`_companion_fixed`、`_restack`；`advisor/ui/overlay_parts/geometry.py` 的 `window_plan`（`companion`）、`WindowPlan`、`live_placement`（`avoid`）、`overlay_position`（`avoid`）、`beside`（含 `prefer`）、`pair_position`、`AVOID_WEIGHT`；`advisor/ui/overlay_parts/follow.py` 的 `WindowFollower.update_plan`、`apply_layer`、`reset_layer`、`target_position`、`place`、`poll`、`companion_activity`、`companion_rect`、`companion_fixed`、`yields`、`restack`；`advisor/ui/winapi.py` 的 `step_behind_foreground`、`DESKTOP_CLASSES`、`probe_game`（`ignore`）、`below`；`advisor/vision/capture.py` 的 `PLATFORM_TAGS`、`PLATFORM_NAMES`；`advisor/ui/overlay.py` 的 `Overlay`（`primary`、`_attach_primary`、`_open_editor_lane`、`_use_scheme`、`_scheme_added`、`_use_requested`、`_schemes_changed`、`start_dual_test`、`cancel_dual_test`、`wait_dual`、`_set_dual_paused`、`show_hotkey_skipped`、`export_diagnostics`、`_assets_blocked`、`_companion_watchers`、`_reset_partner`、`_reset_one`、`shutdown`）；`advisor/ui/overlay_parts/app.py` 的 `main`、`OverlaySession`、`BOTH`、`LANE_KEYS`；`follow.py` 的 `Tray.show_more`、`Tray.fallback`、`Tray.show_from_tray`、`WindowStack`（`relayer`、`open_windows`、`mark_layer`、`cancel_settle`）、`LANE_CLOSE_TIP`；`notices.py` 的 `NoticeModel(lane_only=)`；`records.py` 的 `Eggs(track=)`；`background.py` 的 `Background(also_pause=)`、`_set_blocked`、`_earliest_scope`、`_lane_starts`、`_logbook_extra`、`_in_own_range`、`stats_reader`、`_read_stats`；`advice_card.py` 的 `question_state`；`dialogs.py` 的 `open_editor(hero=)`；`watcher.py` 的 `request_stop`；`advisor/gamelog.py` 的 `GameRecorder`；`advisor/schemes.py` 的 `SchemeStore`。
+- **什么时候要跑**：改了 `overlay_parts/lanes.py`、`Overlay` 里的两张接线（转给第一张、方案同步、性能测试暂停、退出）、`main()` 里两张的建法、第二张的关闭/托盘/提示行/解锁/推荐日志处理、诊断包里推荐日志的取法（`background.py` 的 `_earliest_scope`、`_lane_starts`、`_in_own_range`），或识别记录的 `taptap` 子文件夹，都要跑。
+- **怎么单独跑**：`python -B tools/run_tests.py --only test_lanes`（上次没有记录）。
+- **需要什么**：Qt 离屏平台，不弹窗；识别线程、热键线程、取帧都换成假的；设置文件写在测试沙箱的临时文件夹里。
+- **输出怎么看**：同总则；错误记录用 `capture_errors` 收，结束时核对。
+- **出错时一般是哪里不对**：
+  - `StartupTest`／`SwitchTest` 失败 → 两张的建法、跟的端、第二张的设置类、或增删第二张的处理改坏（`lanes.py` 的 `wire_primary`、`add_secondary`、`remove_secondary`、`set_platform`）。
+  - `HotkeyTest` 失败 → 先叫哪张、5 秒保险、几种不叫的情形或热键登记的合并改坏（`on_hotkey`、`_set_pending`、`_fire_pending`、`set_hotkey_enabled`）；`SCREEN_BEHIND` 的提示没出现时看 `Overlay.show_hotkey_skipped`。
+  - `TrayTest` 失败 → 第二张 × 的悬停说明或只藏自己、托盘显示两张、三个按钮接到第一张或编辑窗口的角色改坏（`_attach_primary`、`_open_editor_lane`、`LANE_CLOSE_TIP`）。
+  - `SettingsTest` 失败 → 设置转给第一张、同步到第二张、热键状态、下载挡着时两张一起暂停/重建改坏（`sync_from_primary`、`sync_hotkey_state`、`Background.also_pause`）。
+  - `SaveTest` 失败 → 限时拿锁存第二张的处理改坏（`_save_lane`、`save_secondary`）。收第二张那一条一直不结束 → 收完设端标签时等锁去了（`set_lane_tag`）。
+  - `SchemesTest`／`HubTest` 失败 → 方案同步（只叫另一张、同角色才动）或第二张的作业站角色改坏（`scheme_changed`、`lane_for_hero`、`open_hub`）。
+  - `DiagnosticTest` 失败 → `lanes` 段的内容、只有一张时没有这个键、`Lanes.diagnostic_sources` 取的第二张画面和识别记录没传给 `Background.export_diagnostics` 的 `lanes`、第二张导出没转给第一张，或 `taptap/` 子文件夹没写出来（`diagnostic_lanes`、`diagnostic_sources`、`export_diagnostics`）；推荐日志带多了、带少了 → 取起点或每条筛的那一步改坏（`Background._earliest_scope`、`_lane_starts`、`_in_own_range`）。
+  - `ShutdownTest` 失败 → 两张一起收尾、共用一个期限、第二张先收、限时存设置、先叫停文字识别线程数的自检改坏（`shutdown`、`save_secondary`）。
+  - `DualTestTest` 失败 → 性能测试暂停两张、恢复、取消后迟到结果的清理改坏（`start_dual_test`、`cancel_dual_test`、`_set_dual_paused`）。
+  - `GamelogFolderTest`／`RecordFolderTest` 失败 → `taptap` 子文件夹的建法、删旧或写不进时的处理改坏（`gamelog.GameRecorder`、`add_secondary`）。
+  - `LaneTagTest` 失败 → 增减第二张时没设或没去掉端标签、端名取的不是 `PLATFORM_TAGS`（`update_lane_tags`、`set_lane_tag`）。
+  - `TwoLaneLayerTest` 失败 → `window_plan` 的 `nogame` 那一支没看 `companion`、另一张的状态没接上（`_companion_activity`），或退回不置顶时没按条件放到前台窗口下面、`step_behind_foreground` 的判断改坏（`apply_layer`、`step_behind_foreground`）；`background` 那一支没看 `companion`（玩另一个游戏时这张退到了后面）、`_probe` 没把另一张的游戏窗口交给 `ignore`（`_other_game`），或 `restack` 没把前台那张排上去、排完没把独立窗口放回上面（`window_plan`、`_other_game`、`restack`）；托盘「显示」以后独立窗口在第二张下面、第二张调 `relayer` 没设到共用的那一份 → `Overlay` 建 `WindowFollower`、`Tray` 时把 `self.windows` 的方法直接传了进去（要用到时再取，`_attach_primary` 后来才换成第一张的）；第一张关窗口时临时置顶的那一轮被打断 → 第二张的 `cancel_settle` 接到了共用的那一份；收掉的第二张还有另一张 → `_companion` 少了不到两张时为 None 那一条。
+  - `TwoLanePlacementTest` 失败 → 第二张没让开第一张、拖动过以后还在挪，或第一张该不该避开第二张的条件改坏（`WindowFollower.target_position` 的 `beside` 和 `avoid`、`place`、`poll`，`Overlay._companion_rect`、`_companion_fixed`）。
 
 ## test_overlay_window.py：悬浮窗整体（卡片、补录、地图、热键、设置窗口、一行/展开）
 
@@ -316,20 +375,25 @@
 - **测试观点**：
   - 导出诊断：设置窗口里点「导出诊断」，写诊断包期间按钮不可点、写完恢复，结果写在悬浮窗的提示里；没有推荐日志模块时不带额外记录；没有诊断模块时提示不可用（`OverlayServicesTest`）。
   - 导出诊断带的原图取后台识别最近的一帧：直接截取下不另截、不带原图；截取屏幕下现截一张，并记下截取方式、出错原因和步骤。
-  - 后台识别留着最近一次三选一有筹码没读出来时的那一帧（悬浮窗的 `unread_source` 现取）时，「导出诊断」把它交给诊断包另存（`select_unreadable`）；还没有、取的时候出错、没接上时不带，照常导出；撤销误判时自动保存的那一份不带（`test_export_carries_unread_frame`）。记下选中项用的那一帧、被临时盖住而没有采用的那一帧（`pick_source`、`covered_source`，交给诊断包的 `select_picked`、`select_covered`）同样（`test_export_carries_select_shots`）。
+  - 后台识别留着最近一次三选一有筹码没读出来时的那一帧（悬浮窗的 `unread_source` 现取）时，「导出诊断」把它交给诊断包另存（`select_unreadable`）；还没有、取的时候出错、没接上时不带，照常导出；撤销误判时自动保存的那一份不带（`test_export_carries_unread_frame`）。记下选中项用的那一帧、被临时盖住而没有采用的那一帧、对局中途像一局打完的那一帧（`pick_source`、`covered_source`、`finish_source`，交给诊断包的 `select_picked`、`select_covered`、`finish_look`）同样（`test_export_carries_select_shots`）。
   - 识别记录：有记录器时先写盘再取本局和上一局两段，原样交给诊断包；没有记录器时退回最近的识别事件，玩家名字换成代号。
+  - 统计记录：读完识别记录以后另读最近 12 小时的统计（`stats_reader`，没有记录器时交回空表和 `source` 为 `none` 的说明），经 `extra` 写成 `stats.jsonl`，范围写进 `state.json` 的 `stats_scope`；读不出来时记错误记录、不带 `stats.jsonl`、说明里写 error，诊断包照常导出；撤销误判时自动保存的那一份不读、不带（`test_export_stats_reader_records_scope`、`test_export_stats_error_keeps_package`、`test_undo_does_not_carry_stats`）。
+  - 另一张悬浮窗的画面、识别记录和统计（`lanes`）：在后台那一步里读识别记录、统计，原样交给诊断包的 `lanes`，导出范围写进 `lanes.<端名>.export_scope`、`stats_scope`，第一张的识别记录、推荐日志和导出范围照旧；读不出来时记错误记录、诊断包照常导出（这一端的识别记录为空、`export_scope`、`stats_scope` 带 error），`read`、`stats` 为 None 时当成空的；不给或空时调用方式和原来一样（`test_export_lanes_read_in_background`、`test_export_lane_stats_read_in_background`、`test_export_lane_read_error_keeps_package`、`test_export_without_lanes_unchanged`）。`events_reader`、`current_frame` 在界面线程里当场取好识别记录器和界面处理过的事件，之后换记录器、再往界面的事件里加都不影响；有画面时返回它，没接上、取的时候出错时返回 None（`test_events_reader_and_current_frame`）。
   - 撤销误判的新一局时自动存一份诊断包（不含截图），记下误判时的状态和识别记录。
   - 首次启动下载识别所需的图片：要下的多（多于 `DOWNLOAD_PAUSE_OVER` 张）时下载期间暂停识别并标出，只补两张时不暂停（个别图片下不了的提示和隔天再试见 `test_download_fail.py`）、失败可重试、下载完成整个重画（筹码图标和开着的编辑方案窗口的行图标一起重做）；下完把这一轮的用时记进识别记录（`download_stats`，带走下载模块填的各项，另加这一轮的模式和是不是点「重试」开始的），没有识别记录器时不写、也不出错（`test_download_logs_stats`）。
   - 手动导出另打压缩包：诊断包文件夹旁边同名的 .zip，提示写压缩包的位置、「打开文件夹」选中它；压缩包没打成时文件夹照旧、提示写文件夹并照实说「压缩包没有打成」、原因进错误记录；撤销误判时自动保存的不打（`test_export_zip`）。
   - 一行显示时「已选」和问原因那一块 20 秒不点就收起、这一次不记；全部展开时照旧显示、能点（`test_question_line_collapses`）。
-  - 关于窗口显示版本和资料出处；托盘：点关闭收到托盘、只提示一次（自己画的小提示框，一次都不调用会放提示音的 `showMessage`；约 4 秒后、点一下都会藏起来；颜色跟皮肤的悬停说明；位置贴着托盘图标、拿不到时放在主屏幕右下角），从托盘能显示回来；托盘菜单的六项和先后，「设置」「导出诊断」先把收在托盘里的悬浮窗显示出来；「使用说明」用系统默认的程序打开、文件不在或打不开时在悬浮窗上照实提示（`test_close_to_tray`、`test_toast_follows_skin_colors`、`test_toast_position`、`test_tray_menu`、`test_open_manual`、`test_manual_path`）。`QuietTest` 另在程序代码里查不调用 `showMessage`、`MessageBeep`。
+  - 点问句右边的「×」：一行显示时「已选」和问原因这一块马上收起、卡片回到一行，过了 20 秒再全部展开也不再问（只写「已选：X」，和到点收起的不同），全部展开时问原因这一块不见、「已选：X」照旧；推荐日志没有这一次的 feedback，识别记录里有一条 `dismiss_feedback`；点了以后 `submit_feedback` 也不记，下一次三选一又没选首推时照常再问；已记录原因以后「×」不显示（`test_dismiss_question_line`、`test_dismiss_expanded_keeps_picked`、`test_dismiss_stops_later_feedback_and_new_pick_asks_again`、`test_dismiss_hidden_after_recorded`）。
+  - 点第四个原因「想试别的玩法」：记进推荐日志，这一行换成「已记录：想试别的玩法」（`test_feedback_try_other_school`）。界面和推荐日志的原因一字不差（`test_feedback_reasons_match_logbook`）；它的悬停说明写不算推荐不准，其余原因照同一句填原因，「×」写不选原因（`test_reason_tips`）。
+  - 关于窗口显示版本和资料出处；托盘：点关闭收到托盘、只提示一次（自己画的小提示框，一次都不调用会放提示音的 `showMessage`；约 4 秒后、点一下都会藏起来；颜色跟皮肤的悬停说明；位置贴着托盘图标、拿不到时放在主屏幕右下角），从托盘能显示回来；托盘菜单的各项和先后（作业站总开关开着时），「设置」「导出诊断」先把收在托盘里的悬浮窗显示出来；悬浮窗打开使用说明（`open_manual`）用系统默认的程序打开、文件不在或打不开时在悬浮窗上照实提示（`test_close_to_tray`、`test_toast_follows_skin_colors`、`test_toast_position`、`test_tray_menu`、`test_open_manual`、`test_manual_path`）。`QuietTest` 另在程序代码里查不调用 `showMessage`、`MessageBeep`。
   - 一次性提示的计时器挂在悬浮窗上：悬浮窗在这之前删掉了就不再收起，也不去碰已删除的部件。
   - 推荐、选择、「未选择首推的原因」、漏记补录、同一组候选再出现，都按正确的编号记进推荐日志；判定新一局、撤销新一局也告诉推荐日志。
-  - 用户在悬浮窗上的操作（改正、补录、移出、关提示、切模式、切背景）记进识别记录的用户操作一条。
+  - 没有推荐日志接口时（程序文件不完整时的第一张）不问「未选择首推的原因」：`question_state()` 为 `None`，点了也记不下来（`test_feedback_without_logbook`）。
+  - 用户在悬浮窗上的操作（改正、补录、移出、关提示、切模式、切背景、收起问原因）记进识别记录的用户操作一条。
 
-- **检证对象**：`advisor/ui/overlay_parts/background.py` 的 `Background`（`snapshot`、`export_diagnostics`、`_zip`、`export_done`、`save_undo_record`、`check_assets`、`start_download`、`download_finished`、`_icons_arrived`）；`advisor/ui/tray_toast.py`（`TrayToast`、`toast_position`）；`advisor/ui/overlay_parts/follow.py` 的 `Tray`（`setup_tray`、`menu_settings`、`menu_export`、`close_clicked`、`show_toast`）；`advisor/paths.py` 的 `manual_path`；`advisor/ui/overlay_parts/records.py` 的 `OfferLog`；`advisor/ui/widgets.py` 的 `chip_icon`；`advisor/ui/overlay.py` 的 `Overlay`（`export_diagnostics`、`frame_source`、`unread_source`、`pick_source`、`covered_source`、`check_assets`、`_flash`/`_unflash`、托盘、`show_about`）。
+- **检证对象**：`advisor/ui/overlay_parts/background.py` 的 `Background`（`snapshot`、`export_diagnostics`、`_read_lanes`、`events_reader`、`stats_reader`、`_read_events`、`_read_stats`、`current_frame`、`_zip`、`export_done`、`save_undo_record`、`check_assets`、`start_download`、`download_finished`、`_icons_arrived`）；`advisor/ui/tray_toast.py`（`TrayToast`、`toast_position`）；`advisor/ui/overlay_parts/follow.py` 的 `Tray`（`setup_tray`、`menu_reset`、`menu_settings`、`menu_export`、`close_clicked`、`show_toast`）；`advisor/paths.py` 的 `manual_path`；`advisor/ui/overlay_parts/records.py` 的 `OfferLog`；`advisor/ui/widgets.py` 的 `chip_icon`；`advisor/ui/overlay.py` 的 `Overlay`（`export_diagnostics`、`frame_source`、`unread_source`、`pick_source`、`covered_source`、`finish_source`、`check_assets`、`_flash`/`_unflash`、托盘、`show_about`、`open_manual`）。
 
-- **什么时候要跑**：改了导出诊断或识别记录的收集与写法、图片下载、托盘、关于窗口、推荐日志的转接（`background.py`、`records.py`、`overlay.py` 里这几处）以后。
+- **什么时候要跑**：改了导出诊断或识别记录的收集与写法（含另一张悬浮窗的 `lanes`、`events_reader`、`current_frame`）、图片下载、托盘、关于窗口、推荐日志的转接（`background.py`、`records.py`、`overlay.py` 里这几处）以后。
 
 - **怎么单独跑**：`python -B tools/run_tests.py --only test_overlay_background`（上次约 6 秒）。
 
@@ -339,6 +403,9 @@
 
 - **出错时一般是哪里不对**：
   - `test_export_diagnostics`、`test_export_whole_game_from_recorder`、`test_export_uses_session_events` 失败 → 多半是导出时取的记录范围或写法改坏了（看 `overlay_parts/background.py` 的 `export_diagnostics`、`_read_events`）。
+  - `test_export_stats_reader_records_scope`、`test_export_stats_error_keeps_package`、`test_undo_does_not_carry_stats` 失败 → 统计记录没在后台那一步里读、没写成 `stats.jsonl`、`stats_scope` 没写、读不出来时没记错误记录或照常导出，或撤销误判时也读了（看 `background.py` 的 `export_diagnostics`、`stats_reader`、`_read_stats`）。
+  - `test_export_lanes_read_in_background`、`test_export_lane_stats_read_in_background`、`test_export_lane_read_error_keeps_package`、`test_export_without_lanes_unchanged`、`test_events_reader_and_current_frame` 失败 → 另一张的识别记录、统计没在后台那一步里读、导出范围没写进 `lanes.<端名>.export_scope`、`stats_scope`、读不出来时没记错误记录或没照常导出，或 `events_reader`、`current_frame` 没在界面线程里当场取好（看 `background.py` 的 `export_diagnostics`、`_read_lanes`、`events_reader`、`stats_reader`、`current_frame`）。
+  - `test_feedback_without_logbook` 失败 → 没有推荐日志接口时还问了原因，或 `question_state` 没按接口判断（`advice_card.py` 的 `question_state`、`Overlay.services`）。
   - `test_undo_saves_record_without_frame`、`test_undo_record_uses_recorder` 失败 → 多半是撤销误判新一局的自动存盘改坏了（看 `background.py` 的 `save_undo_record`）。
   - `test_download_progress_failure_and_retry`、`test_download_blocks_recognition`、`test_icons_redrawn_after_download` 失败 → 多半是图片下载的进度、暂停、重试或下载完重画改坏了（看 `background.py` 的 `check_assets`、`download_finished`、`_icons_arrived`）。
   - `test_download_logs_stats` 失败 → 下载统计没写进识别记录、字段没带上，或没有记录器时仍写了（看 `background.py` 的 `_log_download_stats`）。
@@ -347,6 +414,7 @@
   - `test_flash_timer_tied_to_window` 失败 → 多半是一次性提示的计时器没挂在悬浮窗上，删掉的窗口还会被碰到。
   - `test_export_zip` 失败 → 压缩包没打、打的位置或名字不对，或打不成时的提示和错误记录改了（看 `background.py` 的 `_zip`、`export_done`，`diagnostics.zip_report`，`notices.NoticeModel` 的 export 一行）。
   - `test_question_line_collapses` 失败 → 一行显示时问原因那一块挂多久（`QUESTION_LINE_MS`、`AdviceCard.ask_until`）或 `layout.apply_mode` 里的显示条件改了。
+  - `test_dismiss_*`、`test_feedback_try_other_school`、`test_reason_tips` 失败 → 多半是「×」的显示条件、`AdviceCard.dismiss_feedback` 的状态复位，第四个原因的记法，或原因按钮按原因取悬停说明的那一处改了（看 `advice_card.py` 的 `question_state`、`set_pick`、`dismiss_feedback`，`layout.py` 的 `build_advice`、`feedback_dismiss`）。
   - `test_close_to_tray`、`test_toast_*`、`QuietTest` 失败 → 收到托盘的提示又用了系统通知、会出声的接口，或小提示框的时长、位置、颜色改了（看 `advisor/ui/tray_toast.py`、`follow.Tray.close_clicked`）。
   - `test_tray_menu`、`test_open_manual`、`test_manual_path` 失败 → 托盘菜单的项、先后或动作改了，或使用说明的位置（`paths.manual_path`）、找不到时的提示改了。
   - 有意改了导出范围、提示文字或记录字段时，要一并改这里的预期。
@@ -358,6 +426,7 @@
   - 真的拖动：悬浮窗跟着移动，并记下相对游戏窗口的位置。
   - 拖到屏幕外松手：马上整个挪回屏幕内，存下的相对位置夹在 -1～2 之间，下次启动照这个位置放（`OffScreenTest`）。
   - 没有游戏窗口时拖到屏幕外：同样马上挪回屏幕内。
+  - 按在标题栏的端标签上也能拖动悬浮窗（`LaneTagDragTest`）：标签不接文字交互，鼠标事件照常往上传给悬浮窗。
 
 - **检证对象**：`advisor/ui/overlay_parts/follow.py` 的 `WindowFollower.mouse_press`、`mouse_move`、`mouse_release`、`remember_position`；`advisor/ui/overlay.py` 的 `Overlay.mousePressEvent`、`mouseMoveEvent`、`mouseReleaseEvent`；`advisor/ui/overlay_parts/geometry.py` 的 `valid_rel`；设置项 `window_rel`、`window_pos`。
 
@@ -374,7 +443,7 @@
   - `test_real_drag_moves_and_remembers` 失败 → 多半是相对位置的记录改坏了（看 `follow.py` 的 `remember_position`）。
   - `OffScreenTest` 的两个用例失败 → 多半是挪回屏幕内或相对位置的夹取（-1～2）改坏了（看 `geometry.py` 的 `valid_rel`、`follow.py` 的 `fit_on_screen`）。
 
-## test_overlay_event_branches.py：`Overlay.handle` 里几个分支的行为（picked、pick_reverted、map_read、game_over）
+## test_overlay_event_branches.py：`Overlay.handle` 里几个分支的行为（picked、pick_reverted、map_read、game_over、胜负）
 
 - **测试观点**：
   - `picked`：选择记在给出推荐的那一次三选一上；没给出推荐（候选没认全）就选了时，只写「已选」、不问原因，推荐日志里没有这一次（`PickedBranchTest`）。
@@ -382,10 +451,11 @@
   - `map_read`：读到地图以后「打开任务栏」的提示收起，状态里写地图名（`MapReadBranchTest`）。
   - `game_over`：推荐日志记一次对局结束（同一局再送一次也不重复），带星数和已有筹码；只对进行中的对局有意义的提示（星数增加需补录）收起，边框不变色（`GameOverBranchTest`）。
   - 房间画面结束的局，之后的新一局撤销了：结束时收起的「查看筹码」提示、待补录提示、补录行（连同「再次出现、已撤销」的说法）都回来；撤销说明那次结束是误认的，这一局真正结束时推荐日志照常再记一条（以后一条为准），再读到结算画面也不重复记（`UndoAfterRoomEndTest`）。
+  - 胜负（`GameResultBranchTest`，对局报告的拼换成记下调用）：没认出通关画面时，结束时推荐日志记一条（胜负 null），报告先等（排一次 `RESULT_WAIT_MS`）；奖励画面星币是 10，定了失败，再记一条（别的项照抄），这时拼一次；再读到奖励画面、等满的计时器晚到都不再记、不再拼；读到奖励画面前后悬浮窗上的文字一样。认出了通关画面：结束时就记通关，奖励画面对得上、不再记，这时拼。打输横幅和胜负判定的记账另在 test_game_outcome 里核对。没等到奖励画面就开了下一局：按上一局的局号拼一次；退出时（`Overlay.shutdown`）拼好才往下走。
 
-- **检证对象**：`advisor/ui/overlay.py` 的 `Overlay.handle`；`advisor/ui/overlay_parts/dispatch.py` 的 `EventHandlers.on_picked`、`on_pick_reverted`、`on_map_read`、`on_game_over`、`on_newgame`；`advisor/ui/overlay_parts/records.py` 的 `OfferLog`；文字在 `advisor/ui/overlay_parts/wording.py`。
+- **检证对象**：`advisor/ui/overlay.py` 的 `Overlay.handle`、`report_game_over`、`shutdown` 里拼还在等胜负的报告那一步；`advisor/ui/overlay_parts/dispatch.py` 的 `EventHandlers.on_picked`、`on_pick_reverted`、`on_map_read`、`on_game_over`、`on_status`、`on_newgame`、`log_game_over`、`settle_report`；`advisor/ui/overlay_parts/records.py` 的 `OfferLog`；`advisor/ui/overlay_parts/reporting.py` 的 `Reporting.game_over`、`settle`、`settle_all`；文字在 `advisor/ui/overlay_parts/wording.py`。
 
-- **什么时候要跑**：改了这四个分支的处理、推荐日志的记账、或者提示行/待补录提示的收起与恢复（`dispatch.py`、`records.py`、`notices.py`）以后。
+- **什么时候要跑**：改了这几个分支的处理、推荐日志的记账（对局结束按局数和胜负去重）、对局报告什么时候拼，或者提示行/待补录提示的收起与恢复（`dispatch.py`、`records.py`、`reporting.py`、`notices.py`）以后。
 
 - **怎么单独跑**：`python -B tools/run_tests.py --only test_overlay_event_branches`（上次约 4 秒）。
 
@@ -398,22 +468,26 @@
   - `PickRevertedBranchTest` 失败 → 多半是撤销选择、沿用编号的逻辑改坏了（看 `dispatch.py` 的 `on_pick_reverted`、`records.py` 的 `on_reverted`）。
   - `MapReadBranchTest` 失败 → 多半是读到地图后提示的收起或状态写法改坏了（看 `dispatch.py` 的 `on_map_read`）。
   - `GameOverBranchTest`、`UndoAfterRoomEndTest` 失败 → 多半是对局结束的记录、撤销新一局时提示的恢复、或「以后一条为准」的记账改坏了（看 `dispatch.py` 的 `on_game_over`、`on_newgame`、`log_game_over`）。
+  - `GameResultBranchTest` 失败 → 胜负定了再记一条、报告等胜负定了才拼的接线改了（看 `dispatch.py` 的 `on_status`、`log_game_over`、`settle_report`，`records.py` 的 `OfferLog.game_over`，`reporting.py` 的 `game_over`、`settle_all`）；收数据的服务按报告编号丢掉后发的同一份，拼早了的那一份发出去以后胜负就补不上了。
 
 ## test_overlay_follow.py：跟随游戏窗口、窗口层次、屏幕位置与屏幕外兜底
 
 - **测试观点**：
   - 位置：默认放在游戏画面右侧「刷新」按钮正下方，内容变多向下展开而右上角不动；三选一显示期间让开三选一；关闭后回默认位置；展开超出屏幕底部时整个挪回屏幕内；游戏窗口移动时跟着移动；最小化后留在原处（`OverlayPositionTest`）。
-  - 三选一显示期间、没有拖动过时，在几个候选位置里挑挡住候选筹码和「刷新」按钮最少的地方（`LivePlacementTest`）。
+  - 三选一显示期间、没有拖动过时，在几个候选位置里挑挡住候选筹码和「刷新」按钮最少的地方；给了 `avoid`（另一张悬浮窗）时也避开它，不给时结果不变（`LivePlacementTest`）。挨着另一张放（`beside`）依次试左边、右边、下边、上边，都不行时为 None（`BesideTest`）。
   - 不管屏幕怎么排、游戏窗口在哪、保存的相对位置是什么，悬浮窗都完整落在某块屏幕上（用多屏布局和大量相对位置穷举）（`OverlayAlwaysOnScreenTest`）。
   - 独立窗口（设置、关于这类）不总在最前，窗口层次跟着悬浮窗：悬浮窗置顶时置顶、退到盖住它的窗口后面时一起退、三选一时放到它们上面；关掉在前台的独立窗口时先临时置顶悬浮窗、前台交接后再按原来的先后退回；点托盘图标把开着的窗口一起放到最前面、按打开的先后（`SecondaryLayerTest`）。
   - 窗口的截图属性一律不改（`CaptureAffinityTest`）。
   - 六种前台状态 × 两种截取方式 × 自动/手动 × 三选一显示与否 的做法（`window_plan`）：识别是否暂停、窗口层次、热键是否登记、状态胶囊和悬停说明逐格对上（`WindowPlanTest`）。
   - 界面线程定时器晚到多少记一笔 `ui_lag`，用的时钟不含电脑睡眠时间（`PollLagTest`、`PollClockTest`）。
-  - 「盖住」的判断只看游戏窗口上面的窗口、跳过不算的、相交宽高都至少 8 像素才算（`CoveringTest`）；悬浮窗按 `window_plan` 调整自己的层次、识别记录和热键跟着变、托盘恢复层次、游戏重启后重试直接截取、点「全部展开/全部折叠」和诊断包里状态的记录（`ForegroundLayerTest`、`ExpandDiagnosticTest`、`WinapiFlagsTest`）。
+  - 同时识别时找不到游戏窗口的那张看另一张的前台状态（`window_plan` 的 `companion`）：另一张是 `game`、`own` 时也置顶，是 `background`、`minimized`、`nogame` 或没有另一张时照旧不置顶；同时识别、这一张在后台、另一张是 `game`、`own` 时这一张也置顶（三选一时 `front`；截取屏幕时暂停也置顶）；其余状态不管 `companion` 是什么都不变（`WindowPlanTest.test_nogame_with_companion`、`test_background_with_other_game_front`、`test_companion_ignored_elsewhere`）。
+  - 「盖住」的判断只看游戏窗口上面的窗口、跳过不算的、相交宽高都至少 8 像素才算（`CoveringTest`）；同时识别时另一张跟的游戏窗口不算盖住这张（`probe_game` 的 `ignore`），它和浏览器都盖住时插在浏览器下面、只有它盖住时不算被盖住（`WinapiFlagsTest.test_probe_ignores_other_game_window`）；悬浮窗按 `window_plan` 调整自己的层次、识别记录和热键跟着变、托盘恢复层次、游戏重启后重试直接截取、点「全部展开/全部折叠」和诊断包里状态的记录（`ForegroundLayerTest`、`ExpandDiagnosticTest`、`WinapiFlagsTest`）。
+  - 找不到游戏窗口时显示的那一句用探针带回来的 `notice`（设了游戏平台、开着的是另一个端时点明是设置的原因）；探针没带时为「未找到游戏窗口，请先启动游戏。」；一直是找不到、这一句变了时换成新的并重画一次；显示着别的提示时不盖掉；游戏窗口又看得到时收起（`MissingGameNoticeTest`）。
+  - 托盘菜单的「重置悬浮窗」：菜单项的顺序（「显示」「重置悬浮窗」「设置」「导出诊断」，hub.ENABLED 开着时接「打开作业站」，隔一条线「退出」）；一行显示、有卡片单独收起时重置以后全部展开、收起记录清空并存成空表；按假的主显示器可用区域放到正中（外框中心对区域中心，允许差 1 像素），比区域还大时左上角对齐；收在托盘里、一行显示时显示出来以后按展开后的大小居中；有游戏窗口时记下新位置（`rel_custom`、`window_rel`、`window_pos`），之后再按游戏窗口重算仍在正中，没有游戏窗口时也存 `window_pos`；正在显示三选一、没拖动过时点了也放到正中，三选一期间不再让开；收在托盘里时点它显示出来；识别记录记一条 reset（`TrayResetTest`）。两张一起重置的测试在 `test_lanes.py` 的 `TwoLaneResetTest`：两张都收在托盘里、一行显示、各自收起一张卡片时点重置，两张都显示出来、全部展开、收起记录清空并存成空表；第一张外框中心在主显示器可用区域正中，第二张紧挨在它右边、上沿相同；两张都有游戏窗口时都是 `rel_custom`，`lanes.taptap.window_rel`、`window_pos` 是第二张的，顶层的是第一张的；在第二张上调用效果一样（转给第一张）；两张各自的识别记录各有一条 reset；接上托盘的 `show_more`（第一张从托盘显示时把第二张也显示出来）时第二张记的 `hidden` 仍是点之前的状态；点了以后、居中之前第二张被收掉时第一张照常居中、不去摆第二张；`Lanes.restack` 被调用。假屏幕够放两张，改窗口层次的 Win32 调用换成假的。
 
-- **检证对象**：`advisor/ui/overlay_parts/geometry.py`（`overlay_position`、`live_placement`、`fit_on_any_screen`、`pick_zones`、`window_plan`、`probe_state`、`WindowPlan`、`valid_rel`）；`advisor/ui/overlay_parts/follow.py` 的 `WindowFollower`、`WindowStack`、`Tray`；`advisor/ui/winapi.py`（`GameProbe`、`covering`、`TopWindow`、`foreground`、`topmost`、`below`、`set_topmost`、`put_below`、`bring_to_front`、`probe_game`）；`advisor/perfstats.py` 的 `unbiased_clock`。
+- **检证对象**：`advisor/ui/overlay_parts/geometry.py`（`overlay_position`、`live_placement`、`beside`（含 `prefer`）、`pair_position`、`AVOID_WEIGHT`、`fit_on_any_screen`、`pick_zones`、`window_plan`、`probe_state`、`WindowPlan`、`valid_rel`、`_window_gone_texts`）；`advisor/ui/overlay_parts/follow.py` 的 `WindowFollower`（`update_activity`、`log_layer`、`target_position`、`place`、`poll`、`companion_rect`、`companion_fixed`、`yields`、`restack`）、`WindowStack`、`Tray`；`advisor/ui/overlay.py` 的 `Overlay`（`reset_overlay`、`_reset_partner`、`_reset_one`、`_center_after_reset`、`_primary_area`）；`advisor/ui/winapi.py`（`GameProbe` 的 `notice`、`covering`、`TopWindow`、`foreground`、`topmost`、`below`、`set_topmost`、`put_below`、`bring_to_front`、`probe_game` 的 `ignore`）；`advisor/vision/capture.py` 的 `missing_notice`；`advisor/perfstats.py` 的 `unbiased_clock`。
 
-- **什么时候要跑**：改了悬浮窗的位置或让开逻辑、跟随与窗口层次、托盘恢复、前台状态判断、`winapi.py` 里跟窗口层次有关的调用以后。
+- **什么时候要跑**：改了悬浮窗的位置或让开逻辑、跟随与窗口层次、托盘恢复、前台状态判断、找不到游戏窗口时显示的那一句、`winapi.py` 里跟窗口层次有关的调用以后。
 
 - **怎么单独跑**：`python -B tools/run_tests.py --only test_overlay_follow`（上次约 7 秒）。
 
@@ -427,6 +501,8 @@
   - `SecondaryLayerTest`、`ForegroundLayerTest`、`WinapiFlagsTest` 失败 → 多半是窗口层次调用、关窗口时的临时置顶与退回、或只设自己窗口且不激活的写法改坏了（看 `follow.py` 的 `WindowStack`、`WindowFollower.apply_layer`，`winapi.py` 的层次调用）。
   - `CoveringTest` 失败 → 多半是「盖住」的判定规则改坏了（看 `winapi.py` 的 `covering`）。
   - `PollLagTest`、`PollClockTest` 失败 → 多半是记录界面线程晚到的时钟或门槛改坏了（看 `follow.py`、`perfstats.py`）。
+  - `MissingGameNoticeTest` 失败 → 找不到游戏窗口时的提示没按探针的 `notice` 显示、这一句变了没换、盖掉了别的提示，或游戏窗口回来后没收起（看 `follow.py` 的 `update_activity`、`winapi.probe_game` 的 `notice`）。
+  - `TrayResetTest` 失败 → 「重置悬浮窗」没全部展开、没清掉卡片的收起记录，居中时用的不是展开以后的大小或不是主显示器的可用区域，或没当作拖动过记下位置（看 `overlay.py` 的 `reset_overlay`、`_center_after_reset`，`follow.py` 的 `Tray.setup_tray`、`WindowFollower.remember_position`）。`TwoLaneResetTest`（test_lanes.py）失败 → 两张没一起做、顺序反了（第一张的 `show_from_tray` 先把第二张显示出来，第二张的 `hidden` 就不是点之前的状态）、第二张没按 `pair_position` 摆在第一张右边，或在第二张上调用没转给第一张（看 `reset_overlay`、`_reset_partner`、`_reset_one`、`_center_after_reset`）。
 
 ## test_overlay_guard.py：守卫——悬浮窗的部件不拿着整个悬浮窗
 
@@ -518,10 +594,11 @@
   - 同系列的选项块：被替代的写「被X上位替代」和对比行，回看上一次推荐时同样显示、筹码名不是按钮；字号只用四档；固定文字暗色、数值和筹码名亮色（`test_series_blocks`、`test_four_font_sizes`、`test_fixed_text_dim`）。
   - 悬停说明统一用样式表里 `QToolTip` 的样式；带自己样式表的部件上的悬停说明和不带的一样；各部件的样式表都带选择器（`TipStyleTest`）；全部悬停说明按分行规则分行、不超高、不超宽（走各种状态收集）（`TipWidthTest`）。
   - 标题栏只有一个管整个悬浮窗的按钮（一行显示「全部展开」、全部展开「全部折叠」），底栏只有「设置」；卡片头的折叠按钮是小号方形、有底色框线但更淡、箭头随状态变（`FoldButtonsTest`）。
+  - 标题栏最左边的端标签（`LaneTagLayoutTest`）：七套皮肤、一行显示和全部展开，标签都在这一行最左边、不和摘要或标题重叠、不比没有标签时高；摘要能用的宽度正好少掉标签的宽加一个间距；标题在正中的皮肤标题仍居中；`HEAD_ALIGN` 为 `bottom` 的皮肤里标签和右边的按钮一样靠下，换皮肤时对齐跟着变；开发版的长标题放得下；换皮肤以后标签的宽和摘要宽度跟着变；一行显示时两个端的「未找到……游戏窗口」加上标签以后都不被省略。
   - 自绘部件：长理由在标签内换行、流式布局会换行、带流派标签的效果说明不另起一行、图标格子按 3-4-3 排十格、地图胶囊滚轮不切地图（`WidgetsTest`）。
   - 图标格子分页（`WidgetsTest`）：超过 10 个时每页 `names()` 只列当前页、`all_names()` 是全部；翻页、这一页没了退到最后一页、不超过 10 个回第 1 页（`test_chip_grid_pages`）；超过 10 个时 `sizeHint` 只多出翻页那一行、宽度不变，不超过 10 个时和以前相同（`test_chip_grid_pager_size`）；点亮着的箭头翻页、第一页的左箭头和最后一页的右箭头点了没反应（`test_chip_grid_arrows`）；第 2 页悬停筹码显示这一页那一格的筹码，悬停箭头写「上一页」「下一页」（`test_chip_grid_tooltip_on_second_page`）；暗着的箭头悬停不写「上一页」「下一页」、光标不是手形，点亮着的箭头翻到头、鼠标没动时光标也跟着恢复（`test_chip_grid_disabled_arrow`）。
 
-- **检证对象**：`advisor/ui/overlay_parts/layout.py` 的 `build`、`apply_mode`；`advisor/ui/widgets.py` 的 `Pill`、`FlowLayout`、`TaggedText`、`ChipGrid`、`MapPill`、`chip_icon`、`Card`、`Separator`、`draw_combo_rows`；`advisor/ui/text.py` 的 `tip_html`、`tip_lines`、`tip_paragraphs_html`、`option_views`、`PERCENT_TIP`；`advisor/ui/theme/` 里的字号和颜色。
+- **检证对象**：`advisor/ui/overlay_parts/layout.py` 的 `build`、`build_head`（`lane_tag`）、`apply_mode`；`advisor/ui/overlay.py` 的 `set_lane_tag`、`_summary_width`、`_center_title`、`_align_head`；`advisor/ui/theme/sheets.py` 的 `QLabel#laneTag`；`advisor/vision/capture.py` 的 `PLATFORM_TAGS`；`advisor/ui/widgets.py` 的 `Pill`、`FlowLayout`、`TaggedText`、`ChipGrid`、`MapPill`、`chip_icon`、`Card`、`Separator`、`draw_combo_rows`；`advisor/ui/text.py` 的 `tip_html`、`tip_lines`、`tip_paragraphs_html`、`option_views`、`PERCENT_TIP`；`advisor/ui/theme/` 里的字号和颜色。
 
 - **什么时候要跑**：改了搭界面或摆放卡片（`layout.py`）、自绘部件（`widgets.py`）、悬停说明的分行与宽度（`text.py`）、字号或配色（`theme/`）以后。
 
@@ -541,7 +618,7 @@
 ## test_overlay_layout_table.py：切换显示方式的规则表
 
 - **测试观点**：
-  - 规则表 `CARD_WHEN_COLLAPSED` 和测试里逐条判断的参照实现（`reference`）在所有输入组合下对部件做的事完全一样（穷举标题栏和各卡片的输入、五千多种组合；决定 `prompt` 的几项里含一行显示时问原因那一块还挂不挂着（`ask_until`），「识别」一块含进没进对局（`map_entered`：全部展开时打开任务栏那一行要进了对局才显示））（`CardTableTest.test_same_as_before_in_every_case`）。
+  - 规则表 `CARD_WHEN_COLLAPSED` 和测试里逐条判断的参照实现（`reference`）在所有输入组合下对部件做的事完全一样（穷举标题栏和各卡片的输入、五千多种组合；决定 `prompt` 的几项里含一行显示时问原因那一块还挂不挂着（`ask_until`），「识别」一块含进没进对局（`map_entered`：全部展开时打开任务栏那一行要进了对局才显示），「筹码方案」一块含这一局按地图换着方案没有（`scheme`：那一行在时一行显示也出现、收起着自动展开））（`CardTableTest.test_same_as_before_in_every_case`）。
   - 表的键的先后就是卡片的先后（`test_table_rows`）。
   - 比较本身查得出差别：把表里「推荐」一行改得不看 `prompt` 后，要问原因、刚记录完的几种情形就和参照实现不一样了（`test_comparison_notices_a_changed_rule`）。
 
@@ -586,7 +663,7 @@
   - `test_undo_before_timer_does_nothing`、`test_first_chip_before_timer_does_nothing` 失败 → 多半是撤销或记下第一个筹码后没有正确使计时作废。
   - `test_undoable_without_cause_expires` 失败 → 多半是 `cause` 为空时显示和计时的约定不一致（看 `notices.py` 的 `midgame`）。
 
-## test_overlay_notices.py：截取方式提示和第一次启动的「免费软件」声明
+## test_overlay_notices.py：截取方式提示、第一次启动的「免费软件」声明和认出繁体游戏时的提示
 
 - **测试观点**：
   - 改为截取屏幕时「识别」卡片顶部的提示（⚠ 橙色，带「关闭本条提示」，不改边框颜色，一行显示时也显示）、悬停说明；四种原因各一种写法（`CaptureNoticeTest.test_texts_and_tips`）。
@@ -595,10 +672,11 @@
   - 「关闭本条提示」只管这次运行：同一原因不再提示，换了原因照常提示；恢复直接截取后提示收起并一次性提示「已恢复」；启动后第一次收到截取状态、或一直是直接截取时不提示（`test_dismiss_and_restore`、`test_no_restore_notice_at_startup`）。
   - 截取状态的 `detail` 统一成错误代码的写法（`0x` 加 8 位大写），旧写法（代码和步骤写在一起、十进制）也认（`test_detail_parsing`）。
   - 「免费软件」声明：第一次启动显示、一行显示时也在、文字逐字照 `version.FREE_NOTICE` 后接账号风险那一句（`FREE_NOTICE_RISK`），还是一条提示、一个「关闭本条提示」；网址做成可点的链接，后一句里的「关于」也做成链接，点了打开「关于」窗口、停在「免责声明」一节（不交给浏览器）；排在全局提示的最后；点「关闭本条提示」后记进设置文件、以后启动不再显示；开发版和发行版都显示；设置文件里这一项不是 `true` 时按没关过；没有版本模块时不显示；「关于」窗口最上面照旧只写 `FREE_NOTICE`、不接账号风险那一句（每种排法）（`FreeNoticeTest`）。
+  - 界面是简体、认出游戏是繁体中文时的提示（把繁体界面的总开关 `lang.HANT_ENABLED` 打开了测；关着时一律不问）：文字和按钮转成繁体（写死转出来的全文）、排在「免费软件」声明前面、〔換〕把界面语言存成繁體并重新打开（起不来时不退出、这一行自己收起）、〔不換〕记进设置文件以后不再问；两个按钮一样宽且不少于三个汉字的宽度；第二张不显示（全局提示）、界面已经是繁体、设置里已选繁體、关过时不显示；对局进行中（找得到游戏窗口）不显示，这一局结束、回到大厅后显示，中途退出以后认不出主菜单、连着一阵子看不到对局读数（`Session.game_quiet`）时也显示；`Session.on_frame` 只在完整识别上数，连着两次繁体才置 `hant_game`，只重查绿框的不算（`HantNoticeTest`）。
 
-- **检证对象**：`advisor/ui/overlay_parts/notices.py` 的 `capture_notice`、`notice_html`、`NoticeView.check_free_notice`、`open_link`、`dismiss_free`、`NoticeModel`；`advisor/ui/overlay_parts/wording.py` 的 `FREE_NOTICE_RISK`、`FREE_NOTICE_LINK`、`ABOUT_LINK`、`ABOUT_DISCLAIMER`；`advisor/ui/text.py` 的 `capture_detail`、`linkify`、`link_style`；`advisor/version.py` 的 `FREE_NOTICE`、`about_sections`；`advisor/ui/about.py` 的 `AboutDialog`、`LAYOUTS`。
+- **检证对象**：`advisor/ui/overlay_parts/notices.py` 的 `capture_notice`、`notice_html`、`NoticeView.check_free_notice`、`open_link`、`dismiss_free`、`dismiss_hant`、`_hant_row`、`NoticeModel`、`EQUAL_WIDTH_NOTICES`；`advisor/ui/overlay_parts/wording.py` 的 `FREE_NOTICE_RISK`、`FREE_NOTICE_LINK`、`ABOUT_LINK`、`ABOUT_DISCLAIMER`、`HANT_NOTICE_TEXT`、`HANT_SWITCH`、`HANT_STAY`；`advisor/ui/overlay_parts/factory.py` 的 `_equal_width`；`advisor/ui/overlay.py` 的 `switch_to_hant`、`_playing`；`advisor/ui/overlay_parts/state.py` 的 `take_view`、`SessionView.hant_notice`；`advisor/session/` 的 `Session._note_game_language`、`hant_game`；`advisor/ui/text.py` 的 `capture_detail`、`linkify`、`link_style`；`advisor/version.py` 的 `FREE_NOTICE`、`about_sections`；`advisor/ui/about.py` 的 `AboutDialog`、`LAYOUTS`。
 
-- **什么时候要跑**：改了截取方式的提示文字或悬停说明、错误记录位置的写法、「免费软件」声明或「关于」窗口最上面一段以后。
+- **什么时候要跑**：改了截取方式的提示文字或悬停说明、错误记录位置的写法、「免费软件」声明、「关于」窗口最上面一段，或改了认出繁体游戏时的提示、`ChipSelect.hant`、`Session.hant_game` 以后。
 
 - **怎么单独跑**：`python -B tools/run_tests.py --only test_overlay_notices`（上次约 2 秒）。
 
@@ -612,6 +690,7 @@
   - `FreeNoticeTest.test_shown_once_checked`、`test_last_in_global_area` 失败 → 多半是「免费软件」声明的文字或它在全局提示里的位置改坏了（看 `notices.py` 的 `rows`、`version.py` 的 `FREE_NOTICE`）。
   - `test_closed_for_good`、`test_setting_values` 失败 → 多半是「关闭本条提示」写设置项或读取设置项的判断改坏了。
   - `test_about_window_top`、`test_about_every_layout` 失败 → 多半是「关于」窗口最上面那一段的排法改坏了（看 `advisor/ui/about.py`）。
+  - `HantNoticeTest` 失败 → 多半是这条提示的文字、转换结果、显示条件（含对局进行中不显示）、两个按钮的接线和宽度，或 `Session.on_frame` 数繁体标题的规矩改坏了。
 
 ## test_overlay_owned_card.py：「已有筹码」卡片补录行的说法
 
@@ -641,9 +720,9 @@
   - `PaceTest`：这一帧有几项子识别出错时，三选一显示着按 `active_ms` 再取、没显示时隔 2 秒，两种情况都把错记进错误记录并给固定中文提示；没出错时照旧按 `active_ms`／`idle_ms`；`errors` 只认真的列表、元组；认三选一出错时隔 2 秒，按热键要求的那一帧不报「不是三选一界面」，手动模式不因为这一帧接着跟随
   - `PendingReadsTest`：识别流程还有排到下一帧的读数时不等、紧接着取下一帧，手动模式也接着取、做完为止；出错时照旧隔 2 秒；识别线程在两帧之间告诉识别流程手动模式开没开、刚从暂停恢复
   - `SelectFailedFlagTest`：认三选一出错的那一帧置上 `select_failed`，下一帧开头清掉，三选一显示状态保持上一帧的值
-  - `UnreadShotTest`：识别流程留下的三选一读不全的那一帧（`FrameProcessor.unread_shot`）每帧换到识别线程身上（`Watcher.unread_shot`，导出诊断时取）；识别流程那边没有（刚重建、还没有）时照旧留着上一张，不是元组的不算；记下选中项用的那一帧、被临时盖住而没有采用的那一帧（`pick_shot`、`covered_shot`）同样（`test_pick_and_covered_shots`）
+  - `UnreadShotTest`：识别流程留下的三选一读不全的那一帧（`FrameProcessor.unread_shot`）每帧换到识别线程身上（`Watcher.unread_shot`，导出诊断时取）；识别流程那边没有（刚重建、还没有）时照旧留着上一张，不是元组的不算；记下选中项用的那一帧、被临时盖住而没有采用的那一帧、对局中途像一局打完的那一帧（`pick_shot`、`covered_shot`、`finish_shot`）同样（`test_pick_and_covered_shots`）
   - `PickWatchWiringTest`：快速盯绿框的线程（`vision.pick_watch.PickWatcher`）在识别线程开始时建、启动，识别流程建好以后接到它的交换上，识别线程结束时停下；识别流程重建时接到新的交换、原来的关掉；测试传入假的取帧对象而没给 `band_source` 时不建，平时用 `screen.BandSource`（截取方式跟着识别线程的取帧对象）；识别暂停、手动模式平时（等热键）时告诉识别流程不再盯（`watch_idle`），手动模式跟着三选一时照样盯；每分钟的识别统计带上它这一段的统计（`pick_watch`），取不到时只记错误记录
-- **检证对象**：`advisor/ui/overlay_parts/watcher.py` 的 `Watcher`（一帧后的等待、`NO_FRAME_RETRIES`／`NO_FRAME_WAIT_MS`、`set_manual`、`set_paused`、`trigger`、`unread_shot`、`pick_shot`、`covered_shot`，快速盯绿框的线程 `_start_pick_watch`、`_attach_pick`、`_watch_idle`、`_stop_pick`、`_log_recog_stats` 的 `pick_watch`）；`advisor/vision/pipeline.py` 的 `FrameProcessor.errors`、`select_failed`、`pending`、`chip_select_visible`、`unread_shot`、`pick_shot`、`covered_shot`、`pick_watch`；`advisor/vision/pick_watch.py` 的 `PickWatch`、`PickWatcher`；`advisor/ui/overlay_parts/wording.py` 的 `RECOG_ITEM`、`RECOG_FRAME`、`recog_items_text`；`rules.toml` 的 `[watch] active_ms`／`idle_ms`
+- **检证对象**：`advisor/ui/overlay_parts/watcher.py` 的 `Watcher`（一帧后的等待、`NO_FRAME_RETRIES`／`NO_FRAME_WAIT_MS`、`set_manual`、`set_paused`、`trigger`、`unread_shot`、`pick_shot`、`covered_shot`、`finish_shot`，快速盯绿框的线程 `_start_pick_watch`、`_attach_pick`、`_watch_idle`、`_stop_pick`、`_log_recog_stats` 的 `pick_watch`）；`advisor/vision/pipeline.py` 的 `FrameProcessor.errors`、`select_failed`、`pending`、`chip_select_visible`、`unread_shot`、`pick_shot`、`covered_shot`、`finish_shot`、`pick_watch`；`advisor/vision/pick_watch.py` 的 `PickWatch`、`PickWatcher`；`advisor/ui/overlay_parts/wording.py` 的 `RECOG_ITEM`、`RECOG_FRAME`、`recog_items_text`；`rules.toml` 的 `[watch] active_ms`／`idle_ms`
 - **什么时候要跑**：改了识别线程一帧后的等待时长、子识别出错的处理与提示、排到下一帧的读数、认三选一出错的标记、手动模式的跟随，或快速盯绿框的线程怎么建、接、停，都要跑
 - **怎么单独跑**：`python -B tools/run_tests.py --only test_watcher_pace`（上次约 0.3 秒）
 - **需要什么**：离屏平台；识别线程真的起一个，取帧对象和识别流程都是假的（不截屏）；要等的时候记下等多久，不真的等
@@ -655,6 +734,29 @@
   - `PaceTest.test_select_error_waits_two_seconds`／`test_select_error_on_hotkey_frame`／`test_select_error_does_not_keep_manual_follow` 失败 → 认三选一出错时的等待、提示或手动模式跟随改坏（`watcher.py`、`advisor/vision/pipeline.py`）
   - `PendingReadsTest` 失败 → 还有排到下一帧的读数时等了，或没告诉识别流程手动模式／刚从暂停恢复（`watcher.py`、`advisor/vision/pipeline.py` 的 `pending`）
   - `SelectFailedFlagTest.test_flag_follows_select_error` 失败 → `select_failed` 标记的置上／清掉，或三选一显示状态改坏（`advisor/vision/pipeline.py`）
-  - `UnreadShotTest` 失败 → 识别线程没照识别流程换那一帧，或识别流程那边没有时把留着的清掉了（`watcher.py` 的 `unread_shot`、`pick_shot`、`covered_shot`）
+  - `UnreadShotTest` 失败 → 识别线程没照识别流程换那一帧，或识别流程那边没有时把留着的清掉了（`watcher.py` 的 `unread_shot`、`pick_shot`、`covered_shot`、`finish_shot`）
   - `PickWatchWiringTest` 失败 → 快速盯绿框的线程没建、没接到识别流程的交换上、识别线程结束时没停下，暂停或手动模式平时没告诉识别流程不再盯，或统计没带上（`watcher.py` 的 `_start_pick_watch`、`_attach_pick`、`_watch_idle`、`_stop_pick`、`_log_recog_stats`）
   - 有意改了 `[watch]` 的时长或提示文字时，断言用的值／句要跟着改
+
+## test_hub.py：作业站的地址、地图短名、四个入口和总开关
+
+- **测试观点**
+  - `UrlTest`：三个地址和 `MAP_SLUGS` 逐字核对（和网站的约定，改了要让测试失败）；`MAP_SLUGS` 的键都在资料库的地图里，没结束的地图都在表里（资料新加地图时会提醒去和网站对短名），每个短名都有 `mechanics/maps/<短名>.md`，三张运动场不在表里；`plans_url` 带角色编号、带地图短名、两个都带、空字符串的短名当没有；`hero_plans_url` 收录的角色、资料库没有的角色（带地图时只有 `map`）、运动场（不带地图）、没有的地图名、`None`。
+  - `GlyphBookTest`：「作业站」的书按宽高比占宽度；系统没有图标字体时照样画、照样留出图标那一行；路径左右对称；格子的落点有零头（左右、上下，1、1.25、1.5 倍缩放）时书的样子不变，左上角落在整个设备像素上（`test_whole_device_pixels`）。
+  - `OverlayHubTest`（`setUp` 里把 `hub.ENABLED` 打开）：卡片按钮的图标、字、`tool`、悬停说明；新建的会话没认出地图时不带地图；这一局自动认出了地图（卡片按钮和导入/导出窗口的「去作业站找方案」都带短名，记录里的 `map` 是短名）；手动选的地图也带；本局已结束时地图还在但不带（记录的 `map` 为 `None`）；运动场没有短名只带角色；有地图时托盘的「打开作业站」照旧是首页；「发到作业站」由窗口自己发方案，不再经过这里打开网页；换成资料库没有的角色时列出全部方案；换角色后两处地址跟着变；打开失败时显示悬浮窗、提示地址并记一条 `ok` 为假的记录；托盘菜单项的位置和文字；七套皮肤下三个按钮都在、字和 `tool` 对。
+  - `ShareHubTest`（`setUp` 里把 `hub.ENABLED` 打开）：七个排法里「去作业站找方案」「发到作业站」都在、字和悬停说明对；点了「去作业站找方案」发 `hub_requested("plans")`，「发到作业站」由窗口自己发方案（没勾方案时不联网、不发 `hub_requested`）；`Dialogs.open_share` 把它们接到 `Overlay.open_hub`；七套皮肤、程序实际字体下，导入/导出窗口按默认大小显示时五个按钮都整个落在看得见的地方（在 `cardsScroll` 里时看 `viewport`），窗口的最小宽度不超过默认宽度（反色排法里两个作业站按钮和导入、清空在同一行：单独一行会把导入、清空、找方案挤出可见区）。
+  - `HubDisabledTest`（测试里把 `hub.ENABLED` 关上）：藏着的按钮照样留在原来的布局里、父部件在窗口里（不落成单独的顶层部件），所在的布局拿掉它以后建议大小、最小大小都不变（`assert_no_room`：看不见的部件不占位、前后不加间距）。卡片上的「作业站」按钮这样藏着，另外两个按钮按它们两个取一样的宽度，「导入/导出」的右边贴着卡片内容的右边；七套排法里导入/导出窗口的「发到作业站」「去作业站找方案」、按编号导入那一行（编号输入框和「按编号导入」）、「已登录作业站」那一行（「退出作业站」在这一行里）都这样藏着（单独一行的排法不留空行），提示行、小按钮也不显示；关着时不读本机的登录信息（`hub_api.login_nickname`），也不联网、不碰凭据管理器；托盘菜单没有「打开作业站」。
+- **检证对象**：`advisor/hub.py`（`ENABLED`、`BASE`、`HOME`、`PLANS`、`MAP_SLUGS`、`map_slug`、`plans_url`、`hero_plans_url`）；`advisor/ui/overlay.py` 的 `Overlay.open_hub`、`_trace_user`；`advisor/ui/overlay_parts/layout.py` 的「作业站」按钮、`follow.py` 的托盘菜单项、`wording.py` 的 `HUB_TIP`／`HUB_BTN`；`advisor/ui/scheme_share.py` 的 `SchemeShareWindow`（`find_btn`、`post_btn`、`_game_parts`、`_build_stacked`、`hub_own_row`）和 `FIND_ON_HUB_TIP`；`advisor/ui/glyphs.py` 的 `book_path`、`draw_glyph`、`glyph_width`；`tests/support/overlay_cases.py` 的 `choose_hero`、`tip_text`。
+- **什么时候要跑**：改了 `advisor/hub.py`（含总开关 `ENABLED`）、作业站的四个入口、`MAP_SLUGS` 或 `data/maps.json`（地图增减、结束）、「筹码方案」卡片的三个按钮、导入/导出窗口的排法和那两个按钮、托盘菜单，或改了这几处的文字时。
+- **怎么单独跑**：`python -B tools/run_tests.py --only test_hub`（上次约 12 秒）。
+- **需要什么**：Qt 的离屏平台，不弹窗口；打开网址的函数一律换成假的，不会真的打开浏览器；方案文件放在测试沙箱的临时文件夹里。`UrlTest.test_map_slugs_match_data` 读项目里的 `mechanics/maps/`。
+- **输出怎么看**：没有特别的，同总则。量按钮是不是整个看得见时，按钮在 `cardsScroll` 滚动区里按 `viewport` 算，有页签的排法先切到按钮所在的页签。
+- **出错时一般是哪里不对**
+  - `UrlTest.test_urls`／`test_map_slugs` 失败 → 地址或地图短名和网站约定不一致（先确认网站那边的要求，不要直接改预期）。
+  - `UrlTest.test_map_slugs_match_data` 失败 → 资料里新加了没结束的地图但没加进 `MAP_SLUGS`，或短名和 `mechanics/maps/` 的文件名对不上（`advisor/hub.py`、`data/maps.json`）。
+  - `UrlTest.test_plans_url`／`test_hero_plans_url` 失败 → 拼地址的顺序、空短名、没收录角色时的处理改了（`advisor/hub.py`）。
+  - `OverlayHubTest.*` 失败 → `open_hub` 取角色/地图、判断 `game_over`、记录 `map`，或入口的接线改了（`advisor/ui/overlay.py`、`layout.py`、`follow.py`、`dialogs.py`）。
+  - `ShareHubTest.test_five_buttons_visible_all_skins` 只在某套皮肤下失败 → 那种排法里按钮被挤出可见区或窗口被撑宽（`advisor/ui/scheme_share.py` 的排法、`hub_own_row`）。
+  - `HubDisabledTest` 失败 → 总开关没把作业站的入口都关掉（卡片的按钮、导入/导出窗口的几处、托盘菜单），关掉以后还占着位置、留着空行，关着时读了本机的登录信息或联网，或藏着的部件没放进布局、落成了单独的顶层部件（`advisor/hub.py` 的 `ENABLED`、`layout.py`、`scheme_share.py`、`follow.py`；落成顶层部件时 `test_scheme_wiring` 也会失败）。
+  - `GlyphBookTest` 失败 → 自己画的书换形、占的宽度或对称性改了，或落点不再挪到整个设备像素上（`advisor/ui/glyphs.py` 的 `_draw_book`）。
+  - **改了预期就该跟着改**：地址、地图短名是和网站的约定，改之前先和网站对好；改了界面文字时悬停说明的断言跟着改（`wording.HUB_TIP`、`scheme_share.FIND_ON_HUB_TIP`）。

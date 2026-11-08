@@ -42,7 +42,7 @@ def _ns(skin: Skin, part: str, **extra) -> dict:
 
 
 # 悬浮窗（卡片底色比面板浅一级；卡片的折叠按钮 #cardToggle 和其他按钮同一套样式，但更小、底色和框线
-# 更淡；背景不透明那一条排在暂停的后面：暂停时照旧虚线框，底色不透明；「筹码方案」卡片的两个图标按钮 #iconText 的字号和
+# 更淡；背景不透明那一条排在暂停的后面：暂停时照旧虚线框，底色不透明；「筹码方案」卡片的三个图标按钮 #iconText 的字号和
 # 内边距，底色、框线、悬停照 QPushButton）
 OVERLAY_SHEET = Template("""
 #panel { background: $PANEL_BG; border: 1px solid $PANEL_BORDER; border-radius: ${PANEL_RADIUS}px; }
@@ -54,12 +54,15 @@ QLabel { color: $LABEL_COLOR; }
 QToolTip { background-color: $TIP_BG; color: $TIP_TEXT; border: 1px solid $TIP_BORDER; padding: ${TIP_PADDING}px; }
 #title { font-weight: $TITLE_WEIGHT; color: $TITLE_COLOR; }
 #summary, #hint { color: $SUMMARY_COLOR; }
+QLabel#laneTag { color: $SUMMARY_COLOR; border: 1px solid $SUMMARY_COLOR; border-radius: 8px;
+    padding: 0px 6px; font-size: ${FONT_S}pt; }
 #cardTitle, #caption { color: $CARD_TITLE_COLOR; font-size: ${FONT_S}pt; }
 #msg, #soft { color: $MSG_COLOR; }
 #ask { color: $ASK_COLOR; }
 #notice_action { color: $ASK_COLOR; }
 #notice_warn { color: $ASK_COLOR; }
 #notice_info { color: $MSG_COLOR; }
+#notice_ok { color: $OK_COLOR; }
 QComboBox, QLineEdit { background: $INPUT_BG; color: $INPUT_TEXT; border: 1px solid $INPUT_BORDER;
     border-radius: ${INPUT_RADIUS}px; padding: $INPUT_PADDING; }
 QComboBox:hover, QLineEdit:hover { border-color: $INPUT_HOVER_BORDER; }
@@ -118,6 +121,11 @@ QLabel#keycap { background: $KEYCAP_BG; color: $TEXT_COLOR; border: 1px solid $K
     font-weight: bold; }
 QLabel#keycap[tone="warn"] { border-color: $WARN_COLOR; }
 QLabel#keycap[tone="capture"] { color: $SELECTED_COLOR; border-color: $SELECTED_COLOR; }
+QComboBox { background: $KEYCAP_BG; color: $TEXT_COLOR; border: 1px solid $KEYCAP_BORDER;
+    border-radius: ${BUTTON_RADIUS}px; padding: 3px 26px 3px 10px; }
+QComboBox:hover { border-color: $BUTTON_HOVER_BORDER; }
+QComboBox QAbstractItemView { background: $CARD_BG; color: $TEXT_COLOR; border: 1px solid $CARD_BORDER;
+    selection-background-color: $TILE_ON_BG; }
 QLabel#chip { background: $CHIP_OK_BG; color: $CHIP_OK_TEXT; border: 1px solid $CHIP_OK_BORDER; border-radius: ${CHIP_RADIUS}px;
     padding: $CHIP_PADDING; font-size: ${FONT_S}pt; }
 QLabel#chip[tone="warn"] { background: $CHIP_WARN_BG; color: $CHIP_WARN_TEXT; border-color: $CHIP_WARN_BORDER; }
@@ -172,11 +180,14 @@ QLabel#okText { color: $OK_COLOR; }
 QLabel#warnText { color: $WARN_COLOR; }
 QLabel#useNote { color: $OK_COLOR; font-size: ${FONT_S}pt; }
 QLabel#useNoteWarn { color: $WARN_COLOR; font-size: ${FONT_S}pt; }
+QLabel#hubNote { color: $DIM_COLOR; }
+QLabel#hubNote[tone="ok"] { color: $OK_COLOR; font-weight: bold; }
+QLabel#hubCode { color: $SECTION_COLOR; font-size: 24pt; font-weight: bold; padding: 4px 0px; }
 QFrame#box { background: $BOX_BG; border: 1px solid $BOX_BORDER; border-radius: ${BOX_RADIUS}px; }
-QComboBox, QPlainTextEdit { background: $INPUT_BG; color: $TEXT_COLOR;
+QComboBox, QPlainTextEdit, QLineEdit { background: $INPUT_BG; color: $TEXT_COLOR;
     border: 1px solid $INPUT_BORDER; border-radius: ${INPUT_RADIUS}px; padding: $INPUT_PADDING; }
-QComboBox:hover, QPlainTextEdit:hover { border-color: $INPUT_HOVER_BORDER; }
-QComboBox:disabled { color: $DISABLED_TEXT; border-color: $DISABLED_BORDER; }
+QComboBox:hover, QPlainTextEdit:hover, QLineEdit:hover { border-color: $INPUT_HOVER_BORDER; }
+QComboBox:disabled, QLineEdit:disabled { color: $DISABLED_TEXT; border-color: $DISABLED_BORDER; }
 QComboBox QAbstractItemView { background: $POPUP_BG; color: $TEXT_COLOR; selection-background-color: $POPUP_SELECTION; }
 QPlainTextEdit[readOnly="true"] { background: $PREVIEW_BG; color: $PREVIEW_TEXT; }
 QScrollArea#schemeList { background: $LIST_BG; border: 1px solid $LIST_BORDER; border-radius: ${LIST_RADIUS}px; }

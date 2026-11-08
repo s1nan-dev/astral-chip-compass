@@ -438,7 +438,7 @@ class Flow(unittest.TestCase):
                 hook()
             return result
 
-        def hud(img, db, full=False):
+        def hud(img, db, full=False, **kw):
             self.log.append("hud")
             if self.slow is not None:
                 hook, self.slow = self.slow, None

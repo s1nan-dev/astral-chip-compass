@@ -116,6 +116,8 @@ class HiddenTextLogicTest(unittest.TestCase):
             ([("您当前正处于隐藏UI状态", 0.99)], True),
             ([("当前正处于隐藏U状态", 0.9)], True),
             ([("您当前正处于隐 藏UI状态", 0.95)], True),  # 中间读出空格
+            ([("您目前正處於隱藏UI狀態", 0.99)], True),  # 繁体
+            ([("目前正處於隱藏U狀態", 0.9)], True),  # 繁体，读漏一个字
             ([("您当前正处于隐藏UI状态", chip_select.HIDDEN_REC_MIN - 0.01)], False),
             ([("却时间-1。", 0.97)], False),
             ([], False),
