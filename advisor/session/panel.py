@@ -239,7 +239,8 @@ def read_panel(s, reading):
     """喂入一次「查看筹码」面板的识别结果（advisor.vision.chip_panel.PanelReading；不是面板时传 None），s 是记账
     （Session.on_panel）。
 
-    只认自己那一页，按页核对（见模块说明）：只有一页时面板上的就是全部已有筹码，按它写入（来源记为面板）；第一页、中间页、
+    只认自己那一页，按页核对（见模块说明）：只有一页时面板上的就是全部已有筹码，按它写入（来源记为面板，头一次就是在面板上
+    读到的筹码来路也记成面板）；第一页、中间页、
     最后一页只改已有筹码里对上的那一段（page_span、page_merge），没看到的照旧。有没认出的格子时，原来记着、面板上没认出的
     筹码保留（最多保留没认出的格数；能由面板上的同组候选解释的三选一记错不保留，见 explained），保留的筹码放回原来的位置
     （见 panel_order）。认不出是第几页（箭头看不清）、中间页对不上时不改。没有页码的读数按只有一页算。记着的不少于一页、
@@ -249,7 +250,11 @@ def read_panel(s, reading):
     RESUME_MISSING_MIN 个以上之前记下的筹码就判为新的一局（见 resume_missing）；回来时先看到的是后面的页，不拿它判，
     照常按页核对，等看到第一页再判（翻页、面板关了都留着等）。看过第一页、下不了结论的，翻页动画那几帧（不算面板）不打断，
     面板看不到 RESUME_TURN_S 秒以上才算关了、到此为止。
-    读数有变化、或这是启动后第一次读到时发 panel_read。本局已结束后读到的不起作用（不记进这一局）。
+    读数有变化、或这是启动后第一次读到时发 panel_read。按面板改了已有筹码、这次又没判成新的一局时，三选一界面还开着
+    （包括收起来去点面板的）就按记下的三选一画面马上重算一次推荐（SelectTracker.recompute），重算的事件排在 panel_read
+    后面放进待取队列：玩家把三选一收起来去点「查看筹码」时，读到面板的这一帧推荐就改对了。已有筹码没变（例如之前不知道、
+    面板上确实一个都没有）时推荐也不变，不重算；推荐卡片上「还不知道已有筹码」那行提醒由悬浮窗收到 panel_read 时收起。
+    本局已结束后读到的不起作用（不记进这一局）。
     """
     if s.game.game_over:
         return None
@@ -355,7 +360,14 @@ def read_panel(s, reading):
     # 面板上看到的都算确认过（来源记为面板，同一组候选又出现时也不撤销）
     g.chip_sources = {n: ("panel" if n in owned else g.chip_sources.get(n, "panel")) for n in new}
     g.direct &= set(new)  # 「不经三选一获得」的记号不受面板核对影响，只去掉面板上没有了的
-    if new != settings.owned:
+    # 来路：头一次就是在面板上读到的记「查看筹码」面板，一直在的照旧；离开已有筹码的连同面板记号去掉。
+    # 面板记号：读到的这一页上有的记上；已经不在已有筹码里的去掉（new 是按这一页更新后的已有筹码，不在里面的就是没有了）。
+    # 还在已有筹码里、只是这一页上没有的照旧留着
+    g.owned_sources = {n: g.owned_sources.get(n, "panel" if n in owned else None) for n in new}
+    g._panel_seen &= set(new)
+    g._panel_seen.update(n for n in owned if n in new)
+    changed = new != settings.owned
+    if changed:
         settings.owned = new
         if new and newgame is None:  # 刚按面板判了新一局时保留「撤销」（万一面板读错了）
             s._recorded()
@@ -369,6 +381,15 @@ def read_panel(s, reading):
     # problems：面板识别的提示（例如「大铜锣」可能是队友触发后出现的无效图标），悬浮窗照原文显示
     read = s._event("panel_read", owned=list(new), count=unknown, problems=list(getattr(reading, "problems", ()) or ()),
                     fixes=fixes)
+    if newgame is None and changed:
+        # 按面板改了已有筹码、这一次又没判成新的一局：三选一界面还开着时（包括收起来去点「查看筹码」的）马上按记下的
+        # 三选一画面重算，读到面板的这一帧就把推荐改对，不等玩家回到三选一画面。recompute 返回 None（三选一没显示、
+        # 候选还没读全等）时什么都不做，之后的画面照常按新的已有筹码算。重算的事件放进待取队列，排在这次返回的 panel_read
+        # 后面（识别流程、悬浮窗都按 split_extra 排）。已有筹码没变时推荐不变，不重发（推荐日志里不多出一样的一条，
+        # 请选择角色、无法识别的提示也不重来）；那行「还不知道已有筹码」的提醒由悬浮窗收到 panel_read 时收起
+        ev = s.select.recompute()
+        if ev is not None:
+            s._push(ev)
     if newgame is not None:
         s._push(read)  # 先发新一局（悬浮窗清空），再发这一局的面板读数
         return newgame

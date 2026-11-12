@@ -89,6 +89,9 @@
   {"code": 86, "name": "娱乐终端", "en": "Entertainment Terminal"},
   {"code": 87, "name": "原初意识", "en": "Original Consciousness"},
   {"code": 88, "name": "放大镜", "en": "Magnifying Glass"},
-  {"code": 89, "name": "汉娜人偶", "en": "Hanna Doll"}
+  {"code": 89, "name": "汉娜人偶", "en": "Hanna Doll"},
+  {"code": 90, "name": "采集篮", "en": "Gathering Basket"},
+  {"code": 91, "name": "妖精之翼", "en": "Fairy Wings"},
+  {"code": 92, "name": "完美的树枝", "en": "Perfect Branch"}
  ]
 }

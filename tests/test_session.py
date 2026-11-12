@@ -27,6 +27,7 @@ from advisor.session import (
     GAME_FIELDS,
     MAP_SOURCE_LABEL,
     OUT_OF_GAME_LABEL,
+    RESUME_CHECK_S,
     ROOM_KINDS,
     UNSUPPORTED_TEXT,
     DifficultyInfo,
@@ -146,13 +147,16 @@ class SessionTest(unittest.TestCase):
         )
 
     def test_unknown_star_is_guessed_from_probabilities_but_not_written_back(self):
-        """读不到星数时，按概率行估的星数只用于这一次推荐（任务等级的金色概率不能写回星数）。"""
+        """读不到星数时，按概率行估的星数只用于这一次推荐（任务等级的金色概率不能写回星数）。
+
+        一局之内星数只增不减：估过一次 2 星以后，0/1 星那一行不能再估成 0 星，按任务算、星数仍记 2。"""
         purple = self.plain_chip("紫")  # 2 星升星的最左格是紫色（最左格不对时按任务算，见 LeftmostRarityTest）
         ev = self.session.on_frame(frame([purple, "友情徽章", "书签"], probabilities=(40, 45, 15)))
         self.assertEqual((ev.state.star, ev.state.source, ev.state.tier), (2, "levelup", None))
         self.assertEqual((self.session.settings.star, self.session.settings.star_read), (0, False))
         ev = self.session.on_frame(frame(self.offer, probabilities=(60, 37, 3), rerolls=1))
-        self.assertEqual(ev.state.star, 0)
+        self.assertEqual((ev.state.star, ev.state.source, ev.state.tier), (2, "task", 1))
+        self.assertEqual((self.session.settings.star, self.session.settings.star_read), (0, False))
 
     def test_read_star_tells_zero_from_one(self):
         """0 星和 1 星的概率行相同，由读到的星数决定。"""
@@ -823,6 +827,72 @@ class StartupPanelTest(unittest.TestCase):
         self.assertEqual(ev.state.owned, ("书签", "标靶"))  # 推荐用上
         close(s)
 
+    def test_advice_marks_unknown_owned_and_map_source(self):
+        """中途打开、还没读到面板时给的推荐带 owned_unknown，另带当时地图的识别依据；从开局看起（panel_needed 为假）
+        的不带。"""
+        s = self.session
+        s.on_hud(hud(round=4, map="异变图书馆"))
+        kinds(s)
+        ev = s.on_frame(frame(OFFER_A))
+        self.assertTrue(ev.owned_unknown)
+        self.assertEqual(ev.map_source, "tasks")
+        close(s)
+
+        s2 = Session(self.db, Settings(hero="凛"))
+        s2.on_select_screen()  # 从选角界面看起：已有筹码确实为空，不用面板
+        s2.on_hud(hud(round=1))
+        kinds(s2)
+        ev = s2.on_frame(frame(OFFER_A))
+        self.assertFalse(ev.owned_unknown)
+        self.assertIsNone(ev.map_source)
+        close(s2)
+
+    def test_resume_with_recorded_chips_not_unknown(self):
+        """离开很久后回来（panel_needed 又置上，等面板核对），还记着之前的筹码：推荐照记着的筹码算，不带 owned_unknown。
+        回来时记着的筹码是空的才带（照样是按没有筹码算的）。"""
+        s = self.session
+        s.on_hud(hud(round=4))
+        s.on_panel(self.reading(["书签", "标靶"]))
+        kinds(s)
+        s.on_resume(RESUME_CHECK_S + 1)
+        self.assertTrue(s.game.panel_needed)
+        ev = s.on_frame(frame(OFFER_A))
+        self.assertEqual(ev.state.owned, ("书签", "标靶"))
+        self.assertFalse(ev.owned_unknown)
+        close(s)
+
+        s2 = ready(self.db, "凛")
+        s2.on_hud(hud(round=4))
+        s2.skip_panel()  # 用户关了面板提示：不再要面板，已有筹码照旧是空的
+        kinds(s2)
+        s2.on_resume(RESUME_CHECK_S + 1)
+        self.assertTrue(s2.game.panel_needed)
+        ev = s2.on_frame(frame(OFFER_A))
+        self.assertEqual(ev.state.owned, ())
+        self.assertTrue(ev.owned_unknown)
+        close(s2)
+
+    def test_unknown_after_picks_without_panel(self):
+        """中途打开、一直没打开面板：看着三选一记下了筹码以后，之前的还是不知道，下一次推荐照样带 owned_unknown（局面里是
+        记下的那几个）；读到面板以后不再带。"""
+        s = self.session
+        s.on_hud(hud(round=4))
+        kinds(s)
+        ev = s.on_frame(frame(OFFER_A, selected=1))
+        self.assertTrue(ev.owned_unknown)
+        self.assertEqual(close(s).kind, "picked")
+        self.assertTrue(s.game.panel_needed)
+        ev = s.on_frame(frame(OFFER_B))
+        self.assertEqual(ev.state.owned, (OFFER_A[1],))
+        self.assertTrue(ev.owned_unknown)
+        close(s)
+        s.on_panel(self.reading([OFFER_A[1], "书签"]))
+        kinds(s)
+        ev = s.on_frame(frame(OFFER_A))
+        self.assertEqual(ev.state.owned, (OFFER_A[1], "书签"))
+        self.assertFalse(ev.owned_unknown)
+        close(s)
+
     def test_unknown_slots_keep_recorded_chips(self):
         """面板上有没认出的格子：原来记着、面板上没认出的筹码保留（最多保留没认出的格数）；其余以面板为准。"""
         s = self.session
@@ -1379,6 +1449,113 @@ class DirectChipTest(unittest.TestCase):
         self.assertEqual(s.snapshot()["chip_sources"]["交错双鲤"], "added")
 
 
+class OwnedSourcesTest(unittest.TestCase):
+    """已有筹码的来路（GameState.owned_sources）和「查看筹码」面板上的记号（_panel_seen）：进已有筹码时记下，
+    面板读到、玩家改已有筹码时不变，离开时去掉，移出后放回恢复，新的一局清空、撤销恢复。"""
+
+    def setUp(self):
+        self.db = load_db()
+        self.session = ready(self.db)
+
+    def reading(self, owned):
+        return SimpleNamespace(is_panel=True, self_tab=True, owned=list(owned), unknown_slots=0, confidence=0.9)
+
+    def test_origins(self):
+        s = self.session
+        self.assertTrue(s.add_chip("书签", "added"))  # 补录
+        self.assertTrue(s.add_chip("标靶", "added", direct=True))  # 补录时标了不经三选一
+        self.assertTrue(s.resolve_unrecorded("手电筒-强光"))  # 待补录的升星：补录
+        s.on_frame(frame(OFFER_A))
+        close(s)
+        s.on_frame(frame(OFFER_A, selected=1))
+        self.assertEqual(close(s).kind, "picked")  # 三选一选的
+        s.game.missed_offer = list(OFFER_A)
+        self.assertTrue(s.resolve_missed(OFFER_A[0]))  # 漏记补录
+        self.assertEqual(s.game.owned_sources, {"书签": "added", "标靶": "direct", "手电筒-强光": "added",
+                                                "友情徽章": "pick", "小猪存钱罐": "missed"})
+        given = Session(self.db, Settings(hero="远野汉娜", owned=["书签"]))
+        self.assertEqual(given.game.owned_sources, {"书签": "given"})
+
+    def test_panel_first_entry_and_keeps_origin(self):
+        s = self.session
+        s.set_owned(["书签"])  # 玩家在悬浮窗上直接加的
+        s.on_panel(self.reading(["书签", "标靶"]))  # 标靶头一次就是在面板上读到的
+        self.assertEqual(s.game.owned_sources, {"书签": "manual", "标靶": "panel"})
+        self.assertEqual(s.game._panel_seen, {"书签", "标靶"})
+        close(s)
+        s.on_frame(frame(OFFER_A, selected=1))
+        close(s)
+        s.on_panel(self.reading(["书签", "标靶", "友情徽章"]))  # 面板上看到三选一选的：来路不变，另记面板记号
+        self.assertEqual(s.game.owned_sources["友情徽章"], "pick")
+        self.assertEqual(s.game.chip_sources["友情徽章"], "panel")  # 原有的来源照旧改成面板
+        self.assertIn("友情徽章", s.game._panel_seen)
+
+    def test_leaves_with_origin(self):
+        s = self.session
+        s.set_owned(["书签", "标靶"])
+        s.on_panel(self.reading(["书签", "标靶"]))
+        s.set_owned(["书签"])  # 玩家手改去掉标靶
+        self.assertEqual(s.game.owned_sources, {"书签": "manual"})
+        self.assertEqual(s.game._panel_seen, {"书签"})
+        s.on_panel(self.reading([]))  # 面板上一个都没有：书签也离开已有筹码
+        self.assertEqual((s.game.owned_sources, s.game._panel_seen), ({}, set()))
+
+    def test_removed_and_restored(self):
+        s = self.session
+        s.set_owned(["书签"])
+        s.on_panel(self.reading(["书签"]))
+        self.assertTrue(s.remove_chip("书签"))  # 小卡片上的「×」
+        self.assertEqual((s.game.owned_sources, s.game._panel_seen), ({}, set()))
+        self.assertEqual(s.restore_chip(), "书签")
+        self.assertEqual(s.game.owned_sources, {"书签": "manual"})
+        self.assertEqual(s.game._panel_seen, {"书签"})
+
+    def test_reverted_pick_drops_origin(self):
+        s = self.session
+        s.on_frame(frame(OFFER_A, selected=1))
+        close(s)
+        self.assertEqual(s.game.owned_sources["友情徽章"], "pick")
+        s.on_frame(frame(OFFER_A))  # 同一组候选又出现：撤销刚记下的
+        self.assertNotIn("友情徽章", s.game.owned_sources)
+        self.assertNotIn("友情徽章", s.game._panel_seen)
+
+    def test_new_game_clears_and_undo_restores(self):
+        s = self.session
+        s.set_owned(["书签"])
+        s.on_panel(self.reading(["书签"]))
+        s.on_hud(hud(round=7))
+        s.on_hud(hud(round=7))
+        s.on_hud(hud(round=1))
+        self.assertEqual(s.on_hud(hud(round=1)).kind, "newgame")
+        self.assertEqual((s.game.owned_sources, s.game._panel_seen), ({}, set()))
+        self.assertTrue(s.undo_new_game())
+        self.assertEqual(s.game.owned_sources, {"书签": "manual"})
+        self.assertEqual(s.game._panel_seen, {"书签"})
+
+    def test_advice_event_lists_and_difficulty_source(self):
+        s = self.session
+        s.set_owned(["书签"])
+        s.on_panel(self.reading(["书签"]))
+        ev = s.on_frame(frame(OFFER_A, probabilities=DifficultyTest.HARD_ROW))
+        self.assertEqual(ev.state.owned, ("书签",))
+        self.assertEqual(ev.owned_sources, ["manual"])
+        self.assertEqual(ev.owned_panel, [True])
+        self.assertEqual(ev.difficulty_source, "rows")
+        self.assertEqual(s.game.owned_sources["书签"], "manual")  # 面板读到以后不变
+
+    def test_snapshot_lists_sources_panel_seen_and_rejected_caps(self):
+        """诊断快照里也有每张筹码的来路、面板上看到过的和这一局没采用的进度上限。"""
+        s = self.session
+        s.set_owned(["书签"])
+        s.game.owned_sources["书签"] = "pick"
+        s.game._panel_seen = {"书签"}
+        s.game._cap_rejected = {20, 8}
+        out = s.snapshot()
+        self.assertEqual(out["owned_sources"], {"书签": "pick"})
+        self.assertEqual(out["panel_seen"], ["书签"])
+        self.assertEqual(out["cap_rejected"], [8, 20])
+
+
 class EndlessPendingTest(unittest.TestCase):
     """循环往复给的额外那次三选一（Session.endless_pending，交给引擎的 State.endless_pending）：在三选一里看到选中循环往复时
     记下到期的轮次（那时的轮次 + rules.toml [endless_cycle] delay：升星和筹码商店拿到的 2 回合、任务拿到的 3 回合）；到期以后
@@ -1891,6 +2068,76 @@ class DifficultyTest(unittest.TestCase):
         self.assertEqual(s.judge_source((25, 50, 25), [purple, "书签", "标靶"]), (2, "task", 3))
         self.assertEqual(s.settings.difficulty, HARD)
 
+    def test_judge_source_estimate_not_below_floor(self):
+        """一直没读到星数时，估出的星数不低于 floor；floor 为 0 时照旧，读到过星数时 floor 不起作用。"""
+        from advisor.session.selection import judge_source
+
+        rows = self.db.rules["rarity"]["rows"]
+        fixed = self.db.rules["rarity"]["fixed"]
+        args = (rows, fixed, (40, 45, 15), "紫", 0, False, "levelup", None)
+        self.assertEqual(judge_source(*args), (2, "levelup", None))
+        self.assertEqual(judge_source(*args, floor=0), (2, "levelup", None))
+        # 2 级任务的概率行：行号是任务等级、不是星数，全低于 floor 时只能是任务，星数写 floor
+        self.assertEqual(judge_source(*args, floor=3), (3, "task", 2))
+        # 对得上的行不低于 floor、最左格也对得上：照升星算
+        self.assertEqual(judge_source(*args, floor=2), (2, "levelup", None))
+        # 全队同时三选一、概率行对不上任何一行：星数也不低于 floor
+        self.assertEqual(judge_source(rows, fixed, (25, 50, 25), "金", 0, False, "levelup", None, team=True, floor=2),
+                         (2, "task", 3))
+        self.assertEqual(judge_source(rows, fixed, (50, 40, 10), "紫", 0, False, "levelup", None, floor=3),
+                         (3, "levelup", None))
+        # 读到过星数：floor 不起作用
+        self.assertEqual(judge_source(rows, fixed, (60, 37, 3), "蓝", 1, True, "levelup", None, floor=3),
+                         (1, "levelup", None))
+
+    def test_star_estimate_floor_through_session(self):
+        """一直没读到星数：先估成 3 星的升星三选一，再来 2 级任务的，第二次的局面仍是 3 星。"""
+        s = self.session
+        gold = next(c.name for c in self.db.chips.values()
+                    if c.rarity == "金" and not c.maps and not c.granted and c.name not in OFFER_B)
+        purple = next(c.name for c in self.db.chips.values()
+                      if c.rarity == "紫" and not c.maps and not c.granted and c.name not in OFFER_B)
+        ev = s.on_frame(frame([gold, *OFFER_B[1:]], probabilities=(25, 50, 25)))
+        self.assertEqual((ev.state.star, ev.state.source), (3, "levelup"))
+        self.assertEqual((s.settings.star, s.settings.star_read, s.game._star_guess_floor), (0, False, 3))
+        s.on_frame(None), s.on_frame(None)
+        ev = s.on_frame(frame([purple, *OFFER_B[1:]], probabilities=(40, 45, 15)))
+        self.assertEqual((ev.state.star, ev.state.source, ev.state.tier), (3, "task", 2))
+        close(s)
+
+    def test_star_guess_floor_raised_by_levelup_only_and_follows_game(self):
+        """估星数的下限只由升星、筹码商店三选一抬高：3 级任务的三选一（最左格不是 3 星的固定稀有度）不抬，之后 2 星的升星
+        照升星算。下限跟着这一局走：开了新的一局清零，撤销新的一局时跟着那一局回来。"""
+        s = self.session
+        purple = next(c.name for c in self.db.chips.values()
+                      if c.rarity == "紫" and not c.maps and not c.granted and c.name not in OFFER_B)
+        s.on_hud(hud(round=9)), s.on_hud(hud(round=9))
+        ev = s.on_frame(frame([purple, *OFFER_B[1:]], probabilities=(25, 50, 25)))
+        self.assertEqual((ev.state.source, ev.state.tier, s.game._star_guess_floor), ("task", 3, 0))
+        close(s)
+        ev = s.on_frame(frame([purple, *OFFER_B[1:]], probabilities=(40, 45, 15)))
+        self.assertEqual((ev.state.star, ev.state.source, s.game._star_guess_floor), (2, "levelup", 2))
+        close(s)
+        s.on_hud(hud(round=1)), s.on_hud(hud(round=1))  # 轮次变小：新的一局
+        self.assertEqual((s.settings.round, s.game._star_guess_floor), (1, 0))
+        self.assertTrue(s.undo_new_game())
+        self.assertEqual((s.settings.round, s.game._star_guess_floor), (9, 2))
+
+    def test_star_guess_floor_not_raised_when_leftmost_unknown(self):
+        """第 1 个候选没读出、边框颜色也没读到（最左格的稀有度不知道）时，估成升星也不抬下限：这时不按最左格判断，任务
+        三选一也会估成升星。最左格知道时照常抬；估出的星数照样不低于已有的下限。"""
+        s = self.session
+        purple = next(c.name for c in self.db.chips.values()
+                      if c.rarity == "紫" and not c.maps and not c.granted and c.name not in OFFER_B)
+        unread = [None, *OFFER_B[1:]]
+        self.assertEqual(s.judge_source((25, 50, 25), unread), (3, "levelup", None))
+        self.assertEqual(s.game._star_guess_floor, 0)
+        self.assertEqual(s.judge_source((40, 45, 15), [purple, *OFFER_B[1:]]), (2, "levelup", None))
+        self.assertEqual(s.game._star_guess_floor, 2)
+        self.assertEqual(s.judge_source((60, 37, 3), unread), (2, "task", 1))
+        self.assertEqual(s.judge_source((25, 50, 25), unread), (3, "levelup", None))
+        self.assertEqual(s.game._star_guess_floor, 2)
+
 
 class DifficultyInfoTest(unittest.TestCase):
     """本局具体难度（噩梦及以上时摩托头盔-高级对所有角色提高）：合并对局外画面上读到的难度、
@@ -2095,15 +2342,106 @@ class DifficultyInfoTest(unittest.TestCase):
         self.assertEqual(ready(self.db).difficulty_info.level, None)
         self.assertIsNone(ready(self.db).difficulty_info.label)
 
-    def test_cap_mismatch_traced(self):
-        # 水乡古镇红叉在第 20 格（只有普通是 20 格），概率行却是困难及以上：资料和读数对不上，记识别读数
+    def test_cap_mismatch_rejected(self):
+        # 水乡古镇红叉在第 20 格（只有普通是 20 格），概率行却是困难及以上：对不上资料，不采用；同一个数不重复记
         s = ready(self.db)
         s.on_hud(hud(round=3, map="水乡古镇"))
         s.on_frame(frame(OFFER_A, probabilities=self.HARD_ROW))
+        self.assertIsNone(s.on_progress(None, 20))
+        self.assertIsNone(s.on_progress(None, 20))
+        self.assertIsNone(s.game.progress_cap)
+        self.assertTrue(s.wants_progress_cap)
+        self.assertEqual(s.game._cap_rejected, {20})
+        # 不采用的那个数不参与推算：难度只看概率行，场面里也没有这个上限
+        self.assertEqual(s.difficulty_info.source, "rows")
+        self.assertIsNone(s.build_state(frame(OFFER_A, probabilities=self.HARD_ROW)).progress_cap)
+        traced = [r for r in s.recent_events(60) if r["kind"] == "read:cap_rejected"]
+        self.assertEqual([(r["cap"], r["map"]) for r in traced], [(20, "水乡古镇")])
+        # 识别流程在进度条样子没变时会重复交同一个读数：直接忽略，不再记
+        self.assertIsNone(s.on_progress(None, 20))
+        self.assertEqual(len([r for r in s.recent_events(60) if r["kind"] == "read:cap_rejected"]), 1)
+        self.assertEqual(s.game_over_info, None)
+
+    def test_cap_mismatch_after_map_known(self):
+        # 地图还不知道时先采用；后来认出地图、概率行也判了，和资料对不上：去掉这个上限，记进没采用过的，识别流程会重读
+        s = ready(self.db)
+        s.on_frame(frame(OFFER_A, probabilities=self.HARD_ROW))
         self.cap(s, 20, current=3)
-        self.assertEqual(s.difficulty_info.level, LEVEL_HARD_PLUS)
-        traced = [r for r in s.recent_events(60) if r["kind"] == "read:difficulty"]
-        self.assertEqual(traced[-1]["conflict"], "cap_mismatch")
+        self.assertEqual(s.difficulty_info.source, "rows")
+        s.on_hud(hud(round=3, map="水乡古镇"))
+        self.assertIsNone(s.game.progress_cap)
+        self.assertTrue(s.wants_progress_cap)
+        self.assertEqual(s.game._cap_rejected, {20})
+        traced = [r for r in s.recent_events(60) if r["kind"] == "read:cap_rejected"]
+        self.assertEqual([(r["cap"], r["map"]) for r in traced], [(20, "水乡古镇")])
+
+    def test_cap_with_normal_rows(self):
+        # 概率行判成普通：普通难度的格数照常采用（异变图书馆普通、困难都是 18 格），结束时照写、不算没采用的；
+        # 先采用、后判成普通的也不去掉；普通没有的格数（17 格只有噩梦、疯狂）不采用
+        s = ready(self.db)
+        s.on_hud(hud(round=3, map="异变图书馆"))
+        s.on_frame(frame(OFFER_A, probabilities=self.NORMAL_ROW))
+        self.cap(s, 18, current=3)
+        self.assertEqual(s.game._cap_rejected, set())
+        self.assertEqual(s.build_state(frame(OFFER_A, probabilities=self.NORMAL_ROW)).progress_cap, 18)
+        s.on_out_of_game(screen("result", "普通", "异变图书馆", 12))
+        self.assertEqual((s.game_over_info["cap"], s.game_over_info["cap_rejected"]), (18, 0))
+        s = ready(self.db)
+        s.on_hud(hud(round=3, map="异变图书馆"))
+        self.cap(s, 18, current=3)
+        s.on_frame(frame(OFFER_A, probabilities=self.NORMAL_ROW))
+        self.assertEqual((s.game.progress_cap, s.game._cap_rejected), (18, set()))
+        s = ready(self.db)
+        s.on_hud(hud(round=3, map="异变图书馆"))
+        s.on_frame(frame(OFFER_A, probabilities=self.NORMAL_ROW))
+        s.on_progress(3, 17)
+        s.on_progress(3, 17)
+        self.assertEqual((s.game.progress_cap, s.game._cap_rejected), (None, {17}))
+
+    def test_rejected_cap_adopted_after_map_fixed(self):
+        # 地图认错时对不上、没采用的数，地图改对以后再读到照常连读两次采用（异变图书馆没有 15 格，海选赛运动场噩梦、疯狂
+        # 是 15 格）；地图没改之前照旧忽略、不重复记。没采用过的照样算一个
+        s = ready(self.db)
+        s.on_hud(hud(round=3, map="异变图书馆"))
+        s.on_frame(frame(OFFER_A, probabilities=self.HARD_ROW))
+        for _ in range(4):
+            self.assertIsNone(s.on_progress(None, 15))
+        self.assertEqual((s.game.progress_cap, s.game._cap_rejected), (None, {15}))
+        s.set_map("海选赛运动场")
+        self.cap(s, 15, current=3)
+        self.assertFalse(s.wants_progress_cap)
+        self.assertEqual(s.game._cap_rejected, {15})
+        self.assertEqual(len([r for r in s.recent_events(60) if r["kind"] == "read:cap_rejected"]), 1)
+
+    def test_rejected_cap_between_two_readings_does_not_break_the_run(self):
+        """读数是 17、8、17，8 已经因为对不上资料被拒过：中间的 8 直接忽略，不打断「连着两次读到 17」，第二个 17 采用。
+        拒过的数一定是读错，不该把对的那次作废（御魂庆典的 17 格只有极限，8 格没有一种难度）。"""
+        s = ready(self.db)
+        s.on_hud(hud(round=3, map="御魂庆典"))
+        s.on_frame(frame(OFFER_A, probabilities=self.HARD_ROW))
+        s.on_progress(3, 8)
+        s.on_progress(3, 8)
+        self.assertEqual(s.game._cap_rejected, {8})
+        self.assertIsNone(s.on_progress(3, 17))  # 第一次读到 17：等再读到一次
+        self.assertIsNone(s.on_progress(3, 8))  # 拒过的数：忽略，不动还在等的 17
+        self.assertIsNone(s.game.progress_cap)
+        s.on_progress(3, 17)  # 连着第二次读到 17：采用
+        self.assertEqual(s.game.progress_cap, 17)
+
+    def test_cap_kept_when_data_cannot_judge(self):
+        # 判断不了时照旧采用：地图在 rules.toml 的 cap_untrusted 里，或者资料不全（difficulties_at 为 None）。
+        # 水乡古镇 20 格只有普通、概率行却是困难及以上，资料可信时不采用（test_cap_mismatch_rejected）
+        def adopted():
+            s = ready(self.db)
+            s.on_hud(hud(round=3, map="水乡古镇"))
+            s.on_frame(frame(OFFER_A, probabilities=self.HARD_ROW))
+            self.cap(s, 20, current=3)
+            self.assertEqual(s.game._cap_rejected, set())
+
+        with mock.patch.dict(self.db.rules, {"difficulty": {"cap_untrusted": ["水乡古镇"]}}):
+            adopted()
+        with mock.patch.object(type(self.db.map_info["水乡古镇"]), "difficulties_at", return_value=None):
+            adopted()
 
     def test_extreme_from_cap(self):
         # 御魂庆典红叉在第 17 格：四个难度都对不上、只有极限是 17 格，推算成极限，不再记 cap_mismatch；难度胶囊写「极限」，
@@ -2235,7 +2573,9 @@ class GameOverTest(unittest.TestCase):
         self.assertEqual((st.round, st.star, st.map, st.owned, s.game.progress), (12, 3, "异变图书馆", ["书签", "标靶"], 12))
         self.assertEqual(s.game_over_info, {"why": ev.why, "map": "异变图书馆", "difficulty": "噩梦",
                                             "level": LEVEL_NIGHTMARE, "rounds": 12, "cap": 17,
-                                            "outcome": None, "how": None})  # 没看到通关画面、还没读到奖励画面
+                                            "difficulty_source": "result", "cap_rejected": 0,
+                                            "outcome": None, "how": None, "map_source": "result",
+                                            "map_in_game": "异变图书馆"})  # 没看到通关画面、还没读到奖励画面
         self.assertEqual(s.difficulty_info.source, "result")
         self.assertIsNone(s.on_out_of_game(self.RESULT))  # 结算画面停留期间不再发
         records = s.recent_events(60)
@@ -2488,6 +2828,67 @@ class GameOverTest(unittest.TestCase):
                 ev = s.on_out_of_game(screen(kind, "噩梦" if kind != "reward" else None))
                 self.assertEqual((ev.kind, ev.why), ("game_over", why))
                 self.assertEqual(s.pending._next_difficulty, {} if kind == "reward" else {kind: "噩梦"})
+
+    def finish_result(self, s, map_=None, rounds=12):
+        """隔 2 秒读到结算画面（地图、轮次可以改）。"""
+        self.tick(2)
+        return s.on_out_of_game(SimpleNamespace(kind="result", difficulty="噩梦", map=map_, rounds=rounds))
+
+    def test_result_map_replaces_in_game_map(self):
+        """结算画面上的地图和局里认的不一样：结束信息用结算画面上的，另记局里认的是哪张。"""
+        s = self.playing(map="园林中庭")
+        self.finish_result(s, map_="森秋幻境")
+        info = s.game_over_info
+        self.assertEqual((info["map"], info["map_source"], info["map_in_game"]),
+                         ("森秋幻境", "result", "园林中庭"))
+
+    def test_manual_map_wins(self):
+        """玩家手动指定了地图：结束信息照旧用手动指定的，结算画面上的地图不管。"""
+        s = self.playing(map="园林中庭")
+        s.set_map("森秋幻境")
+        self.finish_result(s, map_="园林中庭")
+        info = s.game_over_info
+        self.assertEqual((info["map"], info["map_source"], info["map_in_game"]),
+                         ("森秋幻境", "manual", "森秋幻境"))
+
+    def test_screen_without_map_uses_in_game_map(self):
+        """结算画面没读到地图（房间画面结束的局）：用局里认的，来源是当时的依据。"""
+        s = self.playing(map="园林中庭")
+        self.assertIsNone(s.on_out_of_game(screen("team_room", "噩梦")))
+        self.tick()
+        s.on_out_of_game(screen("team_room", "噩梦"))
+        info = s.game_over_info
+        self.assertEqual((info["map"], info["map_source"], info["map_in_game"]),
+                         ("园林中庭", "tasks", "园林中庭"))
+
+    def test_result_map_without_in_game_map(self):
+        """局里没认出地图、结算画面读到了：用结算画面上的，局里认的为 None。"""
+        s = self.playing(map=None)
+        self.finish_result(s, map_="森秋幻境")
+        info = s.game_over_info
+        self.assertEqual((info["map"], info["map_source"], info["map_in_game"]), ("森秋幻境", "result", None))
+
+    def test_no_map_anywhere(self):
+        """局里没认出、结算画面也没读到：地图和来源、局里认的都是 None。"""
+        s = self.playing(map=None)
+        self.assertIsNone(s.on_out_of_game(screen("team_room", "噩梦")))
+        self.tick()
+        s.on_out_of_game(screen("team_room", "噩梦"))
+        info = s.game_over_info
+        self.assertEqual((info["map"], info["map_source"], info["map_in_game"]), (None, None, None))
+
+    def test_room_end_then_result_recomputes_map(self):
+        """房间画面先结束了这一局、之后又读到结算画面：结束信息照新规则重算，用结算画面上的地图。"""
+        s = self.playing(map="园林中庭")
+        self.assertIsNone(s.on_out_of_game(screen("team_room", "噩梦")))
+        self.tick()
+        s.on_out_of_game(screen("team_room", "噩梦"))
+        self.assertEqual(s.game_over_info["map_source"], "tasks")
+        self.tick()
+        self.assertIsNone(self.finish_result(s, map_="森秋幻境"))
+        info = s.game_over_info
+        self.assertEqual((info["map"], info["map_source"], info["map_in_game"]),
+                         ("森秋幻境", "result", "园林中庭"))
 
     def test_loading_after_game_belongs_to_next_game(self):
         s = self.playing(map=None)
@@ -3860,6 +4261,144 @@ class ReviewRecordTest(unittest.TestCase):
             proc._read_select(np.zeros((1080, 1920, 3), np.uint8), 0.0, [])
         rec = self.records("read:select")[-1]
         self.assertEqual((rec["rarity"], rec["partial"]), (["蓝", "蓝", "蓝"], [False, False, True]))
+
+
+class UnadvisedTest(unittest.TestCase):
+    """认出了三选一、程序放弃等待、没给推荐的那几次（unadvised）：只记等过了才放弃的「无法识别」和「请选择角色」，
+    给过推荐以后偶尔一帧读不全、只读到共同部分以后按挑出的那一个给过推荐的不算。关掉三选一时发一次事件。"""
+
+    OFFER = ["标靶", "大背包", "缓冲盾牌"]
+    HIDDEN = dict(names=[None, None, "缓冲盾牌"], raw=["", "", "缓冲盾牌"],
+                  problems=["第 1 个候选筹码无法识别", "第 2 个候选筹码无法识别"])
+
+    def setUp(self):
+        self.db = load_db()
+        self.s = ready(self.db, "芬妮")
+        self.clock = [100.0]
+        self.s._clock = lambda: self.clock[0]
+        self.s.settings.round = 4
+        self.s.on_stars(own(3))
+        self.s.take_events()
+
+    def at(self, t, seen):
+        self.clock[0] = 100.0 + t
+        return self.s.on_frame(seen)
+
+    def hidden(self, **kw):
+        return chips(rerolls=4, **{**self.HIDDEN, **kw})
+
+    def items(self):
+        return [e for e in self.s.take_events() if e.kind == "unadvised"]
+
+    def test_first_unreadable_after_wait(self):
+        """刚出现时等过仍读不全：记一项（reason 为 name），关掉时发一次；一直没给推荐，star 按概率行估、source 只写任务。"""
+        self.assertIsNone(self.at(0.0, self.hidden()))
+        self.assertEqual(self.at(0.6, self.hidden()).kind, "unreadable")
+        self.assertEqual(close(self.s).kind, "missed_pick")
+        got = self.items()
+        self.assertEqual(len(got), 1)
+        ev = got[0]
+        item = ev.unadvised
+        self.assertEqual(ev.select_no, 1)
+        self.assertEqual((item["reasons"], item["round"], item["advised"], item["pick"]),
+                         (["name"], 4, False, None))
+        self.assertIsInstance(item["star"], int)
+        self.assertIsNone(item["source"])
+        # 下一次三选一给了推荐：不再发
+        self.assertEqual(self.at(10.0, chips(self.OFFER, rerolls=4)).kind, "advice")
+        close(self.s)
+        self.assertEqual(self.items(), [])
+
+    def test_refresh_unreadable_then_advised(self):
+        """点了刷新、新的三张仍读不全：也算一次；后来读全给了推荐时，advised 和 star、source 改成推荐里的。"""
+        self.assertEqual(self.at(0.0, chips(self.OFFER, rerolls=5)).kind, "advice")
+        self.s.take_events()
+        self.assertEqual(self.at(1.0, chips(rerolls=4, **MIDDLE)).kind, "refreshing")
+        self.assertEqual(self.at(1.6, chips(rerolls=4, **MIDDLE)).kind, "unreadable")
+        ev = self.at(2.2, chips(AFTER, rerolls=4))
+        self.assertEqual(ev.kind, "advice")
+        close(self.s)
+        item = self.items()[0].unadvised
+        self.assertTrue(item["advised"])
+        self.assertEqual((item["star"], item["source"]), (ev.state.star, ev.state.source))
+
+    def test_unreadable_after_advice_is_not_counted(self):
+        """给过推荐以后同一组候选里一格被挡住：当场提示，不算没给推荐。"""
+        self.assertEqual(self.at(0.0, chips(self.OFFER, rerolls=5)).kind, "advice")
+        self.s.take_events()
+        ev = self.at(1.0, chips(["标靶", None, "缓冲盾牌"], raw=["标靶", "", "缓冲盾牌"], rerolls=5))
+        self.assertEqual(ev.kind, "unreadable")
+        close(self.s)
+        self.assertEqual(self.items(), [])
+
+    def test_common_part_advice_then_unreadable_is_not_counted(self):
+        """只读到共同部分、等过以后按挑出的那一个给了推荐：之后又有一帧读不全，不算。"""
+        low = "第 3 个候选筹码匹配度低：识别文字「飞星」，按「金色飞星」计算"
+        offer = ["汉娜人偶", "拳击手套-高级", "金色飞星"]
+        self.assertIsNone(self.at(0.0, chips([None, "拳击手套-高级", None], raw=["", "拳击手套-高级", ""], rerolls=4)))
+        partial = chips(offer, raw=["汉娜人偶", "拳击手套-高级", "飞星"], partial=(2,), problems=[low], rerolls=4)
+        self.assertIsNone(self.at(0.3, partial))
+        self.assertEqual(self.at(0.6, partial).kind, "advice")
+        self.s.take_events()
+        self.assertEqual(self.at(1.2, chips(["汉娜人偶", None, "金色飞星"],
+                                            raw=["汉娜人偶", "", "金色飞星"], rerolls=4)).kind, "unreadable")
+        close(self.s)
+        self.assertEqual(self.items(), [])
+
+    def test_hero_needed(self):
+        """角色还没认出来、读全了发「请选择角色」：记一项，reason 为 hero，轮次取记下的。"""
+        s = Session(self.db, Settings(hero="凛"))
+        clock = [100.0]
+        s._clock = lambda: clock[0]
+        s.settings.round = 2
+        self.assertEqual(s.on_frame(chips(self.OFFER, rerolls=4)).kind, "hero_needed")
+        s.on_frame(None)
+        s.on_frame(None)
+        item = [e for e in s.take_events() if e.kind == "unadvised"][0].unadvised
+        self.assertEqual((item["reasons"], item["round"], item["advised"]), (["hero"], 2, False))
+
+    def test_unknown_name(self):
+        """有读出来的筹码名资料里没有（也没标成资料未收录）：原因按 name、unknown 的先后记。"""
+        seen = chips(["标靶", "不存在的筹码", None], raw=["标靶", "不存在的筹码", ""], rerolls=4)
+        self.assertIsNone(self.at(0.0, seen))
+        self.assertEqual(self.at(0.6, seen).kind, "unreadable")
+        close(self.s)
+        self.assertEqual(self.items()[0].unadvised["reasons"], ["name", "unknown"])
+
+    def test_pick_from_selected_slot(self):
+        """关掉时最后看到选中的那张（绿框）：pick 记那一个；没看到时是 None。"""
+        self.assertIsNone(self.at(0.0, self.hidden()))
+        self.assertEqual(self.at(0.6, self.hidden(selected=2)).kind, "unreadable")
+        self.assertEqual(close(self.s).kind, "picked")
+        self.assertEqual(self.items()[0].unadvised["pick"], "缓冲盾牌")
+
+    def test_star_source_from_first_advice(self):
+        """读全以后给了推荐，同一次三选一里又重算了一次（这里是读到的星数变了）：star、source 照开了这一项以后
+        头一个推荐事件里的，不跟着后来的推荐改。"""
+        self.assertIsNone(self.at(0.0, self.hidden()))
+        self.assertEqual(self.at(0.6, self.hidden()).kind, "unreadable")
+        first = self.at(1.0, chips(self.OFFER, rerolls=4))
+        self.assertEqual(first.kind, "advice")
+        self.s.on_stars(own(4))
+        later = self.at(1.2, chips(self.OFFER, rerolls=4))
+        self.assertEqual(later.kind, "advice")
+        self.assertNotEqual(later.state.star, first.state.star)
+        close(self.s)
+        got = self.items()
+        self.assertEqual(len(got), 1)
+        item = got[0].unadvised
+        self.assertTrue(item["advised"])
+        self.assertEqual((item["star"], item["source"]), (first.state.star, first.state.source))
+
+    def test_item_taken_before_bookkeeping(self):
+        """关掉三选一时先取走这一项、再交给记账（Session._select_closed）：记账出错时，这一项也不留到下一次三选一、
+        并进那一次的那一项。"""
+        self.assertIsNone(self.at(0.0, self.hidden()))
+        self.assertEqual(self.at(0.6, self.hidden()).kind, "unreadable")
+        with mock.patch.object(self.s, "_select_closed", side_effect=RuntimeError("记账出错")):
+            with self.assertRaises(RuntimeError):
+                self.s.select.close()
+        self.assertIsNone(self.s.select._unadvised)
 
 
 if __name__ == "__main__":

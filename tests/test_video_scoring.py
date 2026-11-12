@@ -313,7 +313,7 @@ class OpinionValuesTest(Base):
 
     def test_speed(self):
         phys = self.rule_scores("物理输出")
-        self.assertEqual([phys[c] for c in ("速度轮滑-初级", "速度轮滑-中级", "速度轮滑-高级")], [20, 40, 45])
+        self.assertEqual([phys[c] for c in ("速度轮滑-初级", "速度轮滑-中级", "速度轮滑-高级")], [20, 40, 55])
         # 辅助定位的角色三种速度轮滑各 +15，帕露南不加；法术输出的赛克斯不带这个特性
         for hero, has in (("蓝海晴", True), ("阿尔", True), ("赛克斯", False), ("帕露南", False), ("邦妮", False)):
             shoes = {c for r in self.db.hero_synergy[hero].rules if r.origin == "辅助定位" for c in r.chips

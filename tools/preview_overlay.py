@@ -34,6 +34,7 @@
   --hero 角色 / --owned 筹码,筹码  另写角色、已有筹码（--all 的各状态里用）
   --newgame-undo 依据    判定为新的一局，可撤销
   --panel-prompt        请打开「查看筹码」面板
+  --owned-unknown       对局中途打开、还没读到「查看筹码」面板：已有筹码未知，推荐按没有筹码算（「推荐」卡片最上面的提示）
   --panel-read N        识别到 N 个已有筹码
   --map-read 地图        识别到地图
   --gain                星数增加却没有三选一记录：请补录
@@ -459,6 +460,7 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--hero-needed", action="store_true")
     ap.add_argument("--newgame-undo")
     ap.add_argument("--panel-prompt", action="store_true")
+    ap.add_argument("--owned-unknown", action="store_true")
     ap.add_argument("--panel-read", type=int)
     ap.add_argument("--map-read")
     ap.add_argument("--gain", action="store_true")
@@ -514,7 +516,7 @@ def scenario_args(ap: argparse.ArgumentParser | None = None, image: str = SELECT
 def fake_services(args) -> Services:
     """预览用的假日志、诊断、下载、版本模块：只记在内存里，不写文件、不联网。"""
     logbook = SimpleNamespace(
-        record_offer=lambda *a: None, record_pick=lambda *a: None, record_feedback=lambda *a: None,
+        record_offer=lambda *a, **kw: None, record_pick=lambda *a: None, record_feedback=lambda *a: None,
         game_count_since_calibration=lambda: 20 if args.calibrate else 0,
     )
     # 悬浮窗导出诊断时另传 extra=（本局和上一局的识别记录、推荐日志），假的 export 照收不用
@@ -840,6 +842,8 @@ def build(args, db, read=None, show: bool | None = None) -> Built:
             seen.probabilities = tuple(int(p) for p in args.probs.split(","))
         if args.hero_needed:
             session.game.seen_hero = None  # 角色待识别：Session 发 hero_needed，不给推荐
+        if args.owned_unknown:
+            session.game.panel_needed = True  # 还没读到面板（上面 set_owned 记为已确认，这里改回来）：推荐按没有筹码算
         event = session.on_frame(seen)
         if event is None and session.holding:
             # 三选一刚出现时有筹码没读出来（--unreadable）：记账先等一等、不发事件。画等满以后提示「无法识别」的样子

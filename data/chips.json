@@ -70,7 +70,8 @@
     "糖糖",
     "邦妮",
     "玲玲",
-    "远野汉娜"
+    "远野汉娜",
+    "苍鲤"
    ],
    "fit_minor": []
   },
@@ -299,7 +300,7 @@
    "tags": ["通用"],
    "pools": [],
    "class_points": {},
-   "fit": ["芬妮", "凛", "姬梦朝", "照", "摩西", "赛克斯", "多萝西"],
+   "fit": ["芬妮", "凛", "姬梦朝", "照", "摩西", "赛克斯", "多萝西", "苍鲤"],
    "fit_minor": []
   },
   {
@@ -426,7 +427,7 @@
    "school": null,
    "maps": [],
    "granted": false,
-   "effect": "效果牌伤害+2",
+   "effect": "效果牌伤害 +2",
    "base": 20,
    "growth_round": null,
    "tags": ["卡牌"],
@@ -445,7 +446,7 @@
    "school": null,
    "maps": [],
    "granted": false,
-   "effect": "当前生命值不超过生命值上限的 50% 时，攻击力+4，受到伤害-1",
+   "effect": "当前生命值不超过生命值上限的 50% 时，攻击力 +4，受到伤害 -1",
    "base": 20,
    "growth_round": null,
    "tags": ["攻击"],
@@ -661,7 +662,7 @@
    "pools": ["生存", "辅助"],
    "class_points": {"生存": 20},
    "fit": [],
-   "fit_minor": []
+   "fit_minor": ["苍鲤"]
   },
   {
    "name": "可口糖果",
@@ -1243,7 +1244,7 @@
    "school": null,
    "maps": ["水乡古镇"],
    "granted": false,
-   "effect": "使用主动技能后，4 格内的所有角色攻击力+1、受到伤害-1，持续 1 轮",
+   "effect": "使用主动技能后，4 格内的所有角色攻击力 +1、受到伤害 -1，持续 1 轮",
    "base": 20,
    "growth_round": null,
    "tags": ["通用"],
@@ -1341,7 +1342,8 @@
     "糖糖",
     "邦妮",
     "玲玲",
-    "远野汉娜"
+    "远野汉娜",
+    "苍鲤"
    ],
    "fit_minor": []
   },
@@ -1724,6 +1726,83 @@
    "pools": ["辅助"],
    "class_points": {"辅助": 20},
    "fit": ["帕露南", "橘雪莉"],
+   "fit_minor": []
+  },
+  {
+   "name": "采集篮",
+   "en": "Gathering Basket",
+   "hant": "採集籃",
+   "aliases": [],
+   "rarity": "蓝",
+   "icon": "50094",
+   "group": "地图专属",
+   "school": null,
+   "maps": ["森秋幻境"],
+   "granted": false,
+   "effect": "使用建筑牌后，获得 1 张随机卡牌与 3 星币",
+   "base": 10,
+   "growth_round": null,
+   "tags": ["通用"],
+   "pools": [],
+   "class_points": {},
+   "fit": [],
+   "fit_minor": []
+  },
+  {
+   "name": "妖精之翼",
+   "en": "Fairy Wings",
+   "hant": "妖精之翼",
+   "aliases": [],
+   "rarity": "紫",
+   "icon": "50095",
+   "group": "地图专属",
+   "school": null,
+   "maps": ["森秋幻境"],
+   "granted": false,
+   "effect": "场上每存在 2 个植物类建筑，移动速度 +1（最多 +4）",
+   "base": 20,
+   "growth_round": null,
+   "tags": ["通用"],
+   "pools": [],
+   "class_points": {},
+   "fit": [],
+   "fit_minor": []
+  },
+  {
+   "name": "完美的树枝",
+   "en": "Perfect Branch",
+   "hant": "完美的樹枝",
+   "aliases": [],
+   "rarity": "金",
+   "icon": "50096",
+   "group": "地图专属",
+   "school": null,
+   "maps": ["森秋幻境"],
+   "granted": false,
+   "effect": "回合开始时，获得 1 层【超强精力】（每层使自身攻击力 +2，被挑战后失去 1 层）",
+   "base": 30,
+   "growth_round": null,
+   "tags": ["通用"],
+   "pools": [],
+   "class_points": {"攻击": 50},
+   "fit": [
+    "阿兰娜",
+    "派德曼",
+    "帕帕拉",
+    "Z3000",
+    "墨影",
+    "姬梦枫",
+    "美咲",
+    "娜蒂斯",
+    "茉莉",
+    "星魅琉华",
+    "南希露",
+    "摩西",
+    "糖糖",
+    "邦妮",
+    "玲玲",
+    "远野汉娜"
+   ],
    "fit_minor": []
   }
  ],

@@ -36,7 +36,8 @@ data/ 里的 JSON 就是游戏数据本身：游戏更新后直接改 JSON。
   之间的数；
 - card_crops.json（缺角色照的皮肤从卡面原画现裁的裁法）：写法对；角色照和卡面是同一编号、同一皮肤；裁法
   合理（不翻转、不拉斜、缩放在合理的范围、角色照的中心落在卡面里）；转了角度的（对局里斜着摆）在 photo_tilt.json 里有
-  同样角度的一项；识别图片清单里有对应的、裁法和卡面都一样的一项（不用下载的健全版可以没有），清单里现裁的项这里也都有；
+  同样角度的一项；识别图片清单里有对应的、裁法和卡面都一样的一项（不用下载的健全版可以没有；放在备用地址上的看它的
+  fallback，复刻的版本照它现裁），清单里现裁的项这里也都有；
 - sfw_skip.json（首次运行不下载的健全版角色照，tools/check_sfw_cover.py 算、写）：写法对（photos 是「角色照的文件名 →
   两个分数」的表）；都是健全版（文件名带 _sfw）；对得上已知的角色照（从卡面现裁的在 card_crops.json 里，其余的开发目录
   assets/heroes 里有这张、或者同一套的普通版是已知的角色照；开发目录里一张角色照都没有时这一条只核对现裁的）；识别图片
@@ -580,7 +581,8 @@ def map_problems(maps, chips: list) -> list[str]:
       的文字比先后，"false" 这样的文字也算真，写成别的样子会算错地图还开不开放；
     - 筹码写的地图（专属筹码的 maps）都在这份文件里；
     - 有游戏繁体中文界面里的地图名（hant）和任务文字（hant_tasks），繁体任务和 tasks 条数相同（一一对应、顺序相同）：
-      没写时程序照常载入，只是繁体的游戏画面上认不出这张地图。
+      没写时程序照常载入，只是繁体的游戏画面上认不出这张地图；
+    - 有游戏英文界面里的地图名（en）：程序不读它，给读这份资料的别处用（和筹码、角色的 en 一样）。
     类型不对的由 advisor/data.py 载入时另外报出（记成警告），这里只查缺没缺、对不对得上。
     """
     if not isinstance(maps, dict):
@@ -595,6 +597,8 @@ def map_problems(maps, chips: list) -> list[str]:
             problems.append(f"{where}：缺少任务（tasks 是空的），请补上这张地图的任务文字。")
         if _lacks(info, "hant"):
             problems.append(f"{where}：缺少繁体名（hant）：请补上游戏繁体中文界面里的地图名（照游戏原文，不自己转换）。")
+        if _lacks(info, "en"):
+            problems.append(f"{where}：缺少英文名（en）：请补上游戏英文界面里的地图名（照游戏原文，不自己翻译）。")
         hant_tasks = info.get("hant_tasks")
         if hant_tasks is None:
             problems.append(f"{where}：缺少繁体任务（hant_tasks）：请按 tasks 的顺序写游戏任务栏里的繁体任务文字"
@@ -1026,7 +1030,7 @@ def crop_problems(table, tilts: dict | None, items: list[dict] | None, skipped=f
     # 没有」，写坏的那一项本身由 sfw_skip 那一项报
     listed = {i["file"]: i for i in items if i.get("dir") == "heroes" and isinstance(i.get("file"), str)}
     for photo, (card, affine) in good.items():
-        item = listed.get(photo)
+        item = _crop_of(listed.get(photo))
         if item is None and photo in skipped:
             continue  # 不用下载的健全版：裁法照留，不进清单
         if item is None or "crop" not in item:
@@ -1035,10 +1039,18 @@ def crop_problems(table, tilts: dict | None, items: list[dict] | None, skipped=f
         elif item.get("title") != card.replace("_", " ") or not _same_numbers(item.get("crop"), affine):
             problems.append(f"{CARD_CROPS}：识别图片清单 {MANIFEST} 里「{photo}」的卡面或裁法和这里不一样，"
                             f"请运行 tools/make_assets_manifest.py 重新生成清单。")
-    for name in sorted(n for n, i in listed.items() if "crop" in i and n not in rows):
+    for name in sorted(n for n, i in listed.items() if "crop" in (_crop_of(i) or {}) and n not in rows):
         problems.append(f"{CARD_CROPS}：识别图片清单 {MANIFEST} 里「{name}」是从卡面现裁的，这里却没有它的裁法："
                         f"请补上，或运行 tools/make_assets_manifest.py 重新生成清单。")
     return problems
+
+
+def _crop_of(item):
+    """识别图片清单里这张角色照从卡面现裁的那一份：普通的项是它自己；放在备用地址上的（mirror）是它的 fallback（不用官方
+    备用地址的复刻版本照它现裁），没有时为 None。"""
+    if isinstance(item, dict) and item.get("mirror"):
+        item = item.get("fallback")
+    return item if isinstance(item, dict) else None
 
 
 def _same_numbers(a, b) -> bool:

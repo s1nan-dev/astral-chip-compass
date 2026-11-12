@@ -4,8 +4,8 @@
 - text.py 不调 localize：常量照旧简体，诊断包的推荐全文也照旧简体；
 - text.chip_tip、text.breakdown_html 这类只给显示用的函数，繁体界面下转成繁体；
 - 断行用的双字词、术语在繁体界面下用转过的一份（逐字词转，转出来不是两个字的丢掉）；
-- 卡片模块里拿来和引擎、会话比对或写进日志的常量（REROLL、PLACE_*、SOURCE_LABEL、REROLL_LABEL、
-  FEEDBACK_REASONS）照旧简体，显示用的常量转成繁体；
+- 卡片模块里拿来和引擎、会话比对或写进日志的常量（REROLL、PLACE_*、REROLL_LABEL、FEEDBACK_REASONS）照旧简体，
+  显示用的常量转成繁体；
 - owned_card、scheme_card 不加 localize，显示处用 t() 转。
 """
 from __future__ import annotations
@@ -79,7 +79,6 @@ print(json.dumps({
         "PLACE_LOCKED": advice_card.PLACE_LOCKED_TEXT,
         "PLACE_UNMARKED": advice_card.PLACE_UNMARKED_TEXT,
         "REROLL_LABEL": advice_card.REROLL_LABEL,
-        "SOURCE": advice_card.SOURCE_LABEL,
         "FEEDBACK": list(advice_card.FEEDBACK_REASONS),
     },
     "display_constant": advice_card.FIX_HINT,
@@ -90,6 +89,8 @@ print(json.dumps({
         "MATE": text.MATE_LABEL,
         "option_name": text.option_name("刷新"),
         "rerolls_text": text.rerolls_text(3),
+        "SOURCE_EITHER": text.SOURCE_EITHER,
+        "source_text": text.source_text("shop", "shop_window"),
     },
     "owned_constants": {"GENERAL_SCHOOL": owned_card.GENERAL_SCHOOL},
     "scheme_constants": {"SCHEME_DEFAULT": scheme_card.SCHEME_DEFAULT},
@@ -139,7 +140,6 @@ class CardsHantTest(unittest.TestCase):
         self.assertEqual(keep["PLACE_LOCKED"], "其他流派")
         self.assertEqual(keep["PLACE_UNMARKED"], "未标记")
         self.assertEqual(keep["REROLL_LABEL"], "刷新")
-        self.assertEqual(keep["SOURCE"], {"levelup": "升星", "shop": "筹码商店", "task": "任务"})
         self.assertEqual(keep["FEEDBACK"], ["照顾队友", "地图因素", "推荐有误", "想试别的玩法"])
         self.assertNotIn("识别", self._data["display_constant"])
         self.assertIn(self.hant("识别有误"), self._data["display_constant"])
@@ -153,6 +153,8 @@ class CardsHantTest(unittest.TestCase):
         self.assertEqual(constants["MATE"], "队友")
         self.assertEqual(constants["option_name"], "刷新")
         self.assertEqual(constants["rerolls_text"], "刷新 ×3")
+        # 来源的写法也照旧简体（session 的 SOURCE_LABEL 原样拿来用，显示处才包 t()）
+        self.assertEqual((constants["SOURCE_EITHER"], constants["source_text"]), ("升星或筹码商店", "筹码商店"))
         diag = self._data["advice_text"]
         self.assertIn("事件：筹码三选一", diag)
         self.assertIn("识别文字：「测试筹码」", diag)

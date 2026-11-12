@@ -201,9 +201,9 @@ class CodeTableTest(unittest.TestCase):
         live = [e.name for e in self.codes.entries if not e.removed]
         self.assertEqual(len(live), len(set(live)))
         self.assertEqual(self.cat.gone, {})
-        # 能标档位的筹码：89 张现役筹码里，地图直接发放的 6 张不能标（龙宫游乐园 4 张，电击枪、原初意识 10-15 起
-        # 也改成只靠畸变发放），85 → 83
-        self.assertEqual(len(self.cat.markable), 83)
+        # 能标档位的筹码：92 张现役筹码里，地图直接发放的 6 张不能标（龙宫游乐园 4 张，电击枪、原初意识 10-15 起
+        # 也改成只靠畸变发放），88 → 86
+        self.assertEqual(len(self.cat.markable), 86)
 
     def test_codes_never_change(self):
         """编号只增不改：1～89 永远对应最初的那个筹码（改名后最初的名称在 old_names 里）。"""
@@ -644,14 +644,14 @@ class CodecTest(unittest.TestCase):
                 self.assertEqual((acc.scheme, acc.problems), (item.scheme, ()))
 
     def test_short_prefixes(self):
-        """短字符串的开头：导出时第 3 版写「ACC3-」、第 2 版照写「CA2-」（只认 CA 的老版本也能导入没标地图的方案）；
+        """短字符串的开头：导出时第 2、3 版都写「ACC」（ACC2-、ACC3-）；
         导入时 ACC、CA 两种开头哪个版本都认，不分大小写、全角半角，中间可以有空格；开头不算进校验。别的字母开头不认。"""
         s = S.Scheme(hero="芬妮", name="甲", tiers=[("缓冲盾牌", "core")], maps=("魔法学院",))
         short = S.to_short(s, self.cat)
         self.assertTrue(short.startswith("【甲】ACC3-"), short)
         plain = S.to_short(S.Scheme(hero="芬妮", name="乙", tiers=[("缓冲盾牌", "core")]), self.cat)
-        self.assertTrue(plain.startswith("【乙】CA2-"), plain)
-        v3, v2 = short.split("ACC3-", 1)[1], plain.split("CA2-", 1)[1]
+        self.assertTrue(plain.startswith("【乙】ACC2-"), plain)
+        v3, v2 = short.split("ACC3-", 1)[1], plain.split("ACC2-", 1)[1]
         for head in ("ACC3-", "acc3-", "Acc 3 -", "ＡＣＣ３－", "CA3-", "ca3－"):
             with self.subTest(head=head):
                 item = S.parse_share("【甲】" + head + v3, self.cat).items[0]
@@ -857,9 +857,9 @@ class RoundTripTest(_Chips, unittest.TestCase):
             self.assertEqual(item.problems, (), out)
             self.assertEqual(content(item.scheme, full), content(s, full), out)
             self.assertEqual(item.name, s.name)
-        marker = "ACC3-" if "ACC3-" in short else "CA2-"
+        marker = "ACC3-" if "ACC3-" in short else "ACC2-"
         code = short.split(marker, 1)[1]
-        self.assertLessEqual(len(code), 113, short)  # 能标的筹码全部必选时最长（顺位的排列最多；带地图的另算）
+        self.assertLessEqual(len(code), 117, short)  # 能标的筹码全部必选时最长（顺位的排列最多；带地图的另算）
         return text, short
 
     def test_copies_of_default(self):
@@ -904,7 +904,7 @@ class RoundTripTest(_Chips, unittest.TestCase):
 
     def test_extremes(self):
         """极端组合两种格式往返（含顺位）：全部必选（从大编号往小排）、全部不选、全标、只标通用或地图专属、同一流派四档都有、
-        方案外流派只有不选、空方案。全部必选最长（编码 113 个字符），全标 86 个。"""
+        方案外流派只有不选、空方案。全部必选最长（编码 117 个字符），全标 90 个。"""
         markable = self.cat.sort_chips(self.cat.markable)
         h = self.heal
         cases = {
@@ -922,8 +922,8 @@ class RoundTripTest(_Chips, unittest.TestCase):
             with self.subTest(label=label):
                 s = S.Scheme(hero="米米", name=label, tiers=marks)
                 _, short = self.assert_round_trip(s)
-                lengths[label] = len(short.split("CA2-", 1)[1])
-        self.assertEqual((lengths["全部必选"], lengths["全标"]), (113, 86))
+                lengths[label] = len(short.split("ACC2-", 1)[1])
+        self.assertEqual((lengths["全部必选"], lengths["全标"]), (117, 90))
 
     def test_maps_round_trip(self):
         """打开写的开关时，带地图的方案两种格式往返内容完全相同（含地图）；没标地图的照写第 2 版。"""
@@ -933,7 +933,7 @@ class RoundTripTest(_Chips, unittest.TestCase):
                 text, short = self.assert_round_trip(s, maps=True)
                 self.assertEqual("v3" in text, bool(maps))
                 self.assertEqual("ACC3-" in short, bool(maps))
-                self.assertEqual("CA2-" in short, not maps)
+                self.assertEqual("ACC2-" in short, not maps)
 
     def test_write_maps_switch(self):
         """WRITE_MAPS 开着：标了地图的方案导出写第 3 版，没标的照写第 2 版。参数关掉时（maps=False，或开关关着）一律写
@@ -949,11 +949,11 @@ class RoundTripTest(_Chips, unittest.TestCase):
         for text, short in (*plain, (S.to_text(s, maps=False), S.to_short(s, self.cat, maps=False))):
             self.assertIn("筹码方案 v2", text)
             self.assertNotIn("地图", text)
-            self.assertIn("CA2-", short)
+            self.assertIn("ACC2-", short)
         empty = S.Scheme(hero="芬妮", name="空")
         for kw in ({}, {"maps": True}):
             self.assertIn("筹码方案 v2", S.to_text(empty, **kw))
-            self.assertIn("CA2-", S.to_short(empty, self.cat, **kw))
+            self.assertIn("ACC2-", S.to_short(empty, self.cat, **kw))
         # 没有编号的地图（已经结束的运动场）不能写进方案
         with self.assertRaises(ValueError):
             S.to_short(S.Scheme(hero="芬妮", name="甲", maps=("海选赛运动场",)), self.cat, maps=True)
@@ -969,10 +969,10 @@ class RoundTripTest(_Chips, unittest.TestCase):
         self.assertEqual(S.to_text(S.Scheme(hero="芬妮", name="空")), "【空】筹码方案 v2｜芬妮")
         # 固定字样里的版本号和解析时认的版本一致
         self.assertIn(f"v{S.SHARE_VERSION}", S.TEXT_HEAD)
-        self.assertIn(f"CA{S.SHARE_VERSION}-", S.SHORT_TEXT)
+        self.assertIn(f"ACC{S.SHARE_VERSION}-", S.SHORT_TEXT)
         self.assertEqual(S.SHARE_VERSION, 2)
         short = S.to_short(s, self.cat)
-        self.assertRegex(short, r"^【治愈坦克】CA2-[1-9A-HJ-NP-Za-km-z]+$")  # 不含说明和作者，只有数字和字母
+        self.assertRegex(short, r"^【治愈坦克】ACC2-[1-9A-HJ-NP-Za-km-z]+$")  # 不含说明和作者，只有数字和字母
         with self.assertRaises(ValueError):
             S.to_short(S.Scheme(hero="不存在的角色"), self.cat)
         with self.assertRaises(ValueError):
@@ -1246,7 +1246,8 @@ class DataUpdateTest(_TmpDir):
             elif e.code == 22:
                 e = replace(e, removed=True)
             entries.append(e)
-        entries += [S.CodeEntry(89 + i, f"新筹码{i}", f"New Chip {i}") for i in (1, 2, 3)]
+        top = max(e.code for e in cls.old.codes.entries)
+        entries += [S.CodeEntry(top + i, f"新筹码{i}", f"New Chip {i}") for i in (1, 2, 3)]
         cls.new = S.Catalog(new_db, S.ChipCodes(tuple(entries)))
 
     def test_strings_after_update(self):

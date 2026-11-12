@@ -72,14 +72,14 @@ CLASS_NAMES = {
     # 各部分的状态字段（_hold、_next_map、_ledger_base 等）在 session.game / session.pending / session.select 等对象上，
     # 测试直接写那些对象（s.game._ledger_base 等）：不是 Session 上的名字，这里不留
     "Session": ("_clock _auto_new_game _set_auto_map _difficulty_changed _entered_game _undo _undo_point "
-                "_begin_segment _endless_judged _edits _foreign").split(),
+                "_begin_segment _endless_judged _edits _foreign _select_closed").split(),
     # 打分是一个包（advisor/engine/），测试用各模块的公开函数和缓存 Scorer.memo，不取 Scorer 的私有名字
     "Scorer": [],
 }
 # 其中测试和工具会写入的（x._name = ...、+= 这类、del、setattr、mock.patch.object(实例, ...)）
 WRITTEN = {
     "Overlay": """_screen_height _screens _summary_width _recompute _primary_area _take_view""".split(),
-    "Session": "_clock _undo".split(),
+    "Session": "_clock _undo _select_closed".split(),
 }
 # 经类本身（不是实例）取的名字：mock.patch.object(Overlay, "_unflash")、mock.patch.object(ov.Overlay._flash, "__defaults__", ...)
 CLASS_ATTRS = {"Overlay": ("_unflash", "_flash", "_game_pids")}

@@ -70,7 +70,8 @@ def records(events) -> list[dict]:
 class FakeLogbook(_FakeLogbook):
     """推荐日志的假对象（tests/support/fakes），每次推荐另记下首推：offers 里是（编号, 候选, 首推）。"""
 
-    def record_offer(self, state, advice, offer_id, client=None):
+    def record_offer(self, state, advice, offer_id, client=None, map_source=None, source_by=None,
+                     difficulty_source=None, owned_sources=None, owned_panel=None):
         self.offers.append((offer_id, tuple(e.chip.name for e in advice.evals), advice.best))
 
 
@@ -599,6 +600,8 @@ class HintsTest(Flow):
         "select_noted": lambda s, seen: s.select.noted,
         # 已经当作不在对局里了（连着 quiet_ms 看不到对局读数，见 tests/test_pipeline.py 的 OutOfGameFlowTest）
         "game_quiet": lambda s, seen: s.game_quiet is True,
+        # 在等结算数据表（每帧先看一眼像不像，见 tests/test_result_table_hookup.py 的 PipelineTableTest）
+        "wants_table": lambda s, seen: s.wants_table,
     }
 
     def assert_matches(self, session, seen=None):

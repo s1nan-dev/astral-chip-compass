@@ -306,3 +306,66 @@ PAD = 10  # 数字四周留白
 # 左下角按钮上的字样：读得到它说明筹码面板关着、左下角的立绘看得见（存角色模板前确认）。简繁各一种写法
 VIEW_CHIPS = ("查看筹码", "查看籌碼")
 VIEW_CHIPS_BOX = (0, 90, 520, 0)  # x0, 离下边 y0, x1, 离下边 y1（界面单位）
+
+
+# ------------------------------------------------------------------ 结算数据表（result_table）
+
+
+# 各元素的位置都以 h = 表头字高（≈ 绿框高）为单位，相对某个绿框的中心、左边或上边，见每项的说明。
+# 量自 4K（3840x2160）的两局共 6 张数据表截图（读表测试的样本，见 tests/support/samples.py 的 ACC_TABLE_SAMPLES_DIR），
+# 同一局 3 帧的读数在像素上一致；
+# 绿框（亮绿色整块填充）是定位锚点，表头文字在绿框右边的白色条里。
+RESULT_HEADERS_HANS = ("击倒次数", "倒下次数", "输出伤害", "承受伤害", "治疗评分")
+RESULT_HEADERS_HANT = ("擊倒次數", "倒下次數", "輸出傷害", "承受傷害", "治療評分")
+RESULT_LOOK_WIDTH = 640  # 很省的一眼（looks_like_table）缩小到这个宽度再看颜色
+RESULT_GREEN_HSV = ((35, 140, 140), (80, 255, 255))  # 绿框：亮绿色整块填充
+RESULT_PILL_ASPECT = (1.4, 2.7)  # 绿框的宽 / 高
+RESULT_MIN_ROWS = 4  # 很省的一眼里至少要有这么多行绿框
+RESULT_MIN_PER_ROW = 3  # 而且每行至少这么多
+RESULT_COL_PITCH = (8.0, 14.0)  # 列距 / h 的合理范围
+RESULT_ROW_PITCH = (1.35, 2.05)  # 行距 / h 的合理范围
+# 表头带：x 从绿框右缘算、y 从第一行上边到第五行下边（都是 h 的倍数）
+RESULT_HEADER_BAND = (-0.1, -0.7, 4.4, 0.7)
+# BEST：绿框左边暗色长条上的橙色「BEST」文字和下滑条，x 从绿框左边算、y 从行中心算（h 的倍数）
+RESULT_BEST_BOX = (-2.7, -0.4, -0.3, 0.4)
+RESULT_BEST_HSV = ((8, 150, 150), (32, 255, 255))
+RESULT_BEST_SHARE = 0.05
+# 名牌：x 从绿框中心算、y 从第一行中心算（h 的倍数）；浅灰圆角条里是名字
+RESULT_PLATE_BAND = (-3.0, -2.6, 6.5, -0.2)
+RESULT_NAME_SAT, RESULT_NAME_V = 45, 150  # 浅灰条
+RESULT_NAME_H = (0.25, 0.75)  # 浅灰条高 / h
+RESULT_NAME_W = (0.8, 5.5)  # 浅灰条宽 / h
+RESULT_NAME_REC_MIN = 0.8  # 名字识别的置信度下限
+# 「加好友」按钮：x、y 都从第 4 行绿框中心算（h 的倍数）；粉色是能加，灰色是自己、电脑或已是好友
+RESULT_FRIEND_BOX = (1.3, 5.2, 4.7, 7.4)
+RESULT_FRIEND_HSV = ((150, 150, 150), (179, 255, 255))
+RESULT_FRIEND_MUTED, RESULT_FRIEND_OPEN = 0.08, 0.15  # 粉色占比 ≤/≥ 这两个值
+# 星币：x、y 都从第 4 行绿框中心算（h 的倍数）；上面标 ALL，下面带弯箭头
+RESULT_COIN_ALL_AT = (5.8, 3.18)
+RESULT_COIN_TRANSFER_AT = (5.8, 5.4)
+RESULT_COIN_BOX = (1.3, 0.55)  # 裁图半宽、半高（h）
+RESULT_COIN_REC_MIN = 0.9  # 三个尺度里至少两次一致，最高的一次到此为止（「71」各帧 0.90~0.96；「0」只有约 0.4）
+# 称号：x 从绿框中心算，y 从第一行绿框上边算（h 的倍数），最多 3 个，间距 1.87
+RESULT_BADGE_X = -2.99
+RESULT_BADGE_Y0 = -7.2
+RESULT_BADGE_PITCH = 1.87
+RESULT_BADGE_NUM_BOX = (-0.1, 0.3, 1.15, 1.2)  # 找粉色数字的范围（相对槽位中心，h）；数字在图标右下角，再往右就是立绘了
+# （数字从槽位中心往右排，一位约 0.35h，三位数到 1.07h 上下；四位以上会伸出右边，_badge_piece 不收）
+RESULT_BADGE_HUE = (150, 179)  # 粉色数字
+RESULT_BADGE_NUM_H = (0.2, 0.9)  # 粉色数字的高 / h
+RESULT_BADGE_REC_MIN = 0.9
+RESULT_BADGE_ICON_BOX = (-1.25, -1.25, 1.25, 1.25)  # 认图标的范围（相对槽位中心，h）
+RESULT_BADGE_MATCH_MIN = 0.42
+RESULT_BADGE_MATCH_MARGIN = 0.08
+RESULT_BADGE_ICON_H = 2.2  # 图标显示大小（h）；比图前先按它把裁图缩到固定像素，候选大小再乘 0.95、1.05
+RESULT_BADGE_ICON_PX = 48  # 比图时图标缩到的边长（像素）：再小就看不清细节，再大就白费时间
+RESULT_BADGE_DIGIT_CUT = 0.42  # 比图时模板从左边、上边各这么远（边长比例）起往右下的一块不参与比较：称号的数压在这个角上
+# 筹码格：3-4-3 排，中心相对第 4 行绿框中心（h）；圆直径、列距、行距都是 h 的倍数
+RESULT_CHIP_CENTER = (-0.60, 3.83)
+RESULT_CHIP_DIAMETER = (1.0, 1.8)  # 圆的外框宽、高范围 / h（实测 1.43）
+RESULT_CHIP_REGION = (-4.1, 1.0, 2.5, 6.1)  # 找圆的范围（相对第 4 行绿框中心，h）
+RESULT_CHIP_FILL = 0.06  # 内盘饱和像素占比超过这个算有筹码
+RESULT_CHIP_ROWS = ((-1.0, -1.0), (0.0, -1.0), (1.0, -1.0),
+                    (-1.5, 0.0), (-0.5, 0.0), (0.5, 0.0), (1.5, 0.0),
+                    (-1.0, 1.0), (0.0, 1.0), (1.0, 1.0))
+RESULT_CHIP_MIN_SLOTS = 9  # 至少这么多格子看着在，才认为筹码格读得出来

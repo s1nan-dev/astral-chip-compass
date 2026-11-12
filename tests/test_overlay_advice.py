@@ -1021,14 +1021,14 @@ class RerollConflictTest(unittest.TestCase):
         self.assertFalse(reroll_conflict(0.49, 0.1))
 
     def test_live_offer_conflict(self):
-        """10-03 第 5 次三选一（噩梦），刷新改为剩 3 次（对局里剩 4 次，之后约 3 次三选一、再多留 1 次，同样没有多出来的，
-        见 test_live_game）：没有多出来的刷新时结论和概率方向矛盾，刷新只显示「预计不如银行卡-余额少」「消耗 1 次刷新」；
+        """10-03 第 4 次三选一（噩梦），刷新改为剩 3 次（对局里剩 4 次，之后约 4 次三选一、再多留 1 次，只剩 3 次都留着，
+        没有多出来的，见 test_live_game）：没有多出来的刷新时结论和概率方向矛盾，刷新只显示「预计不如友情徽章」「消耗 1 次刷新」；
         推荐卡片上的其他文字（各选项的标签和悬停说明、筹码名的悬停明细）也不写这个概率；命令行和诊断包照旧写这个概率。
-        概率为 52%，与结论「不如」方向相反。"""
-        name = "银行卡-余额少"
-        st, offer = live_offer("130849-5", difficulty_level=LEVEL_NIGHTMARE, rerolls=3)
+        概率为 68%，与结论「不如」方向相反。"""
+        name = "友情徽章"
+        st, offer = live_offer("130412-4", difficulty_level=LEVEL_NIGHTMARE, rerolls=3)
         adv = advise(self.db, st, offer)
-        self.assertEqual((best_chip(adv).chip.name, f"{adv.reroll.p_better:.0%}"), (name, "52%"))
+        self.assertEqual((best_chip(adv).chip.name, f"{adv.reroll.p_better:.0%}"), (name, "68%"))
         views = option_views(adv)
         reroll = next(v for v in views if v.reroll)
         self.assertEqual([(p.text, p.tone) for p in reroll.pills],
@@ -1039,16 +1039,16 @@ class RerollConflictTest(unittest.TestCase):
         card += "".join(plain_html(breakdown_html(e, best=e.chip.name == adv.best)) for e in adv.evals)
         for word in ("概率刷出", "出现优于", "概率为"):
             self.assertNotIn(word, card)
-        self.assertNotIn("52%", "".join(p.text + p.tip for p in reroll.pills))
-        want = "刷新后出现总分高于当前候选筹码最高总分的筹码的概率：52%"
+        self.assertNotIn("68%", "".join(p.text + p.tip for p in reroll.pills))
+        want = "刷新后出现总分高于当前候选筹码最高总分的筹码的概率：68%"
         self.assertIn(want, advice_text(self.db, Event("advice", advice=adv, state=st)))
-        self.assertIn("出现总分高于当前候选筹码最高总分的筹码的概率：52%", cli.render(self.db, adv))
+        self.assertIn("出现总分高于当前候选筹码最高总分的筹码的概率：68%", cli.render(self.db, adv))
 
     def test_live_game(self):
-        """10-03 那局 11 次三选一（噩梦）：除第 4、5、8 次以外都照常三条。这三次结论不如首推、概率却过半，方向相反，只有
-        两条。第 5 次剩 4 次刷新、之后约 3 次三选一：每次留 1 次、再多留 1 次以防估少，4 次都留着，没有多出来的，结论不如
-        银行卡-余额少，写结论和代价（同 test_live_offer_conflict）；第 4 次同样没有多出来的；第 8 次多出 2 次，写结论和
-        留几次。连续刷新的第 9～11 次照常三条。"""
+        """10-03 那局 11 次三选一（噩梦）：除第 4、8、11 次以外都照常三条。这三次方向相反，只有两条。
+        第 4 次剩 4 次刷新、之后约 4 次三选一：每次留 1 次、再多留 1 次以防估少，4 次都留着，没有多出来的，结论不如
+        友情徽章，写结论和代价（同 test_live_offer_conflict）；第 8 次多出 2 次，结论不如银行卡-余额多、概率过半，写结论和
+        留几次；第 11 次首推刷新、结论优于缓冲盾牌、概率不到一半，写结论和留几次。第 9、10 次照常三条。"""
         hidden = []
         for key in engine_tests.AlLiveReviewTest.OFFERS:
             st, offer = live_offer(key, difficulty_level=LEVEL_NIGHTMARE)
@@ -1059,19 +1059,19 @@ class RerollConflictTest(unittest.TestCase):
             else:
                 # 取整后为 0% / 100% 时写「不到 1%」「超过 99%」，这一局有几次是这样
                 self.assertRegex(reroll.pills[1].text, r"^(\d{1,2}%|不到 1%|超过 99%) 概率刷出优于.+的筹码$", key)
-            if key == "130849-5":
-                self.assertEqual([p.text for p in reroll.pills], ["预计不如银行卡-余额少", "消耗 1 次刷新"])
+            if key == "130412-4":
+                self.assertEqual([p.text for p in reroll.pills], ["预计不如友情徽章", "消耗 1 次刷新"])
                 self.assertEqual((adv.reroll.kept, adv.reroll.spare), (4, 0))
-        self.assertEqual(hidden, ["130412-4", "130849-5", "131934-8"])
+        self.assertEqual(hidden, ["130412-4", "131934-8", "132328-11"])
 
     def test_map_unknown_average(self):
-        """地图待识别时按候选地图取平均（10-03 第 5 次三选一，地图改为待识别，刷新改为剩 3 次）：方向相反同样不显示概率。"""
-        st, offer = live_offer("130849-5", map=None, rerolls=3)
+        """地图待识别时按候选地图取平均（10-03 第 4 次三选一，地图改为待识别，刷新改为剩 3 次）：方向相反同样不显示概率。"""
+        st, offer = live_offer("130412-4", map=None, rerolls=3)
         adv = advise(self.db, st, offer)
         self.assertTrue(any(n.startswith("地图：待识别，按候选地图平均计算") for n in adv.notes), adv.notes)
         self.assertGreaterEqual(adv.reroll.p_better, 0.5)
         reroll = next(v for v in option_views(adv) if v.reroll)
-        self.assertEqual([p.text for p in reroll.pills], ["预计不如银行卡-余额少", "消耗 1 次刷新"])
+        self.assertEqual([p.text for p in reroll.pills], ["预计不如友情徽章", "消耗 1 次刷新"])
 
 
 class OptionTooltipTeammatesTest(BehaviorBase):

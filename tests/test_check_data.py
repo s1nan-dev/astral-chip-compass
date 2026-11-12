@@ -125,6 +125,22 @@ class CheckDataTest(unittest.TestCase):
             "synergy.toml：角色 南希露：keep_schools_penalty 应为负数，已按所有角色共用的扣分计算",
         ])
 
+    def test_school_skip_written_wrong(self):
+        # [[hero]] 的 school_skip 写了不存在的筹码、推荐流派以外的筹码：载入时记警告，检查脚本照样报出来
+        def change(text: str) -> str:
+            start = text.index('[[hero]]\nname = "南希露"')
+            own = text.index("\nschool_skip = ", start)  # 资料里原有的一行先去掉
+            assert own < text.index("\n[[", start + 1)
+            text = text[:own] + text[text.index("\n", own + 1):]
+            at = text.index("\nkeep_schools = true\n", start)
+            return (text[:at] + '\nkeep_schools = true\nschool_skip = ["不存在的筹码", "星币锤"]\n'
+                    + text[at + len("\nkeep_schools = true\n"):])
+        found = self.problems(self.copy_data({"synergy.toml": change}))
+        self.assertEqual(found, [
+            "synergy.toml：角色 南希露：school_skip 里的筹码「不存在的筹码」不存在，已忽略",
+            "synergy.toml：角色 南希露：school_skip 里的筹码「星币锤」的流派「星光」不在 schools（推荐流派）里，已忽略",
+        ])
+
     def test_keep_schools_penalty_not_finite(self):
         # keep_schools_penalty 写成 -inf、nan（TOML 认得的数）：载入时当成写错、按共用的扣分计算，检查脚本照样报出来
         for written, problem in (("-inf", "keep_schools_penalty 应为有限的负数（不能写 -inf），已按所有角色共用的扣分计算"),
@@ -469,15 +485,18 @@ class CheckDataTest(unittest.TestCase):
         self.assertIn("改了名的筹码别追加", codes[0])
         self.assertRegex(codes[1], r"^chip_codes\.json：编号 \d+「电磁炮」在 chips\.json 里已经没有了")
 
+        zero_at = []
+
         def flags(data):
             self.chip(data, "电磁炮")["removed"] = True  # 还在游戏里，却标了已移除
             self.chip(data, "书签").update(name="书签-新", old_names=["书签"])  # 只在 old_names 里
             data["chips"].append({"code": 200, "name": "标靶", "en": "x"})  # 一个筹码两行
             data["chips"].append({"code": 0, "name": "零号"})  # 编号不是正整数：程序整份编号表都不用
+            zero_at.append(len(data["chips"]))
             self.chip(data, "大铜锣")["old_names"] = "旧名"
         found = self.problems(self.copy_data({"chip_codes.json": self.edit_json(flags)}))
         for text in ("chip_codes.json：「电磁炮」（编号", "chip_codes.json：「书签」是编号", "chip_codes.json：「标靶」写了两行",
-                     "chip_codes.json：第 91 项应有正整数 code 和文字 name", "chip_codes.json：编号 65「大铜锣」的 old_names"):
+                     f"chip_codes.json：第 {zero_at[0]} 项应有正整数 code 和文字 name", "chip_codes.json：编号 65「大铜锣」的 old_names"):
             self.assertTrue(any(p.startswith(text) for p in found), (text, found))
 
     def test_missing_and_broken_files(self):
@@ -560,6 +579,12 @@ class CheckDataTest(unittest.TestCase):
     def crop_item(photo: str, card: str, affine) -> dict:
         """识别图片清单里从卡面现裁的一项（核对用到的几个字段）。"""
         return {"dir": "heroes", "file": photo, "title": card.replace("_", " "), "crop": list(affine)}
+
+    @staticmethod
+    def mirror_item(photo: str) -> dict:
+        """识别图片清单里放在备用地址上的一项（游戏内的图；不带 fallback）。"""
+        return {"dir": "heroes", "file": photo, "mirror": True, "url": f"https://dl/assets/heroes/{'0' * 40}/{photo}",
+                "size": 1, "sha1": "0" * 40}
 
     def one_crop(self, affine, tilts=None, items=MATCHING, photo=None, card=None) -> list[str]:
         """只有一项的表交给 crop_problems；清单默认有对得上的一项（items 为 None 时是清单读不出来），tilts 默认是空表。"""
@@ -679,6 +704,14 @@ class CheckDataTest(unittest.TestCase):
             ([item, self.crop_item("UT_Hero_RolePhoto_901.png", "UT_Hero_Card_901.png", affine)],
              "card_crops.json：识别图片清单 assets_manifest.json 里「UT_Hero_RolePhoto_901.png」是从卡面现裁的，这里却没有它的裁法"),
             (None, "card_crops.json：识别图片清单 assets_manifest.json 读不出来"),
+            # 放在备用地址上的：裁法看 fallback（复刻的版本照它现裁），没有 fallback、fallback 里没有裁法的算没有
+            ([{**self.mirror_item(photo)}], lack),
+            ([{**self.mirror_item(photo), "fallback": {"title": "UT Hero Card 113 04.png", "url": "https://img/c.png"}}],
+             lack),
+            ([{**self.mirror_item(photo), "fallback": {**item, "crop": [*affine[:5], affine[5] + 1]}}], differs),
+            ([item, {**self.mirror_item("UT_Hero_RolePhoto_901.png"),
+                     "fallback": self.crop_item("UT_Hero_RolePhoto_901.png", "UT_Hero_Card_901.png", affine)}],
+             "card_crops.json：识别图片清单 assets_manifest.json 里「UT_Hero_RolePhoto_901.png」是从卡面现裁的，这里却没有它的裁法"),
         )
         for items, text in cases:
             with self.subTest(text=text):
@@ -688,10 +721,12 @@ class CheckDataTest(unittest.TestCase):
         self.assertEqual(self.one_crop([762.832993, 0, -245.242397, 0, 868.42287, -47.15134],
                                        items=[{**item, "crop": [762.832993, 0.0, -245.242397, 0.0, 868.42287, -47.15134]}]),
                          [])
-        # 整份数据：数据文件夹里放一份裁法改过的清单，照它核对
+        self.assertEqual(self.one_crop(affine, items=[{**self.mirror_item(photo), "fallback": item}]), [])
+        # 整份数据：数据文件夹里放一份裁法改过的清单，照它核对（放在备用地址上的改它的 fallback）
         folder = self.copy_data()
         manifest = json.loads((self.data / check_data.MANIFEST).read_text(encoding="utf-8"))
         hit = next(i for i in manifest["items"] if i.get("file") == photo)
+        hit = hit["fallback"] if hit.get("mirror") else hit
         hit["crop"] = [*hit["crop"][:5], hit["crop"][5] + 1]
         (folder / check_data.MANIFEST).write_text(json_layout.format_json(manifest), encoding="utf-8")
         found = self.problems(folder)
@@ -880,6 +915,8 @@ class CheckDataTest(unittest.TestCase):
              "请补上游戏繁体中文界面里的全名（照游戏原文，不自己转换）。"),
             ("maps.json", lambda data: data["异变图书馆"].pop("hant"),
              "maps.json 地图「异变图书馆」：缺少繁体名（hant）：请补上游戏繁体中文界面里的地图名（照游戏原文，不自己转换）。"),
+            ("maps.json", lambda data: data["异变图书馆"].pop("en"),
+             "maps.json 地图「异变图书馆」：缺少英文名（en）：请补上游戏英文界面里的地图名（照游戏原文，不自己翻译）。"),
             ("maps.json", lambda data: data["异变图书馆"].pop("hant_tasks"),
              "maps.json 地图「异变图书馆」：缺少繁体任务（hant_tasks）：请按 tasks 的顺序写游戏任务栏里的繁体任务文字"
              "（拼不出来的写 null）。"),

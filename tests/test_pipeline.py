@@ -2546,7 +2546,9 @@ class _InSelect(_FakeReads):
 class SelectRereadTest(_InSelect):
     """补认：三选一刚出现那一帧读得可疑——刷新次数读成 0（刷新按钮正好被表情气泡挡住）、概率行三项加起来是
     100 却不是概率表里的行——时，过 reread_s（半秒，低配模式乘倍数）再把三张卡完整认一次：认出的不同就照新的重算推荐，相同
-    不动；每次三选一只补一次；读得正常的不补认。识别函数换成假的（_FakeReads，「select」是完整识别，只查绿框不记）。"""
+    不动；没有可对的账时每次三选一只补这一次。刷新次数读成 0、账上又不该是 0（这一局上一次读到还有剩，或同一次三选一里刷新前
+    读到 2 次以上）时，隔 reread_s 接着补认，最多 SELECT_ZERO_REREADS 回，读到不是 0 的数就停。读得正常的不补认。
+    识别函数换成假的（_FakeReads，「select」是完整识别，只查绿框不记）。"""
 
     @staticmethod
     def rerolls(events) -> list:
@@ -2580,24 +2582,150 @@ class SelectRereadTest(_InSelect):
         self.assertEqual(len(self.when(got, "select")), 1)
         self.assertEqual(self.events_of(got, "advice"), [])
 
-    def test_reread_once_per_offer(self):
-        """每次三选一只补认一次：同一次三选一里刷新了（筹码名变了，马上完整识别）、刷新后又读成 0，不再补认；三选一关掉、
-        下一次三选一刚出现又读成 0 时照样补认一次。
-        补认时气泡已经消失、读到 2 次：刷新后读成 0 比 2 次少，仍是同一次里刷新。补认仍读成 0 的话，三张全换的一组算紧接着
-        出现的另一次三选一（上一组的 0 次刷不了），那一次照样补认一次，见 test_reread_after_zero_new_select。"""
-        self.seen = offer(OFFER_A, rerolls=0)
+    def test_zero_after_refresh_reread_until_readable(self):
+        """刷新前读到 2 次、刷新后读成 0（刷新按钮还在动画里）：账上至少该有 1 次，隔 reread_s 再完整识别；第 1 次补认仍是 0，
+        第 2 次读到 1 次，按新的重算推荐（有了「刷新」那一行），之后不再补认。记账照旧算同一次三选一里刷新：不结算、
+        不多出 missed_pick。"""
+        self.seen = offer(OFFER_A)  # 刷新 ×2
+        events, _ = self.frame(4.0)
+        self.assertEqual(self.rerolls(events), [(2, True)])
+        self.seen = offer(OFFER_B, rerolls=0)  # 刷新，按钮还在动画里
+        events, log = self.frame(5.0)
+        self.assertIn("select", log)
+        self.assertEqual(self.rerolls(events), [(0, False)])
+        self.assertEqual(self.when(self.frames(5.05, 5.5), "select"), [5.5])  # 第 1 次补认：按钮还挡着，仍是 0
+        self.seen = offer(OFFER_B, rerolls=1)  # 第 2 次补认读到 1
+        got = self.frames(5.6, 8.0)
+        reads = self.when(got, "select")
+        self.assertEqual(len(reads), 1)
+        self.assertGreaterEqual(reads[0], 5.5 + self.proc.reread_s)
+        self.assertLess(reads[0], 5.5 + self.proc.reread_s + self.STEP)
+        self.assertEqual(self.rerolls(self.events_of(got, "advice")), [(1, True)])
+        self.assertEqual(self.events_of(got, "picked") + self.events_of(got, "missed_pick"), [])
+
+    def test_zero_after_refresh_three_rereads(self):
+        """刷新前读到 2 次、刷新后一直读成 0（气泡一直挡着）：隔 reread_s 补认 3 回，间隔都不小于 reread_s，之后不再补认；
+        推荐里刷新次数一直是 0。"""
+        self.seen = offer(OFFER_A)  # 刷新 ×2
         self.frame(4.0)
-        self.seen = offer(OFFER_A)  # 补认时气泡已经消失：刷新 ×2
-        self.assertEqual(len(self.when(self.frames(4.15, 5.0), "select")), 1)  # 补认
-        self.seen = offer(OFFER_B, rerolls=0)  # 刷新（2 → 1，刷新按钮又被挡住，读成 0）
-        self.assertEqual(self.when(self.frames(5.15, 8.0), "select"), [5.15])  # 只有筹码名变了的那一次
-        self.seen = None
-        self.frames(8.15, 8.3)  # 三选一关掉
-        self.seen = offer(OFFER_C, rerolls=0)
-        reads = self.when(self.frames(9.0, 12.0), "select")
-        self.assertEqual(len(reads), 2)
-        self.assertEqual(reads[0], 9.0)
+        self.seen = offer(OFFER_B, rerolls=0)  # 刷新后按钮一直被挡着
+        got = self.frames(5.0, 10.0)
+        reads = self.when(got, "select")
+        self.assertEqual(len(reads), 1 + pipeline.SELECT_ZERO_REREADS)  # 刷新那一次 + 3 回补认
         self.assert_gaps(reads, self.proc.reread_s)
+        self.assertEqual({r for r, _ in self.rerolls(self.events_of(got, "advice"))}, {0})
+
+    def test_zero_after_refresh_when_one_left(self):
+        """刷新前只读到 1 次、刷新后读成 0：刷新一次就用完了，账上本来就该是 0，不多认，只有刷新那一次完整识别。"""
+        self.seen = offer(OFFER_A, rerolls=1)
+        self.frame(4.0)
+        self.seen = offer(OFFER_B, rerolls=0)
+        got = self.frames(5.0, 10.0)
+        self.assertEqual(self.when(got, "select"), [5.0])
+        self.assertEqual([r for r, _ in self.rerolls(self.events_of(got, "advice"))], [0])
+
+    def test_zero_at_appearance_after_two_left(self):
+        """这一局上一次三选一读到 2 次、关掉；下一次三选一刚出现读成 0：补认的几回把刚出现时排的那一次算在内（最多 3 回）；
+        第 1 回补认读到 2 次就停，按新的重算推荐。"""
+        self.seen = offer(OFFER_A)  # 刷新 ×2
+        self.frame(4.0)
+        self.seen = None
+        self.frames(4.15, 4.3)  # 三选一关掉
+        self.seen = offer(OFFER_B, rerolls=0)  # 下一次三选一刚出现，按钮被挡住
+        events, _ = self.frame(6.0)
+        self.assertEqual(self.rerolls(events), [(0, False)])
+        self.seen = offer(OFFER_B)  # 第 1 回补认读到 2 次
+        got = self.frames(6.15, 10.0)
+        reads = self.when(got, "select")
+        self.assertEqual(len(reads), 1)
+        self.assertGreaterEqual(reads[0], 6.0 + self.proc.reread_s)
+        self.assertEqual(self.rerolls(self.events_of(got, "advice")), [(2, True)])
+
+    def test_zero_at_appearance_counts_first_reread(self):
+        """这一局上一次三选一读到 2 次；下一次三选一刚出现读成 0、之后一直是 0：刚出现时排的那一次补认算第 1 回，一共补认
+        SELECT_ZERO_REREADS 回（不是另加 3 回），间隔都不小于 reread_s；之后当真是 0，不再补认，下一次三选一不再按 2 次对账。"""
+        self.seen = offer(OFFER_A)  # 刷新 ×2
+        self.frame(4.0)
+        self.seen = None
+        self.frames(4.15, 4.3)  # 三选一关掉
+        self.seen = offer(OFFER_B, rerolls=0)  # 下一次三选一刚出现，按钮一直被挡住
+        reads = self.when(self.frames(6.0, 12.0), "select")
+        self.assertEqual(len(reads), 1 + pipeline.SELECT_ZERO_REREADS)  # 刚出现那一次 + 3 回补认
+        self.assertEqual(reads[0], 6.0)
+        self.assert_gaps(reads, self.proc.reread_s)
+        records = [r for r in self.session.recent_events(600) if r["kind"] == "read:select_zero"]
+        self.assertEqual([(r["expected"], r["attempt"]) for r in records],
+                         [(2, n) for n in range(1, pipeline.SELECT_ZERO_REREADS + 1)])
+        self.seen = None
+        self.frames(12.15, 12.3)  # 三选一关掉
+        self.seen = offer(OFFER_C, rerolls=0)  # 当真是 0 以后的下一次：只照旧补认刚出现那一次
+        self.assertEqual(len(self.when(self.frames(14.0, 18.0), "select")), 2)
+
+    def test_zero_reread_covered_tries_again(self):
+        """接着补认的那几回里，补认那一帧像是被临时盖住（第 3 张读不出、稀有度读不出，不采用）：这一回不算，隔 reread_s 再认；
+        盖住的东西走了、按钮也露出来了，读到 1 次就按新的重算推荐。"""
+        self.seen = offer(OFFER_A)  # 刷新 ×2
+        self.frame(4.0)
+        self.seen = offer(OFFER_B, rerolls=0)  # 刷新，按钮还在动画里
+        self.frames(5.0, 5.35)
+        covered = offer([*OFFER_B[:2], None], rerolls=0)
+        covered.rarity = [self.db.chips[n].rarity for n in OFFER_B[:2]] + [None]
+        self.seen = covered
+        events, log = self.frame(5.5)  # 第 1 回补认：被盖住
+        self.assertIn("select", log)
+        self.assertEqual(self.rerolls(events), [])
+        self.assertEqual(len([r for r in self.session.recent_events(600) if r["kind"] == "read:select_covered"]), 1)
+        self.seen = offer(OFFER_B, rerolls=1)
+        got = self.frames(5.65, 9.0)
+        reads = self.when(got, "select")
+        self.assertEqual(len(reads), 1)
+        self.assertGreaterEqual(reads[0], 5.5 + self.proc.reread_s)
+        self.assertLess(reads[0], 5.5 + self.proc.reread_s + self.STEP)
+        self.assertEqual(self.rerolls(self.events_of(got, "advice")), [(1, True)])
+        records = [r for r in self.session.recent_events(600) if r["kind"] == "read:select_zero"]
+        self.assertEqual([r["attempt"] for r in records], [1])  # 被盖住的那一回不算
+
+    def test_same_offer_zero_after_count_keeps_account(self):
+        """同一组候选读到过 2 次以后，又一次完整识别（概率行是表外的行，刚出现时排的补认）正赶上按钮被挡、读成 0：同一组的次数
+        变不了，不当成可信的 0（记账照旧按 2 次），也不补认；之后刷新出的新一组读成 0 时照样对账（账上至少该有 1 次），
+        补认读到 1 次就按新的重算推荐。"""
+        self.seen = offer(OFFER_A, probabilities=(60, 31, 9))  # 刷新 ×2，概率行是表外的行：半秒后补认
+        self.frame(4.0)
+        self.seen = offer(OFFER_A, rerolls=0)  # 补认那一下按钮被挡住
+        got = self.frames(4.15, 5.0)
+        self.assertEqual(len(self.when(got, "select")), 1)  # 只有刚出现时排的那一次，不因为这个 0 再补
+        self.assertEqual({r for r, _ in self.rerolls(self.events_of(got, "advice"))}, {2})  # 记账照旧按 2 次
+        self.assertEqual([r for r in self.session.recent_events(600) if r["kind"] == "read:select_zero"], [])
+        self.seen = offer(OFFER_B, rerolls=0)  # 刷新，按钮还在动画里
+        self.frames(5.15, 5.55)
+        self.seen = offer(OFFER_B, rerolls=1)
+        got = self.frames(5.7, 8.0)
+        self.assertEqual(len(self.when(got, "select")), 1)  # 补认一回就读到了
+        self.assertEqual(self.rerolls(self.events_of(got, "advice")), [(1, True)])
+        records = [r for r in self.session.recent_events(600) if r["kind"] == "read:select_zero"]
+        self.assertEqual([(r["expected"], r["attempt"]) for r in records], [(1, 1)])
+
+    def test_zero_at_appearance_after_new_game(self):
+        """两次三选一之间换了一局（games 变了）：上一局的次数不算，只照旧补认一次。"""
+        self.seen = offer(OFFER_A)
+        self.frame(4.0)
+        self.seen = None
+        self.frames(4.15, 4.3)  # 三选一关掉
+        self.session.new_game()  # 换了一局
+        self.seen = offer(OFFER_B, rerolls=0)
+        self.frame(6.0)
+        reads = self.when(self.frames(6.15, 10.0), "select")
+        self.assertEqual(len(reads), 1)
+        self.assert_gaps([6.0, *reads], self.proc.reread_s)
+
+    def test_zero_recorded_with_expected_and_attempt(self):
+        """刷新次数读成 0、账上不该是 0 时补认的话，识别记录里记一条 select_zero，带至少该有几次（expected）和第几回（attempt）。"""
+        self.seen = offer(OFFER_A)
+        self.frame(4.0)
+        self.seen = offer(OFFER_B, rerolls=0)
+        self.frames(5.0, 5.4)
+        records = [r for r in self.session.recent_events(600) if r["kind"] == "read:select_zero"]
+        self.assertEqual([(r["expected"], r["attempt"]) for r in records], [(1, 1)])
 
     def test_reread_after_zero_new_select(self):
         """补认仍读成 0（上一组只读到过 0 次）以后，三张全换的一组又读成 0：0 次刷不了，算紧接着出现的另一次三选一，
@@ -4779,7 +4907,7 @@ class ProgressReuseTest(_FakeReads):
         """红叉（进度上限）也要连读两次才采用：认字读到了红叉、记账还没采用时，那一块没变也不沿用，下一轮照常认字（不会一次认字
         加一次沿用就凑成「连读两次」）；采用以后照常沿用。"""
         self.adopted()
-        cap = [12]
+        cap = [17]
 
         def fake_progress(img):
             self.log.append("progress")
@@ -4790,7 +4918,7 @@ class ProgressReuseTest(_FakeReads):
             self.assertIn("progress", self.reads(6.0, load_native(PROGRESS_SHOTS[1])))
             self.assertIsNone(self.session.game.progress_cap)
             self.assertIn("progress", self.reads(9.0))  # 那一块没变，但读到过红叉、记账还没采用：照常认字
-            self.assertEqual(self.session.game.progress_cap, 12)
+            self.assertEqual(self.session.game.progress_cap, 17)
             self.assertNotIn("progress", self.reads(12.0))  # 采用以后照常沿用
 
     def test_changed_or_resized_reads(self):
@@ -4851,7 +4979,7 @@ class ProgressReuseTest(_FakeReads):
 
     def test_counts_cap(self):
         self.adopted()
-        with mock.patch.object(pipeline, "read_progress", side_effect=lambda img: Progress(self.current, 12)):
+        with mock.patch.object(pipeline, "read_progress", side_effect=lambda img: Progress(self.current, 17)):
             other = load_native(PROGRESS_SHOTS[1])
             self.assertEqual(self.counted(6.0, other), ["progress_read_look"])
             self.assertIsNone(self.session.game.progress_cap)

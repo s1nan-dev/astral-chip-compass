@@ -52,10 +52,12 @@ class Reporting:
 
     def ensure(self) -> None:
         """启动时（startup）理一次设置里的四项：开着而没有本机编号、编号或时刻坏了时生成、记下此刻，存进 state.json；
-        有本机编号而缺随机值时只补随机值；关着时删掉编号、随机值和时刻。读设置文件本身不改文件，这里才写。"""
+        有本机编号而缺随机值时只补随机值；关着时删掉编号、随机值和时刻。读设置文件本身不改文件，这里才写。
+        顺手把开关告诉记账（Session.report_enabled）：开着才在结算画面结束以后等数据表。"""
         with self.lock:
             if self._normalize():
                 self.session.save()
+            self.session.report_enabled = self.session.settings.report_enabled is True
 
     def _normalize(self) -> bool:
         """把四项理成能用的样子，返回有没有改（拿着锁时调用）：开着而没有编号（第一次运行、文件里没有、手改坏了）时生成
@@ -132,6 +134,7 @@ class Reporting:
                 settings.report_since = datetime.now().isoformat(timespec="seconds")
             else:
                 settings.report_install, settings.report_secret, settings.report_since = "", "", ""
+            self.session.report_enabled = on
             self.session.save()
         if not on:
             self.run_background(self._clear)
@@ -156,6 +159,13 @@ class Reporting:
         elif game not in self._waiting:
             self._waiting.add(game)
             self.later(RESULT_WAIT_MS, lambda: self.settle(game))
+
+    def table_read(self, game: str) -> None:
+        """这一局读到了结算数据表（推荐日志记了一条 table）：报告已经拼过的，在后台照原来的做法再拼一次（同一编号、
+        覆盖原来那份）；还在等胜负的不用管（之后拼时自然带上）。开关关着时什么都不做。"""
+        if not game or game in self._waiting:
+            return
+        self.assemble(game)
 
     def settle(self, game: str) -> None:
         """不再等这一局的胜负（下一局开始了、等满了）：还在等的就按推荐日志里现有的拼；已经拼过的不再拼。"""

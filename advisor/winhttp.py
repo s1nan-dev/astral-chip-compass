@@ -30,7 +30,7 @@ Proxy-Authorization），代理要别的方式时回 407、按 HTTP 错误报。
 附加请求头，见 _once），和 urllib 每一跳都带 Proxy-Authorization 一样。cookie 不收不带（每个请求设 WINHTTP_DISABLE_COOKIES）。
 
 重定向交给 WinHTTP 自动跟随，最多 MAX_REDIRECTS 次（同 urllib）；从 https 跳到 http 的不跟随（防降级）。这是和 urllib
-唯一有意不同的一处：urllib 的 HTTPRedirectHandler 连 https→http 也跟着跳；识别图片都从吉星派对 WIKI 下载，它只用 https，
+唯一有意不同的一处：urllib 的 HTTPRedirectHandler 连 https→http 也跟着跳；识别图片从吉星派对 WIKI 下载，都只用 https，
 实际碰不到。不跟随而回话是 3xx 时按 HTTPError 报（code 用那个 3xx，reason 用状态行文字，同 urllib 对不处理的重定向的报法），
 不把 3xx 的正文当图片交回（3xx 的正文不是图片，交回只会让上层报「不是 PNG 图片」）。
 
@@ -466,7 +466,7 @@ class Session:
             raise urllib.error.URLError(_reason(_last_error()))
         if _tls13_supported():
             # 系统给 WinHTTP 定的默认协议可能只有 TLS 1.2（注册表 WinHttp 下的 DefaultSecureProtocols 被别的软件设成
-            # 0x800 时就是这样），而有的站点已经只收 TLS 1.3（例如英文 wiki 的查询接口；识别图片都从吉星派对 WIKI 下载，
+            # 0x800 时就是这样），而有的站点已经只收 TLS 1.3（例如英文 wiki 的查询接口；识别图片从吉星派对 WIKI 下载，
             # 不连那里），握手不成、报 12175：明确开 TLS 1.2 和 1.3，站点改成只收 TLS 1.3 时照样连得上。设不上时照系统默认
             # （_set_option 不报错）
             _set_option(self._handle, WINHTTP_OPTION_SECURE_PROTOCOLS,

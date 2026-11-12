@@ -19,7 +19,7 @@ from urllib.parse import unquote
 
 from PIL import Image
 
-from advisor import assets, gamelog, paths, schemes, version
+from advisor import assets, gamelog, paths, schemes, update, version
 from advisor.data import CLASSES, load_db, task_key
 from advisor.engine import LOW_NOTE, ChipEval, Part, Scorer, advise, mutator_notes
 from advisor.pool import State
@@ -1180,7 +1180,7 @@ class DiagnosticsDocsTest(unittest.TestCase):
 class AssetsManifestTest(unittest.TestCase):
     """data/assets_manifest.json（首次运行下载的识别图片清单）：条目字段齐全、没有重复，汇总数字和使用说明对得上。"""
 
-    DIRS = ("heroes", "profiles", "chips", "stars")  # advisor/assets.py AssetItem.dir
+    DIRS = ("heroes", "profiles", "chips", "achieve", "stars")  # advisor/assets.py AssetItem.dir
 
     @classmethod
     def setUpClass(cls):
@@ -1192,7 +1192,7 @@ class AssetsManifestTest(unittest.TestCase):
         known = set(assets.AssetItem.__dataclass_fields__)
         for it in self.items:
             with self.subTest(item=f"{it.get('dir')}/{it.get('file')}"):
-                self.assertLessEqual(set(it), known)  # 多出来的字段 load_manifest 会悄悄丢掉
+                self.assertLessEqual(set(it) - {"fallback"}, known)  # 多出来的字段 load_manifest 会悄悄丢掉（fallback 另读）
                 self.assertIn(it["dir"], self.DIRS)
                 self.assertRegex(it["file"], r"^[\w.\-]+\.png$")
                 self.assertIsInstance(it["size"], int)
@@ -1200,14 +1200,34 @@ class AssetsManifestTest(unittest.TestCase):
                 self.assertRegex(it["sha1"], r"^[0-9a-f]{40}$")
                 if it.get("bundled"):
                     self.assertNotIn("url", it)
+                    self.assertNotIn("fallback", it)
                     continue
-                self.assertTrue(it["title"])
-                self.assertTrue(it["url"].startswith("https://"))
-                self.assertNotIn("api", it)  # 识别图片都取自吉星派对 WIKI（清单的 source），不带指向别的 wiki 的 api
-                if "crop" in it:  # 从卡面现裁的角色照：文件页是 BWIKI 上同一编号、同一皮肤的卡面
-                    self.assertEqual(it["file"].replace("UT_Hero_RolePhoto_", "UT_Hero_Card_"), it["title"].replace(" ", "_"))
-                else:
-                    self.assertEqual(it["file"], it["title"].replace(" ", "_"))  # BWIKI 的文件页名就是文件名
+                if it.get("mirror"):  # 备用地址上的图片：地址带内容的 SHA-1，不带 wiki 的文件页
+                    self.assertIs(it["mirror"], True)
+                    self.assertNotIn("title", it)
+                    self.assertNotIn("api", it)
+                    self.assertNotIn("crop", it)
+                    self.assertEqual(it["url"], f"{update.MIRROR_BASE}assets/{it['dir']}/{it['sha1']}/{it['file']}")
+                    if "fallback" in it:  # 不用官方备用地址的复刻版本照它下：wiki 上的那张、或从卡面现裁，字段同普通的项
+                        fallback = it["fallback"]
+                        self.assertLessEqual(set(fallback), known - {"dir", "file", "mirror", "bundled"})
+                        self.assertIsInstance(fallback["size"], int)
+                        self.assertGreater(fallback["size"], 0)
+                        self.assertRegex(fallback["sha1"], r"^[0-9a-f]{40}$")
+                        self.wiki_fields(it["file"], fallback)
+                    continue
+                self.assertNotIn("fallback", it)
+                self.wiki_fields(it["file"], it)
+
+    def wiki_fields(self, file: str, it: dict) -> None:
+        """照 BWIKI 下的一项（或备用地址上的项的 fallback）：有文件页和地址。"""
+        self.assertTrue(it["title"])
+        self.assertTrue(it["url"].startswith("https://"))
+        self.assertNotIn("api", it)  # 识别图片都取自吉星派对 WIKI（清单的 source），不带指向别的 wiki 的 api
+        if "crop" in it:  # 从卡面现裁的角色照：文件页是 BWIKI 上同一编号、同一皮肤的卡面
+            self.assertEqual(file.replace("UT_Hero_RolePhoto_", "UT_Hero_Card_"), it["title"].replace(" ", "_"))
+        else:
+            self.assertEqual(file, it["title"].replace(" ", "_"))  # BWIKI 的文件页名就是文件名
 
     def test_no_duplicates(self):
         # Windows 的文件名不分大小写：同一目录下只差大小写也算重复

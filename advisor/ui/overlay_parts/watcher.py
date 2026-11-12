@@ -759,10 +759,10 @@ class Watcher(QThread):
             hints = getattr(processor, "hints", None)
             if isinstance(hints, WatchHints):
                 # 识别流程这一帧最后一次在锁里调完 Session 时顺手取的（FrameProcessor._renew）：不为它再进一次锁
-                holding = hints.holding
+                holding, wants_table = hints.holding, hints.wants_table
             else:
                 with self.lock:
-                    holding = bool(self.session.holding)
+                    holding, wants_table = bool(self.session.holding), bool(self.session.wants_table)
             if visible and holding:
                 # 正在等候选筹码读全（三选一刚出现时有筹码没读出来、刷新动画的中间帧等，SelectTracker.hold_frame，最多约 1 秒）：
                 # 手动模式不跟随三选一时也接着截图，不然刚出现时的推荐、「正在刷新」后的新推荐都要等下一次按热键才出来
@@ -778,8 +778,8 @@ class Watcher(QThread):
             if failed:
                 self._emit_recog_items([name for name, _, _ in failed])
             # 没显示三选一、还有排到下一帧的读数（pending）时不等：一帧只做一项读数，做完一项马上取下一帧，先看是不是三选一
-            # 再接着读
-            self._sleep(active_ms if visible else (2000 if failed else (0 if pending else idle)))
+            # 再接着读。等结算数据表的一段（wants_table）里按三选一显示着时的间隔取帧：表常常只露两三秒，隔得久了容易漏看
+            self._sleep(active_ms if (visible or wants_table) else (2000 if failed else (0 if pending else idle)))
         board = self.select_board
         if processor is not None and board is not None:
             # 线程停下（退出、收掉第二张）：自己不再算显示着三选一，另一路马上接着读，不用等记号过期

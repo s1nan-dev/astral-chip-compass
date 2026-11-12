@@ -66,7 +66,7 @@
 
 ## test_overlay_parts.py：不建窗口，单独测悬浮窗拆出去的几个纯计算模块
 
-- **测试观点**：从四个测试类检查——① `TakeViewTest`：刷新时取的会话快照（`state.take_view`）里列表是复制的；本局已结束时不再请用户选地图、补录；读不到的项按读不到算；星币拆账是「取走」式、只在要时取一次；升星花费只在读到星币数和星数时算、算错只写星币数；读某一项时抛异常只让那一组按读不到算。② `StatusTest`：状态胶囊与一行摘要的纯计算——识别本身状态的先后（已暂停 ＞ 暂不可用 ＞ 照常进行）；各项的先后与写法（写明主体、对局中待识别标橙）；一行摘要的取舍与缩短；状态胶囊悬停说明的分行；角色胶囊的写法；等待文字。③ `NoticeModelTest`：提示行怎么组装——对局中途判定的新一局两种写法与所属区域；面板提示的几种写法；补录与皮肤可用的提示；全局提示的顺序（「免费软件」声明排最后）。④ `OfferLogTest`：推荐日志的编号与记账——同一次三选一沿用编号；刷新换编号并记「刷新」；撤销、改正、撤销新一局；对局结束只记一次；三选一刚出现时读错（刷新次数读成 0、候选筹码名也读错）、补认改正后重算的推荐仍沿用同一个编号（不当成刷新）；记账认作另一次三选一（推荐事件的 `select_no` 变了，例如紧接着出现、概率行一样的两次）时换新编号、不按刷新次数另判（界面仍算显示着也一样），同一次里照旧按刷新次数判刷新（`test_session_says_another_select`）；同一组候选关了又出现、`select_no` 加了一时照旧沿用原来的编号（`test_reopened_keeps_id_with_select_no`）；补录的选择记 `via="supplement"`；认得出这一局的客户端时随三选一传给推荐日志（`client`），认不出时不传这个参数。
+- **测试观点**：从四个测试类检查——① `TakeViewTest`：刷新时取的会话快照（`state.take_view`）里列表是复制的；本局已结束时不再请用户选地图、补录；读不到的项按读不到算；星币拆账是「取走」式、只在要时取一次；升星花费只在读到星币数和星数时算、算错只写星币数；读某一项时抛异常只让那一组按读不到算。② `StatusTest`：状态胶囊与一行摘要的纯计算——识别本身状态的先后（已暂停 ＞ 暂不可用 ＞ 照常进行）；各项的先后与写法（写明主体、对局中待识别标橙）；一行摘要的取舍与缩短；状态胶囊悬停说明的分行；角色胶囊的写法；等待文字。③ `NoticeModelTest`：提示行怎么组装——对局中途判定的新一局两种写法与所属区域；面板提示的几种写法；不知道已有筹码时「推荐」卡片最上面那一行（三选一显示着才出、排在撤销那一行前面、⚠ 橙色不改边框，本局已结束时不出；一个都没记下、记下了几个，都只写同一句，不写个数）；补录与皮肤可用的提示；全局提示的顺序（「免费软件」声明排最后）。④ `OfferLogTest`：推荐日志的编号与记账——同一次三选一沿用编号；刷新换编号并记「刷新」；撤销、改正、撤销新一局；对局结束只记一次，胜负定了、或房间等画面先结束以后又读到结算画面、地图改按结算画面时再记一条（`test_game_over_again_when_map_changes`）；三选一刚出现时读错（刷新次数读成 0、候选筹码名也读错）、补认改正后重算的推荐仍沿用同一个编号（不当成刷新）；记账认作另一次三选一（推荐事件的 `select_no` 变了，例如紧接着出现、概率行一样的两次）时换新编号、不按刷新次数另判（界面仍算显示着也一样），同一次里照旧按刷新次数判刷新（`test_session_says_another_select`）；同一组候选关了又出现、`select_no` 加了一时照旧沿用原来的编号（`test_reopened_keeps_id_with_select_no`）；补录的选择记 `via="supplement"`；认得出这一局的客户端时随三选一传给推荐日志（`client`），认不出时不传这个参数。
 - **检证对象**：`advisor/ui/overlay_parts/state.py`（`take_view`、`egg_inputs`、`SessionView`）、`advisor/ui/overlay_parts/status.py`（`capsule_bit`、`activity_tip`、`status_bits`、`pill_bits`、`status_tip`、`hero_pill`、`waiting_text`、`line_items`、`summary_tip`）、`advisor/ui/overlay_parts/notices.py`（`NoticeModel.rows/area/tips/needs_action`）、`advisor/ui/overlay_parts/records.py`（`OfferLog`）、`advisor/ui/overlay_parts/geometry.py`（`window_plan`）、`advisor/ui/overlay_parts/wording.py`（各文案常量）；`advisor/ui/services.py` 的 `Services`；`tests/support/fakes.py` 的 `FakeLogbook`。
 - **什么时候要跑**：改了上面这些纯计算函数或 `wording.py` 的文案常量；改了会话快照读的那些字段（`SessionView`、`take_view` 读的接口）或 `Services` 的接口时。
 - **怎么单独跑**：`python -B tools/run_tests.py --only test_overlay_parts`（上次约 0.006 秒）。
@@ -83,7 +83,7 @@
 
 ## test_overlay_prompts.py：需要用户操作的提示与「本局的开始结束」
 
-- **测试观点**：从两个测试类检查——① `OverlayPromptTest`：需要操作时边框变色；各条新事件的提示放在所属卡片里——地图要用户选时边框变色、「查看筹码」面板的提示放在「已有筹码」卡片且面板读到后收起、面板提示期间已有筹码写「已有筹码待识别」；角色待识别时推荐暂停、请在下拉框选角色（一行显示时「筹码方案」卡片随之出现）；撤销新一局后按恢复后的状态决定面板提示是否显示；队友页签的提示不按时间收起；对局中途判定的新一局（轮次、星数、角色）排在最上、边框变色，「已有筹码」卡片里另有「撤销」；星数增加需补录与补录栏搜索；同一组候选关闭后又出现时撤销刚记的选择；地图发放的筹码行；标题栏「补录筹码」按有没有来源增减与突出；本局识别到「神秘宝藏」时所有角色都出补录按钮；两个来源并列成一句；补录时有不经三选一的来源、又没有待补录的升星（按 Session 记着的待补录个数，不按提示行最近一次的个数）才记为不经三选一获得，「未检测到选择」的补录行还在、补的可能就是那次选的（那组里认出的一个，或那组有认不出的格子）时不记；上一局状态还在时读到的组件留给下一局；角色待识别时不写职业胶囊和职业那一句；「打开任务栏」那一行在全部展开时也要读到轮次（进了对局）才显示，请用户选地图的那一行照常显示；队友、畸变组件、不支持的情况；新按钮都是带底色框线的按钮；界面文字不含口语字样。② `GameOverTest`：对局结束的显示与保留——摘要与状态胶囊以「对局 已结束」开头、悬停写依据；收起只对进行中有意义的提示、边框不变色；「未选择首推的原因」照常问；推荐日志只记一次；结束后看到选角界面、或连续两次读到同一轮次时的两种走法；手动模式的等待文字。
+- **测试观点**：从两个测试类检查——① `OverlayPromptTest`：需要操作时边框变色；各条新事件的提示放在所属卡片里——地图要用户选时边框变色、「查看筹码」面板的提示放在「已有筹码」卡片且面板读到后收起、面板提示期间已有筹码写「已有筹码待识别」；对局中途打开、还没读到面板时推荐照常显示，「推荐」卡片最上面（推荐内容的上面）挂「还不知道已有筹码，可能不准。」，三选一关掉时收起，看着记下了一个以后下一次三选一照样挂这一句（不写个数），三选一开着时读到面板按面板重算、这一行收起（`test_owned_unknown_advice`），面板上一个都没有时不重算、这一行照样收起（`test_owned_unknown_cleared_by_empty_panel`）；角色待识别时推荐暂停、请在下拉框选角色（一行显示时「筹码方案」卡片随之出现）；撤销新一局后按恢复后的状态决定面板提示是否显示；队友页签的提示不按时间收起；对局中途判定的新一局（轮次、星数、角色）排在最上、边框变色，「已有筹码」卡片里另有「撤销」；星数增加需补录与补录栏搜索；同一组候选关闭后又出现时撤销刚记的选择；地图发放的筹码行；标题栏「补录筹码」按有没有来源增减与突出；本局识别到「神秘宝藏」时所有角色都出补录按钮；两个来源并列成一句；补录时有不经三选一的来源、又没有待补录的升星（按 Session 记着的待补录个数，不按提示行最近一次的个数）才记为不经三选一获得，「未检测到选择」的补录行还在、补的可能就是那次选的（那组里认出的一个，或那组有认不出的格子）时不记；上一局状态还在时读到的组件留给下一局；角色待识别时不写职业胶囊和职业那一句；「打开任务栏」那一行在全部展开时也要读到轮次（进了对局）才显示，请用户选地图的那一行照常显示；队友、畸变组件、不支持的情况；新按钮都是带底色框线的按钮；界面文字不含口语字样。② `GameOverTest`：对局结束的显示与保留——摘要与状态胶囊以「对局 已结束」开头、悬停写依据；收起只对进行中有意义的提示、边框不变色；「未选择首推的原因」照常问；推荐日志只记一次；结束后看到选角界面、或连续两次读到同一轮次时的两种走法；手动模式的等待文字。
 - **检证对象**：`advisor/ui/overlay.py`（`Overlay.handle`、`refresh`、`undo_new_game`、`_waiting_text`、`needs_attention` 及提示行组装）、`advisor/ui/overlay_parts/app.py`（`OverlaySession`、`UiSettings`）、`advisor/ui/overlay_parts/wording.py`（`PROMPT_HERO`、`GAME_OVER_*`、`EXTRA_CHIP_*` 等文案常量）、`advisor/ui/text.py`（`tip_lines`、`tip_paragraphs_html`）；`advisor/session`（`Event` 与各 `on_*` 读数）；`tests/support/overlay_cases.py`（`frame`、`button`、`choose_hero`、`expire_flash` 等）。
 - **什么时候要跑**：改了 `overlay.py` 的事件处理或提示逻辑、面板提示与地图选择行的显示条件、新一局撤销、对局结束的显示与保留、补录按钮的显示条件，或改 `wording.py` 里这些文案时。
 - **怎么单独跑**：`python -B tools/run_tests.py --only test_overlay_prompts`（上次约 4.4 秒）。
@@ -91,6 +91,7 @@
 - **输出怎么看**：同总则。
 - **出错时一般是哪里不对**：
   - `test_attention_border`、`test_panel_prompt_and_read` 失败 → 边框变色的判断或面板提示的显示/收起改了。
+  - `test_owned_unknown_advice`、`test_owned_unknown_cleared_by_empty_panel` 失败 → 推荐事件的 `owned_unknown` 没传到悬浮窗（`dispatch.EventHandlers.on_advice` 写 `LiveState.owned_unknown`，`NoticeView.update` 交给 `NoticeModel.rows`），读到面板时没收起（`on_panel_read`），或读到面板以后没按面板重算（`session.panel.read_panel` 调 `SelectTracker.recompute`）。
   - `test_hero_needed_then_choose`、`test_hero_needed_choose_same_hero` 失败 → 角色待识别时推荐暂停、请选角色的提示或「筹码方案」卡片的出现条件改了。
   - `test_midgame_new_game_needs_action`、`test_star_and_hero_new_game_are_midgame`、`test_select_screen_new_game_stays_info` 失败 → 对局中途判定新一局的两种提示行、区域或「只作说明」的判断改了。
   - `test_new_game_undo*`、`test_undo_new_game_restores_panel_prompt_state` 失败 → 撤销新一局恢复的状态或提示收起改了。
@@ -443,17 +444,18 @@
   - `test_real_drag_moves_and_remembers` 失败 → 多半是相对位置的记录改坏了（看 `follow.py` 的 `remember_position`）。
   - `OffScreenTest` 的两个用例失败 → 多半是挪回屏幕内或相对位置的夹取（-1～2）改坏了（看 `geometry.py` 的 `valid_rel`、`follow.py` 的 `fit_on_screen`）。
 
-## test_overlay_event_branches.py：`Overlay.handle` 里几个分支的行为（picked、pick_reverted、map_read、game_over、胜负）
+## test_overlay_event_branches.py：`Overlay.handle` 里几个分支的行为（picked、pick_reverted、unadvised、map_read、game_over、胜负）
 
 - **测试观点**：
-  - `picked`：选择记在给出推荐的那一次三选一上；没给出推荐（候选没认全）就选了时，只写「已选」、不问原因，推荐日志里没有这一次（`PickedBranchTest`）。
+  - `picked`：选择记在给出推荐的那一次三选一上；没给出推荐（候选没认全）就选了时，只写「已选」、不问原因，推荐日志里没有推荐记录、只记一条没给推荐（`unadvised`）（`PickedBranchTest`）。
+  - `unadvised`：认出了三选一、没给推荐就关掉时，交给推荐日志记一条，悬浮窗上不多出什么（`UnadvisedBranchTest`）。
   - `pick_reverted`：同一组候选又出现时，推荐日志里撤销刚记下的选择，这一组沿用原来的编号；之后选了别的记在同一编号上，已有筹码里换成新选的（`PickRevertedBranchTest`）。
   - `map_read`：读到地图以后「打开任务栏」的提示收起，状态里写地图名（`MapReadBranchTest`）。
   - `game_over`：推荐日志记一次对局结束（同一局再送一次也不重复），带星数和已有筹码；只对进行中的对局有意义的提示（星数增加需补录）收起，边框不变色（`GameOverBranchTest`）。
   - 房间画面结束的局，之后的新一局撤销了：结束时收起的「查看筹码」提示、待补录提示、补录行（连同「再次出现、已撤销」的说法）都回来；撤销说明那次结束是误认的，这一局真正结束时推荐日志照常再记一条（以后一条为准），再读到结算画面也不重复记（`UndoAfterRoomEndTest`）。
   - 胜负（`GameResultBranchTest`，对局报告的拼换成记下调用）：没认出通关画面时，结束时推荐日志记一条（胜负 null），报告先等（排一次 `RESULT_WAIT_MS`）；奖励画面星币是 10，定了失败，再记一条（别的项照抄），这时拼一次；再读到奖励画面、等满的计时器晚到都不再记、不再拼；读到奖励画面前后悬浮窗上的文字一样。认出了通关画面：结束时就记通关，奖励画面对得上、不再记，这时拼。打输横幅和胜负判定的记账另在 test_game_outcome 里核对。没等到奖励画面就开了下一局：按上一局的局号拼一次；退出时（`Overlay.shutdown`）拼好才往下走。
 
-- **检证对象**：`advisor/ui/overlay.py` 的 `Overlay.handle`、`report_game_over`、`shutdown` 里拼还在等胜负的报告那一步；`advisor/ui/overlay_parts/dispatch.py` 的 `EventHandlers.on_picked`、`on_pick_reverted`、`on_map_read`、`on_game_over`、`on_status`、`on_newgame`、`log_game_over`、`settle_report`；`advisor/ui/overlay_parts/records.py` 的 `OfferLog`；`advisor/ui/overlay_parts/reporting.py` 的 `Reporting.game_over`、`settle`、`settle_all`；文字在 `advisor/ui/overlay_parts/wording.py`。
+- **检证对象**：`advisor/ui/overlay.py` 的 `Overlay.handle`、`report_game_over`、`shutdown` 里拼还在等胜负的报告那一步；`advisor/ui/overlay_parts/dispatch.py` 的 `EventHandlers.on_picked`、`on_pick_reverted`、`on_unadvised`、`on_map_read`、`on_game_over`、`on_status`、`on_newgame`、`log_game_over`、`settle_report`；`OfferLog.on_unadvised`；`advisor/ui/overlay_parts/records.py` 的 `OfferLog`；`advisor/ui/overlay_parts/reporting.py` 的 `Reporting.game_over`、`settle`、`settle_all`；文字在 `advisor/ui/overlay_parts/wording.py`。
 
 - **什么时候要跑**：改了这几个分支的处理、推荐日志的记账（对局结束按局数和胜负去重）、对局报告什么时候拼，或者提示行/待补录提示的收起与恢复（`dispatch.py`、`records.py`、`reporting.py`、`notices.py`）以后。
 

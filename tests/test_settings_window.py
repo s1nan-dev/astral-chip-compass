@@ -1182,7 +1182,8 @@ class PrivacyTest(unittest.TestCase):
         self.assertEqual(lang.to_hant(st.GROUP_PRIVACY), "隱私與資料")
         self.assertEqual(lang.to_hant(st.STATS_TITLE), "我的統計")
         self.assertEqual(lang.to_hant(st.REPORT_DESC),
-                         "開啟會向拾星助手官方傳送對局中籌碼選擇偏好（匿名）。關閉則不會傳送任何資料，也無法提交反饋。")
+                         "開啟會向拾星助手官方傳送對局中籌碼選擇偏好和結算資料表上的數字（匿名，不含名字和等級）。"
+                         "關閉則不會傳送任何資料，也無法提交反饋。")
 
 
 if __name__ == "__main__":

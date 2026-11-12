@@ -1,12 +1,208 @@
 {
  "version": 1,
- "generated": "2026-10-17",
+ "generated": "2026-11-12",
  "source": "https://wiki.biligame.com/starengine/",
  "api": "https://wiki.biligame.com/starengine/api.php",
- "note": "识别用图片：程序首次运行时下载到 assets/<dir>/<file>，都取自 source。带 crop 字段的项下载的是对应的卡面原画（title、url、size、sha1 是卡面的），在本机按 crop 的裁法（照游戏内核对）裁出角色照，卡面不留。bundled 项随发行版附带，不下载。",
- "counts": {"heroes": 151, "profiles": 130, "chips": 78},
- "download_bytes": 42748636,
+ "note": "识别用图片：程序首次运行时下载到 assets/<dir>/<file>，一般取自 source（mirror 项除外，见下）。带 crop 字段的项下载的是对应的卡面原画（title、url、size、sha1 是卡面的），在本机按 crop 的裁法（照游戏内核对）裁出角色照，卡面不留。bundled 项随发行版附带，不下载。mirror 项是 WIKI 上没有、或和游戏里不一样的图片，从备用地址下载（url 里带内容的 SHA-1）；不用官方备用地址的复刻版本改照 fallback 下（字段同普通的项），没有 fallback 的不下。",
+ "counts": {"heroes": 157, "profiles": 138, "chips": 81, "achieve": 14},
+ "download_bytes": 23961161,
  "items": [
+  {
+   "dir": "achieve",
+   "file": "UT_Achieve_1000_Settlement.png",
+   "mirror": true,
+   "url": "https://dl.astral-chip-compass.com/assets/achieve/ef64626733fbcf90e79e34c9a000fe96030b57b6/UT_Achieve_1000_Settlement.png",
+   "size": 13287,
+   "sha1": "ef64626733fbcf90e79e34c9a000fe96030b57b6",
+   "fallback": {
+    "title": "UT Achieve 1000 Settlement.png",
+    "url": "https://patchwiki.biligame.com/images/starengine/2/27/p9qrbjrptnmgry86owego49x5zq6qop.png",
+    "size": 14473,
+    "sha1": "d8566e4c4f36978849aa3f4af15ab667557e2299"
+   }
+  },
+  {
+   "dir": "achieve",
+   "file": "UT_Achieve_1001_Settlement.png",
+   "mirror": true,
+   "url": "https://dl.astral-chip-compass.com/assets/achieve/1e14ce7fd6c32382ffc66b446f90404983dc3679/UT_Achieve_1001_Settlement.png",
+   "size": 14291,
+   "sha1": "1e14ce7fd6c32382ffc66b446f90404983dc3679",
+   "fallback": {
+    "title": "UT Achieve 1001 Settlement.png",
+    "url": "https://patchwiki.biligame.com/images/starengine/a/a7/q5wi89tg3rxqb17yf6otlv6mw7zjcqm.png",
+    "size": 15144,
+    "sha1": "dffc36ab87c0871b6d7c2b6bdbad8c6c6a36c63e"
+   }
+  },
+  {
+   "dir": "achieve",
+   "file": "UT_Achieve_1002_Settlement.png",
+   "mirror": true,
+   "url": "https://dl.astral-chip-compass.com/assets/achieve/0cde062aa9a4cde13b7ad6b01110d35eef832166/UT_Achieve_1002_Settlement.png",
+   "size": 12151,
+   "sha1": "0cde062aa9a4cde13b7ad6b01110d35eef832166",
+   "fallback": {
+    "title": "UT Achieve 1002 Settlement.png",
+    "url": "https://patchwiki.biligame.com/images/starengine/7/7b/t9escba9t2cg3e01hd4yiks1je2x0al.png",
+    "size": 12604,
+    "sha1": "fa8078f9ba15b35a500a355ec95f4786045829bd"
+   }
+  },
+  {
+   "dir": "achieve",
+   "file": "UT_Achieve_1003_Settlement.png",
+   "mirror": true,
+   "url": "https://dl.astral-chip-compass.com/assets/achieve/6cd5764d92b1adb2626064ef2da5f53269eb7ee4/UT_Achieve_1003_Settlement.png",
+   "size": 14051,
+   "sha1": "6cd5764d92b1adb2626064ef2da5f53269eb7ee4",
+   "fallback": {
+    "title": "UT Achieve 1003 Settlement.png",
+    "url": "https://patchwiki.biligame.com/images/starengine/9/99/3jtp2xtq6azbgpbvmdtthudjktp4jk1.png",
+    "size": 14880,
+    "sha1": "1e65986253a1fbf843ffaf2ae2832e6931498901"
+   }
+  },
+  {
+   "dir": "achieve",
+   "file": "UT_Achieve_1004_Settlement.png",
+   "mirror": true,
+   "url": "https://dl.astral-chip-compass.com/assets/achieve/3da9ba78b48f0c2eee03e3ca9b36bbc4f707fc34/UT_Achieve_1004_Settlement.png",
+   "size": 10661,
+   "sha1": "3da9ba78b48f0c2eee03e3ca9b36bbc4f707fc34",
+   "fallback": {
+    "title": "UT Achieve 1004 Settlement.png",
+    "url": "https://patchwiki.biligame.com/images/starengine/4/45/lifuxpuz0z9w8r7hulnxft0svq6va1e.png",
+    "size": 11324,
+    "sha1": "b8299b306f6d37c0573497d74cc0378b3b1aa292"
+   }
+  },
+  {
+   "dir": "achieve",
+   "file": "UT_Achieve_1005_Settlement.png",
+   "mirror": true,
+   "url": "https://dl.astral-chip-compass.com/assets/achieve/52b189deb9ff1726180e88c1f69d74c96dcc2a18/UT_Achieve_1005_Settlement.png",
+   "size": 9487,
+   "sha1": "52b189deb9ff1726180e88c1f69d74c96dcc2a18",
+   "fallback": {
+    "title": "UT Achieve 1005 Settlement.png",
+    "url": "https://patchwiki.biligame.com/images/starengine/b/b1/tangn8i3exghjqoh0pwo32ot4hy102e.png",
+    "size": 10497,
+    "sha1": "facc04f56dd040fe2fd6d62c4dc1ca4f44667c96"
+   }
+  },
+  {
+   "dir": "achieve",
+   "file": "UT_Achieve_1006_Settlement.png",
+   "mirror": true,
+   "url": "https://dl.astral-chip-compass.com/assets/achieve/6939ea4db9c069ed38ecec46d84a3ed46520614f/UT_Achieve_1006_Settlement.png",
+   "size": 12731,
+   "sha1": "6939ea4db9c069ed38ecec46d84a3ed46520614f",
+   "fallback": {
+    "title": "UT Achieve 1006 Settlement.png",
+    "url": "https://patchwiki.biligame.com/images/starengine/2/25/rqxusfmx922b78il7aeyccibfvrvj4x.png",
+    "size": 13401,
+    "sha1": "ed8c7b98c7daa18acaaca589b1a9cca807c4f9a1"
+   }
+  },
+  {
+   "dir": "achieve",
+   "file": "UT_Achieve_1007_Settlement.png",
+   "mirror": true,
+   "url": "https://dl.astral-chip-compass.com/assets/achieve/aaa58971c3beac51093d58c63d5d07966a787f74/UT_Achieve_1007_Settlement.png",
+   "size": 10714,
+   "sha1": "aaa58971c3beac51093d58c63d5d07966a787f74",
+   "fallback": {
+    "title": "UT Achieve 1007 Settlement.png",
+    "url": "https://patchwiki.biligame.com/images/starengine/6/6d/bzfkfen52q9cw6q28xtcusvubn3segs.png",
+    "size": 11640,
+    "sha1": "66984e62614395b1a4964a244cb9736b8136073c"
+   }
+  },
+  {
+   "dir": "achieve",
+   "file": "UT_Achieve_1008_Settlement.png",
+   "mirror": true,
+   "url": "https://dl.astral-chip-compass.com/assets/achieve/640251394b451674248cda8fb71425bea840db83/UT_Achieve_1008_Settlement.png",
+   "size": 12023,
+   "sha1": "640251394b451674248cda8fb71425bea840db83",
+   "fallback": {
+    "title": "UT Achieve 1008 Settlement.png",
+    "url": "https://patchwiki.biligame.com/images/starengine/1/15/oqgc6m37x338vp9hgfsdmts45b83plx.png",
+    "size": 13257,
+    "sha1": "d3c025949047885bda25d4e27e782f10bd790865"
+   }
+  },
+  {
+   "dir": "achieve",
+   "file": "UT_Achieve_1009_Settlement.png",
+   "mirror": true,
+   "url": "https://dl.astral-chip-compass.com/assets/achieve/79367a6e070e7b220d28f2861abb32c2c15c0546/UT_Achieve_1009_Settlement.png",
+   "size": 7124,
+   "sha1": "79367a6e070e7b220d28f2861abb32c2c15c0546",
+   "fallback": {
+    "title": "UT Achieve 1009 Settlement.png",
+    "url": "https://patchwiki.biligame.com/images/starengine/0/02/mlkegpmaztpelshlh1gxt6hzoyjkup7.png",
+    "size": 7936,
+    "sha1": "c1777d74c8afb4667af3e4d218746d9df204d36b"
+   }
+  },
+  {
+   "dir": "achieve",
+   "file": "UT_Achieve_1010_Settlement.png",
+   "mirror": true,
+   "url": "https://dl.astral-chip-compass.com/assets/achieve/4468091acc3dcd4ba6b2baf72f11fe0b4033622a/UT_Achieve_1010_Settlement.png",
+   "size": 11149,
+   "sha1": "4468091acc3dcd4ba6b2baf72f11fe0b4033622a",
+   "fallback": {
+    "title": "UT Achieve 1010 Settlement.png",
+    "url": "https://patchwiki.biligame.com/images/starengine/6/62/rf4bvy6x2hvzawynuxaesnjwkf8rsru.png",
+    "size": 12113,
+    "sha1": "eabce88347708e759ff245cc85bf7bf188f4ae6a"
+   }
+  },
+  {
+   "dir": "achieve",
+   "file": "UT_Achieve_1011_Settlement.png",
+   "mirror": true,
+   "url": "https://dl.astral-chip-compass.com/assets/achieve/537cfb04833b40080935233940ec111b0fddcb2e/UT_Achieve_1011_Settlement.png",
+   "size": 12759,
+   "sha1": "537cfb04833b40080935233940ec111b0fddcb2e",
+   "fallback": {
+    "title": "UT Achieve 1011 Settlement.png",
+    "url": "https://patchwiki.biligame.com/images/starengine/2/2a/oave7bplyecdqghb2xaj0uaqa1a3ebk.png",
+    "size": 13668,
+    "sha1": "d00b9346c4e1eb943617d4c2f09dc0ef40287940"
+   }
+  },
+  {
+   "dir": "achieve",
+   "file": "UT_Achieve_1012_Settlement.png",
+   "mirror": true,
+   "url": "https://dl.astral-chip-compass.com/assets/achieve/4e5d9984e3428e83ff51690695d190ea2dd02309/UT_Achieve_1012_Settlement.png",
+   "size": 10530,
+   "sha1": "4e5d9984e3428e83ff51690695d190ea2dd02309",
+   "fallback": {
+    "title": "UT Achieve 1012 Settlement.png",
+    "url": "https://patchwiki.biligame.com/images/starengine/b/bb/3nm52a204krftae89sdrv4dmms3qtsj.png",
+    "size": 11206,
+    "sha1": "1f4c53600062fedbc8af5768df803f4df45bcc53"
+   }
+  },
+  {
+   "dir": "achieve",
+   "file": "UT_Achieve_1013_Settlement.png",
+   "mirror": true,
+   "url": "https://dl.astral-chip-compass.com/assets/achieve/8653ecd997e9b9cdb18fd8f0bc7867aecbc1a989/UT_Achieve_1013_Settlement.png",
+   "size": 10800,
+   "sha1": "8653ecd997e9b9cdb18fd8f0bc7867aecbc1a989",
+   "fallback": {
+    "title": "UT Achieve 1013 Settlement.png",
+    "url": "https://patchwiki.biligame.com/images/starengine/1/11/gby6t91quqy3r685xnfbti5gvfngfii.png",
+    "size": 11396,
+    "sha1": "8bd09b26a253d3e79da4eea0bd23af1e63ccb58a"
+   }
+  },
   {
    "dir": "chips",
    "file": "UT_RelicBase_Blue.png",
@@ -569,6 +765,30 @@
   },
   {
    "dir": "chips",
+   "file": "UT_Relic_50094.png",
+   "mirror": true,
+   "url": "https://dl.astral-chip-compass.com/assets/chips/ee681c2907eddbf4fa9b8f60333e8eec0ed9b0e8/UT_Relic_50094.png",
+   "size": 43460,
+   "sha1": "ee681c2907eddbf4fa9b8f60333e8eec0ed9b0e8"
+  },
+  {
+   "dir": "chips",
+   "file": "UT_Relic_50095.png",
+   "mirror": true,
+   "url": "https://dl.astral-chip-compass.com/assets/chips/d7345b09b060a9673406eafe7f592fc56be9c661/UT_Relic_50095.png",
+   "size": 29109,
+   "sha1": "d7345b09b060a9673406eafe7f592fc56be9c661"
+  },
+  {
+   "dir": "chips",
+   "file": "UT_Relic_50096.png",
+   "mirror": true,
+   "url": "https://dl.astral-chip-compass.com/assets/chips/0fc830ac7d6de800f193a8793168e33c23fed608/UT_Relic_50096.png",
+   "size": 16845,
+   "sha1": "0fc830ac7d6de800f193a8793168e33c23fed608"
+  },
+  {
+   "dir": "chips",
    "file": "UT_Relic_Attack.png",
    "title": "UT Relic Attack.png",
    "url": "https://patchwiki.biligame.com/images/starengine/2/21/pmugivjpvmp9ch9chckbsb07e8aeyft.png",
@@ -785,6 +1005,14 @@
   },
   {
    "dir": "heroes",
+   "file": "UT_Hero_RolePhoto_104_03.png",
+   "mirror": true,
+   "url": "https://dl.astral-chip-compass.com/assets/heroes/83a73af914974022f3e3e4c65af4b1f38c79e7c6/UT_Hero_RolePhoto_104_03.png",
+   "size": 102219,
+   "sha1": "83a73af914974022f3e3e4c65af4b1f38c79e7c6"
+  },
+  {
+   "dir": "heroes",
    "file": "UT_Hero_RolePhoto_104_Max.png",
    "title": "UT Hero RolePhoto 104 Max.png",
    "url": "https://patchwiki.biligame.com/images/starengine/0/07/rtd832eqixhyjh8ql9ghtf5a6pqryan.png",
@@ -802,11 +1030,17 @@
   {
    "dir": "heroes",
    "file": "UT_Hero_RolePhoto_105_01.png",
-   "title": "UT Hero Card 105 01.png",
-   "url": "https://patchwiki.biligame.com/images/starengine/8/8c/crbjliqflxqx2yulism7kzf6f9v7esz.png",
-   "size": 1057341,
-   "sha1": "6d3a0f07721d2c6099cf9ddd7d1b68ab8eb1f9b3",
-   "crop": [510.254744, 595.661198, -401.079793, -463.482777, 655.771837, 191.784277]
+   "mirror": true,
+   "url": "https://dl.astral-chip-compass.com/assets/heroes/86f9b30dfd344a5a23a39d78f902fc0a11258ea3/UT_Hero_RolePhoto_105_01.png",
+   "size": 107803,
+   "sha1": "86f9b30dfd344a5a23a39d78f902fc0a11258ea3",
+   "fallback": {
+    "title": "UT Hero Card 105 01.png",
+    "url": "https://patchwiki.biligame.com/images/starengine/8/8c/crbjliqflxqx2yulism7kzf6f9v7esz.png",
+    "size": 1057341,
+    "sha1": "6d3a0f07721d2c6099cf9ddd7d1b68ab8eb1f9b3",
+    "crop": [510.254744, 595.661198, -401.079793, -463.482777, 655.771837, 191.784277]
+   }
   },
   {
    "dir": "heroes",
@@ -835,11 +1069,32 @@
   {
    "dir": "heroes",
    "file": "UT_Hero_RolePhoto_106_02.png",
-   "title": "UT Hero Card 106 02.png",
-   "url": "https://patchwiki.biligame.com/images/starengine/0/08/jl0tzi75dmw3680zwf3kkt8lyf1y2bi.png",
-   "size": 1021607,
-   "sha1": "a7a7af1ffbe5c65504648db3d73553da1a38dd3e",
-   "crop": [638.992687, -0.091437, -260.143133, 0.065347, 894.112901, -41.441637]
+   "mirror": true,
+   "url": "https://dl.astral-chip-compass.com/assets/heroes/702ca3af92d480895f773d44c3478b4ba478ce44/UT_Hero_RolePhoto_106_02.png",
+   "size": 92779,
+   "sha1": "702ca3af92d480895f773d44c3478b4ba478ce44",
+   "fallback": {
+    "title": "UT Hero Card 106 02.png",
+    "url": "https://patchwiki.biligame.com/images/starengine/0/08/jl0tzi75dmw3680zwf3kkt8lyf1y2bi.png",
+    "size": 1021607,
+    "sha1": "a7a7af1ffbe5c65504648db3d73553da1a38dd3e",
+    "crop": [638.992687, -0.091437, -260.143133, 0.065347, 894.112901, -41.441637]
+   }
+  },
+  {
+   "dir": "heroes",
+   "file": "UT_Hero_RolePhoto_106_02_sfw.png",
+   "mirror": true,
+   "url": "https://dl.astral-chip-compass.com/assets/heroes/2d5fb7b2507bb280da2303da398b9307c916fd65/UT_Hero_RolePhoto_106_02_sfw.png",
+   "size": 84720,
+   "sha1": "2d5fb7b2507bb280da2303da398b9307c916fd65",
+   "fallback": {
+    "title": "UT Hero Card 106 02 sfw.png",
+    "url": "https://patchwiki.biligame.com/images/starengine/a/a1/9mrb2ikv9cbzmr1w94ki3s8p9fwfw1k.png",
+    "size": 967722,
+    "sha1": "52759d75ff9067b8050ac1299c212ff58662dbf8",
+    "crop": [640.735562, -0.420228, -261.745489, 0.300323, 896.551626, -43.77405]
+   }
   },
   {
    "dir": "heroes",
@@ -884,11 +1139,17 @@
   {
    "dir": "heroes",
    "file": "UT_Hero_RolePhoto_107_03_sfw.png",
-   "title": "UT Hero Card 107 03 sfw.png",
-   "url": "https://patchwiki.biligame.com/images/starengine/9/93/2ca4wp4aaovwz46pp0l1yetys32ewb7.png",
-   "size": 885133,
-   "sha1": "140acec59b2118623bd19007cd925e349f2d0913",
-   "crop": [879.851496, 0.020288, -280.091978, -0.017808, 1002.362464, -58.061458]
+   "mirror": true,
+   "url": "https://dl.astral-chip-compass.com/assets/heroes/416d5ef0af0cbf2895e7ee9ec425de90dd622961/UT_Hero_RolePhoto_107_03_sfw.png",
+   "size": 90646,
+   "sha1": "416d5ef0af0cbf2895e7ee9ec425de90dd622961",
+   "fallback": {
+    "title": "UT Hero Card 107 03 sfw.png",
+    "url": "https://patchwiki.biligame.com/images/starengine/9/93/2ca4wp4aaovwz46pp0l1yetys32ewb7.png",
+    "size": 885133,
+    "sha1": "140acec59b2118623bd19007cd925e349f2d0913",
+    "crop": [879.851496, 0.020288, -280.091978, -0.017808, 1002.362464, -58.061458]
+   }
   },
   {
    "dir": "heroes",
@@ -917,11 +1178,17 @@
   {
    "dir": "heroes",
    "file": "UT_Hero_RolePhoto_108.png",
-   "title": "UT Hero Card 108.png",
-   "url": "https://patchwiki.biligame.com/images/starengine/e/e3/4jtjlulgf3ldsrvrqmrohxalt7tqipm.png",
-   "size": 806402,
-   "sha1": "26f4e8dbc636384cba6f0bc7343276fe5c52aa3a",
-   "crop": [493.370789, -0.086395, -93.837461, 0.037841, 1126.417326, -91.021648]
+   "mirror": true,
+   "url": "https://dl.astral-chip-compass.com/assets/heroes/4799ed8cca4257dd1a663b6bf3ea23e7b70641a3/UT_Hero_RolePhoto_108.png",
+   "size": 98254,
+   "sha1": "4799ed8cca4257dd1a663b6bf3ea23e7b70641a3",
+   "fallback": {
+    "title": "UT Hero Card 108.png",
+    "url": "https://patchwiki.biligame.com/images/starengine/e/e3/4jtjlulgf3ldsrvrqmrohxalt7tqipm.png",
+    "size": 806402,
+    "sha1": "26f4e8dbc636384cba6f0bc7343276fe5c52aa3a",
+    "crop": [493.370789, -0.086395, -93.837461, 0.037841, 1126.417326, -91.021648]
+   }
   },
   {
    "dir": "heroes",
@@ -942,11 +1209,17 @@
   {
    "dir": "heroes",
    "file": "UT_Hero_RolePhoto_108_02_sfw.png",
-   "title": "UT Hero Card 108 02 sfw.png",
-   "url": "https://patchwiki.biligame.com/images/starengine/3/3f/lr6421p7yv55bmd9feyjpq7z0l3ao5w.png",
-   "size": 820658,
-   "sha1": "ba3d04686928184b79e7069239692c096025afd4",
-   "crop": [626.514953, 0.067934, -158.944656, -0.052725, 807.24042, -59.857634]
+   "mirror": true,
+   "url": "https://dl.astral-chip-compass.com/assets/heroes/8ea9a72e53ca66e404111d3cad22f1bb56f037c1/UT_Hero_RolePhoto_108_02_sfw.png",
+   "size": 119706,
+   "sha1": "8ea9a72e53ca66e404111d3cad22f1bb56f037c1",
+   "fallback": {
+    "title": "UT Hero Card 108 02 sfw.png",
+    "url": "https://patchwiki.biligame.com/images/starengine/3/3f/lr6421p7yv55bmd9feyjpq7z0l3ao5w.png",
+    "size": 820658,
+    "sha1": "ba3d04686928184b79e7069239692c096025afd4",
+    "crop": [626.514953, 0.067934, -158.944656, -0.052725, 807.24042, -59.857634]
+   }
   },
   {
    "dir": "heroes",
@@ -975,11 +1248,17 @@
   {
    "dir": "heroes",
    "file": "UT_Hero_RolePhoto_108_sfw.png",
-   "title": "UT Hero Card 108 sfw.png",
-   "url": "https://patchwiki.biligame.com/images/starengine/4/44/ppj2if1wu2bovxjpy532ozyqy0fhcix.png",
-   "size": 832158,
-   "sha1": "dc1775c806756487c50c093157054bcd470d68a9",
-   "crop": [496.45974, -0.213718, -104.056955, 0.093608, 1133.469725, -89.756824]
+   "mirror": true,
+   "url": "https://dl.astral-chip-compass.com/assets/heroes/af3aa404feaf3b53ee5f81b91dc5a9f586ac3df5/UT_Hero_RolePhoto_108_sfw.png",
+   "size": 101375,
+   "sha1": "af3aa404feaf3b53ee5f81b91dc5a9f586ac3df5",
+   "fallback": {
+    "title": "UT Hero Card 108 sfw.png",
+    "url": "https://patchwiki.biligame.com/images/starengine/4/44/ppj2if1wu2bovxjpy532ozyqy0fhcix.png",
+    "size": 832158,
+    "sha1": "dc1775c806756487c50c093157054bcd470d68a9",
+    "crop": [496.45974, -0.213718, -104.056955, 0.093608, 1133.469725, -89.756824]
+   }
   },
   {
    "dir": "heroes",
@@ -1072,20 +1351,32 @@
   {
    "dir": "heroes",
    "file": "UT_Hero_RolePhoto_112_02_sfw.png",
-   "title": "UT Hero Card 112 02 sfw.png",
-   "url": "https://patchwiki.biligame.com/images/starengine/4/41/kcbranfjgqs9w1zq8ymj85aam6j65on.png",
-   "size": 915926,
-   "sha1": "ae25d66fdd6e3f17cd339dcba7d79e12d2230d47",
-   "crop": [541.128153, -0.036341, -192.369867, 0.018446, 1066.068711, -20.51197]
+   "mirror": true,
+   "url": "https://dl.astral-chip-compass.com/assets/heroes/8667c7a3744b3f73700683dfb6c2a45c5bbc6c75/UT_Hero_RolePhoto_112_02_sfw.png",
+   "size": 117491,
+   "sha1": "8667c7a3744b3f73700683dfb6c2a45c5bbc6c75",
+   "fallback": {
+    "title": "UT Hero Card 112 02 sfw.png",
+    "url": "https://patchwiki.biligame.com/images/starengine/4/41/kcbranfjgqs9w1zq8ymj85aam6j65on.png",
+    "size": 915926,
+    "sha1": "ae25d66fdd6e3f17cd339dcba7d79e12d2230d47",
+    "crop": [541.128153, -0.036341, -192.369867, 0.018446, 1066.068711, -20.51197]
+   }
   },
   {
    "dir": "heroes",
    "file": "UT_Hero_RolePhoto_112_03.png",
-   "title": "UT Hero Card 112 03.png",
-   "url": "https://patchwiki.biligame.com/images/starengine/0/05/6g9bp9s631eqazxgwwx4zz48uc3pm9g.png",
-   "size": 1149776,
-   "sha1": "373b3ad4d82663b419899e5f9b3d6e790f14aff4",
-   "crop": [832.263207, 0.040919, -198.356169, -0.035463, 960.303701, -39.961818]
+   "mirror": true,
+   "url": "https://dl.astral-chip-compass.com/assets/heroes/4bff7385fd91dfc26036e52e1593b0e92c5fdc53/UT_Hero_RolePhoto_112_03.png",
+   "size": 106790,
+   "sha1": "4bff7385fd91dfc26036e52e1593b0e92c5fdc53",
+   "fallback": {
+    "title": "UT Hero Card 112 03.png",
+    "url": "https://patchwiki.biligame.com/images/starengine/0/05/6g9bp9s631eqazxgwwx4zz48uc3pm9g.png",
+    "size": 1149776,
+    "sha1": "373b3ad4d82663b419899e5f9b3d6e790f14aff4",
+    "crop": [832.263207, 0.040919, -198.356169, -0.035463, 960.303701, -39.961818]
+   }
   },
   {
    "dir": "heroes",
@@ -1138,11 +1429,17 @@
   {
    "dir": "heroes",
    "file": "UT_Hero_RolePhoto_113_04.png",
-   "title": "UT Hero Card 113 04.png",
-   "url": "https://patchwiki.biligame.com/images/starengine/c/cb/guvmu5zx4fykpxlobvwflmwn76nfwxq.png",
-   "size": 1203133,
-   "sha1": "9050f2cfc81502953cd1d44a31b86a845b71d37e",
-   "crop": [762.832993, -0.105461, -245.242397, 0.092639, 868.42287, -47.15134]
+   "mirror": true,
+   "url": "https://dl.astral-chip-compass.com/assets/heroes/4bf4e293c2a1c99971cca3b39fa950ef44a3379f/UT_Hero_RolePhoto_113_04.png",
+   "size": 90113,
+   "sha1": "4bf4e293c2a1c99971cca3b39fa950ef44a3379f",
+   "fallback": {
+    "title": "UT Hero Card 113 04.png",
+    "url": "https://patchwiki.biligame.com/images/starengine/c/cb/guvmu5zx4fykpxlobvwflmwn76nfwxq.png",
+    "size": 1203133,
+    "sha1": "9050f2cfc81502953cd1d44a31b86a845b71d37e",
+    "crop": [762.832993, -0.105461, -245.242397, 0.092639, 868.42287, -47.15134]
+   }
   },
   {
    "dir": "heroes",
@@ -1171,11 +1468,17 @@
   {
    "dir": "heroes",
    "file": "UT_Hero_RolePhoto_114_01_sfw.png",
-   "title": "UT Hero Card 114 01 sfw.png",
-   "url": "https://patchwiki.biligame.com/images/starengine/8/85/kec2isjmznlknjm7y1dpyf7qr0tibi0.png",
-   "size": 880049,
-   "sha1": "aea01e732053717d3acee34bcd95264e25f077b8",
-   "crop": [495.136525, -0.083396, -128.299369, 0.062239, 663.443802, 4.857742]
+   "mirror": true,
+   "url": "https://dl.astral-chip-compass.com/assets/heroes/07cf5e2676a9002f319ffb068f81219167eaf9bd/UT_Hero_RolePhoto_114_01_sfw.png",
+   "size": 120108,
+   "sha1": "07cf5e2676a9002f319ffb068f81219167eaf9bd",
+   "fallback": {
+    "title": "UT Hero Card 114 01 sfw.png",
+    "url": "https://patchwiki.biligame.com/images/starengine/8/85/kec2isjmznlknjm7y1dpyf7qr0tibi0.png",
+    "size": 880049,
+    "sha1": "aea01e732053717d3acee34bcd95264e25f077b8",
+    "crop": [495.136525, -0.083396, -128.299369, 0.062239, 663.443802, 4.857742]
+   }
   },
   {
    "dir": "heroes",
@@ -1208,15 +1511,6 @@
    "url": "https://patchwiki.biligame.com/images/starengine/3/35/ib9htiv91jlyujoizsdzdl3lzcf0anx.png",
    "size": 120191,
    "sha1": "9cc5fd8f253e4c833c2d7dc47fd025c99161c4fd"
-  },
-  {
-   "dir": "heroes",
-   "file": "UT_Hero_RolePhoto_114_sfw.png",
-   "title": "UT Hero Card 114 sfw.png",
-   "url": "https://patchwiki.biligame.com/images/starengine/9/9e/0ijdwyuorsb2qq4ntqlbcsoe01fvhnw.png",
-   "size": 1039053,
-   "sha1": "046891a65ec8ebf56057826c56cda23fd1e0fe2c",
-   "crop": [665.810146, 0.009917, -173.128752, -0.006383, 1034.38362, 15.850357]
   },
   {
    "dir": "heroes",
@@ -1341,20 +1635,32 @@
   {
    "dir": "heroes",
    "file": "UT_Hero_RolePhoto_117_04.png",
-   "title": "UT Hero Card 117 04.png",
-   "url": "https://patchwiki.biligame.com/images/starengine/0/09/fkn8dfjtvr7utp7jno5016ovp3ko74c.png",
-   "size": 1719661,
-   "sha1": "85526640a6096cab1c793c00a2364781d0740a0c",
-   "crop": [748.572994, 0.041444, -249.008605, -0.025518, 1215.763276, -159.245835]
+   "mirror": true,
+   "url": "https://dl.astral-chip-compass.com/assets/heroes/4a2545b373abc6ecbaf7ca6ab0467de7dc67c01f/UT_Hero_RolePhoto_117_04.png",
+   "size": 109603,
+   "sha1": "4a2545b373abc6ecbaf7ca6ab0467de7dc67c01f",
+   "fallback": {
+    "title": "UT Hero Card 117 04.png",
+    "url": "https://patchwiki.biligame.com/images/starengine/0/09/fkn8dfjtvr7utp7jno5016ovp3ko74c.png",
+    "size": 1719661,
+    "sha1": "85526640a6096cab1c793c00a2364781d0740a0c",
+    "crop": [748.572994, 0.041444, -249.008605, -0.025518, 1215.763276, -159.245835]
+   }
   },
   {
    "dir": "heroes",
    "file": "UT_Hero_RolePhoto_117_04_sfw.png",
-   "title": "UT Hero Card 117 04 sfw.png",
-   "url": "https://patchwiki.biligame.com/images/starengine/2/27/e4vl0veojqg61rihh4d6m1mpwsobrcj.png",
-   "size": 1704866,
-   "sha1": "7902eb2983645e599833c35d773320c9e189a733",
-   "crop": [752.386635, 0.0, -252.010281, 0.0, 1221.957041, -158.490912]
+   "mirror": true,
+   "url": "https://dl.astral-chip-compass.com/assets/heroes/0650930c8e06dcb85d3b1e367b6ec1a12c5bf1e5/UT_Hero_RolePhoto_117_04_sfw.png",
+   "size": 108401,
+   "sha1": "0650930c8e06dcb85d3b1e367b6ec1a12c5bf1e5",
+   "fallback": {
+    "title": "UT Hero Card 117 04 sfw.png",
+    "url": "https://patchwiki.biligame.com/images/starengine/2/27/e4vl0veojqg61rihh4d6m1mpwsobrcj.png",
+    "size": 1704866,
+    "sha1": "7902eb2983645e599833c35d773320c9e189a733",
+    "crop": [752.386635, 0.0, -252.010281, 0.0, 1221.957041, -158.490912]
+   }
   },
   {
    "dir": "heroes",
@@ -1423,11 +1729,17 @@
   {
    "dir": "heroes",
    "file": "UT_Hero_RolePhoto_119_03.png",
-   "title": "UT Hero Card 119 03.png",
-   "url": "https://patchwiki.biligame.com/images/starengine/b/b4/ldn3obo6gdjr5g34dc46hq4bmkvcmgv.png",
-   "size": 2106896,
-   "sha1": "b705780e298bc79e629447a72b06773efb6c6bbf",
-   "crop": [1245.53701, 0.512154, -482.606499, -0.464389, 1373.645555, -236.809712]
+   "mirror": true,
+   "url": "https://dl.astral-chip-compass.com/assets/heroes/572b468095c671f56fd1d227da784f3af23b0b8e/UT_Hero_RolePhoto_119_03.png",
+   "size": 98558,
+   "sha1": "572b468095c671f56fd1d227da784f3af23b0b8e",
+   "fallback": {
+    "title": "UT Hero Card 119 03.png",
+    "url": "https://patchwiki.biligame.com/images/starengine/b/b4/ldn3obo6gdjr5g34dc46hq4bmkvcmgv.png",
+    "size": 2106896,
+    "sha1": "b705780e298bc79e629447a72b06773efb6c6bbf",
+    "crop": [1245.53701, 0.512154, -482.606499, -0.464389, 1373.645555, -236.809712]
+   }
   },
   {
    "dir": "heroes",
@@ -1512,11 +1824,17 @@
   {
    "dir": "heroes",
    "file": "UT_Hero_RolePhoto_121_01_sfw.png",
-   "title": "UT Hero Card 121 01 sfw.png",
-   "url": "https://patchwiki.biligame.com/images/starengine/6/61/6klvksc4anxjzimwzaavdce1kvqd7rx.png",
-   "size": 777454,
-   "sha1": "3843f6b49edab8fdc305565544a0611360f71e9d",
-   "crop": [405.539531, -0.093092, -129.210601, 0.039745, 949.873341, 22.766257]
+   "mirror": true,
+   "url": "https://dl.astral-chip-compass.com/assets/heroes/23b478e917869db1b54b44b7fa994a4403ac4420/UT_Hero_RolePhoto_121_01_sfw.png",
+   "size": 106688,
+   "sha1": "23b478e917869db1b54b44b7fa994a4403ac4420",
+   "fallback": {
+    "title": "UT Hero Card 121 01 sfw.png",
+    "url": "https://patchwiki.biligame.com/images/starengine/6/61/6klvksc4anxjzimwzaavdce1kvqd7rx.png",
+    "size": 777454,
+    "sha1": "3843f6b49edab8fdc305565544a0611360f71e9d",
+    "crop": [405.539531, -0.093092, -129.210601, 0.039745, 949.873341, 22.766257]
+   }
   },
   {
    "dir": "heroes",
@@ -1529,11 +1847,17 @@
   {
    "dir": "heroes",
    "file": "UT_Hero_RolePhoto_121_03.png",
-   "title": "UT Hero Card 121 03.png",
-   "url": "https://patchwiki.biligame.com/images/starengine/5/57/1t28h44xw8v6c3mjih4me5taokbaebm.png",
-   "size": 1598926,
-   "sha1": "0f78c8c7bf111f69a21deca36531de14943f2202",
-   "crop": [1333.634368, -0.105116, -595.21926, 0.090923, 1541.81144, -224.000581]
+   "mirror": true,
+   "url": "https://dl.astral-chip-compass.com/assets/heroes/a915c36004353917ed2dc1f71427fb83ea476966/UT_Hero_RolePhoto_121_03.png",
+   "size": 92885,
+   "sha1": "a915c36004353917ed2dc1f71427fb83ea476966",
+   "fallback": {
+    "title": "UT Hero Card 121 03.png",
+    "url": "https://patchwiki.biligame.com/images/starengine/5/57/1t28h44xw8v6c3mjih4me5taokbaebm.png",
+    "size": 1598926,
+    "sha1": "0f78c8c7bf111f69a21deca36531de14943f2202",
+    "crop": [1333.634368, -0.105116, -595.21926, 0.090923, 1541.81144, -224.000581]
+   }
   },
   {
    "dir": "heroes",
@@ -1594,11 +1918,25 @@
   {
    "dir": "heroes",
    "file": "UT_Hero_RolePhoto_123_02.png",
-   "title": "UT Hero Card 123 02.png",
-   "url": "https://patchwiki.biligame.com/images/starengine/e/e9/64c3mvx1psvem0gb2su5q2j1xkf34zv.png",
-   "size": 1816102,
-   "sha1": "34656670b967a15ef920a2090a6a83f5df11cb0b",
-   "crop": [991.170239, 0.045144, -421.609716, -0.033787, 1324.313569, -191.207164]
+   "mirror": true,
+   "url": "https://dl.astral-chip-compass.com/assets/heroes/38c633f629e2a346a5e708d22c0aa8ab9bd7ba89/UT_Hero_RolePhoto_123_02.png",
+   "size": 119965,
+   "sha1": "38c633f629e2a346a5e708d22c0aa8ab9bd7ba89",
+   "fallback": {
+    "title": "UT Hero Card 123 02.png",
+    "url": "https://patchwiki.biligame.com/images/starengine/e/e9/64c3mvx1psvem0gb2su5q2j1xkf34zv.png",
+    "size": 1816102,
+    "sha1": "34656670b967a15ef920a2090a6a83f5df11cb0b",
+    "crop": [991.170239, 0.045144, -421.609716, -0.033787, 1324.313569, -191.207164]
+   }
+  },
+  {
+   "dir": "heroes",
+   "file": "UT_Hero_RolePhoto_123_03.png",
+   "mirror": true,
+   "url": "https://dl.astral-chip-compass.com/assets/heroes/9330f68b2d30f5355f663b281a7ece6b3e55ca35/UT_Hero_RolePhoto_123_03.png",
+   "size": 112073,
+   "sha1": "9330f68b2d30f5355f663b281a7ece6b3e55ca35"
   },
   {
    "dir": "heroes",
@@ -1611,11 +1949,17 @@
   {
    "dir": "heroes",
    "file": "UT_Hero_RolePhoto_123_sfw.png",
-   "title": "UT Hero Card 123 sfw.png",
-   "url": "https://patchwiki.biligame.com/images/starengine/f/f0/ewmibgp8jwrpydtz6jqlnduzgkksg5f.png",
-   "size": 859256,
-   "sha1": "7f9c20bcc85fd22aedbb0c28c5d9cbde049f64c3",
-   "crop": [557.495061, -0.175857, -181.724491, 0.107492, 912.06192, 22.822161]
+   "mirror": true,
+   "url": "https://dl.astral-chip-compass.com/assets/heroes/ff22c1774e15dd7476a72d7361bec6681afc9f34/UT_Hero_RolePhoto_123_sfw.png",
+   "size": 96466,
+   "sha1": "ff22c1774e15dd7476a72d7361bec6681afc9f34",
+   "fallback": {
+    "title": "UT Hero Card 123 sfw.png",
+    "url": "https://patchwiki.biligame.com/images/starengine/f/f0/ewmibgp8jwrpydtz6jqlnduzgkksg5f.png",
+    "size": 859256,
+    "sha1": "7f9c20bcc85fd22aedbb0c28c5d9cbde049f64c3",
+    "crop": [557.495061, -0.175857, -181.724491, 0.107492, 912.06192, 22.822161]
+   }
   },
   {
    "dir": "heroes",
@@ -1640,6 +1984,14 @@
    "url": "https://patchwiki.biligame.com/images/starengine/3/34/3asszadctp4mvgk7fnl4m7l0gnwkzuz.png",
    "size": 104563,
    "sha1": "1c4031c8dc7edd75c41c6d0e88751b83dfc9ce8b"
+  },
+  {
+   "dir": "heroes",
+   "file": "UT_Hero_RolePhoto_124_03.png",
+   "mirror": true,
+   "url": "https://dl.astral-chip-compass.com/assets/heroes/83af9c6eb160d24b360b9c5ec9e2987c7c11dc10/UT_Hero_RolePhoto_124_03.png",
+   "size": 117124,
+   "sha1": "83af9c6eb160d24b360b9c5ec9e2987c7c11dc10"
   },
   {
    "dir": "heroes",
@@ -1772,15 +2124,6 @@
   },
   {
    "dir": "heroes",
-   "file": "UT_Hero_RolePhoto_128_Max_sfw.png",
-   "title": "UT Hero Card 128 Max sfw.png",
-   "url": "https://patchwiki.biligame.com/images/starengine/2/2b/rc95r7zvoa0ai40z2xif032dz3rqgom.png",
-   "size": 662864,
-   "sha1": "ea0e71c5c37bfe4afb599d7e2815eb3aadad2df6",
-   "crop": [482.57556, 0.084782, -94.185793, -0.041126, 994.848078, -8.796526]
-  },
-  {
-   "dir": "heroes",
    "file": "UT_Hero_RolePhoto_129.png",
    "title": "UT Hero RolePhoto 129.png",
    "url": "https://patchwiki.biligame.com/images/starengine/2/29/9xnya7s4nszl06x27jdogmysxl62v4n.png",
@@ -1794,6 +2137,38 @@
    "url": "https://patchwiki.biligame.com/images/starengine/2/2a/4jkd15v2i3womdhem5gr3uyzwlqo906.png",
    "size": 101406,
    "sha1": "26e561abb6ec4dbe898cd7076d63d8e3c769d196"
+  },
+  {
+   "dir": "heroes",
+   "file": "UT_Hero_RolePhoto_130.png",
+   "mirror": true,
+   "url": "https://dl.astral-chip-compass.com/assets/heroes/98c1218eaea4a9618df3d9c9f81c344cef5a6e32/UT_Hero_RolePhoto_130.png",
+   "size": 93594,
+   "sha1": "98c1218eaea4a9618df3d9c9f81c344cef5a6e32"
+  },
+  {
+   "dir": "heroes",
+   "file": "UT_Hero_RolePhoto_130_Max.png",
+   "mirror": true,
+   "url": "https://dl.astral-chip-compass.com/assets/heroes/3d2c9fe67539ba68ca32ea9e768897eda4630efd/UT_Hero_RolePhoto_130_Max.png",
+   "size": 99358,
+   "sha1": "3d2c9fe67539ba68ca32ea9e768897eda4630efd"
+  },
+  {
+   "dir": "heroes",
+   "file": "UT_Hero_RolePhoto_130_Max_sfw.png",
+   "mirror": true,
+   "url": "https://dl.astral-chip-compass.com/assets/heroes/1a16d9fa3d87212a915bd1bcb1387bfd83c93308/UT_Hero_RolePhoto_130_Max_sfw.png",
+   "size": 100376,
+   "sha1": "1a16d9fa3d87212a915bd1bcb1387bfd83c93308"
+  },
+  {
+   "dir": "heroes",
+   "file": "UT_Hero_RolePhoto_130_sfw.png",
+   "mirror": true,
+   "url": "https://dl.astral-chip-compass.com/assets/heroes/c7893749960fd1c2abec9a359cbeac0e2454dd7e/UT_Hero_RolePhoto_130_sfw.png",
+   "size": 99094,
+   "sha1": "c7893749960fd1c2abec9a359cbeac0e2454dd7e"
   },
   {
    "dir": "heroes",
@@ -2002,6 +2377,14 @@
    "url": "https://patchwiki.biligame.com/images/starengine/1/15/2yq7dqr71xojqc315iaoonjzdl7o2wo.png",
    "size": 26511,
    "sha1": "1961462704ee0fcd1ba5ee3c93d3306a7d198fb8"
+  },
+  {
+   "dir": "profiles",
+   "file": "UT_Hero_ProfilePhoto_104_03.png",
+   "mirror": true,
+   "url": "https://dl.astral-chip-compass.com/assets/profiles/4a623685c1e4f271c8f536d299233c5ded9b95df/UT_Hero_ProfilePhoto_104_03.png",
+   "size": 27588,
+   "sha1": "4a623685c1e4f271c8f536d299233c5ded9b95df"
   },
   {
    "dir": "profiles",
@@ -2301,6 +2684,14 @@
   },
   {
    "dir": "profiles",
+   "file": "UT_Hero_ProfilePhoto_113_04.png",
+   "mirror": true,
+   "url": "https://dl.astral-chip-compass.com/assets/profiles/d00dad43a022b1b4538968c50c20f763ffc70e43/UT_Hero_ProfilePhoto_113_04.png",
+   "size": 29016,
+   "sha1": "d00dad43a022b1b4538968c50c20f763ffc70e43"
+  },
+  {
+   "dir": "profiles",
    "file": "UT_Hero_ProfilePhoto_113_Max.png",
    "title": "UT Hero ProfilePhoto 113 Max.png",
    "url": "https://patchwiki.biligame.com/images/starengine/f/f4/ho3e5dqrovf8nh6bf8wjj8h6xltdqhy.png",
@@ -2342,10 +2733,16 @@
   {
    "dir": "profiles",
    "file": "UT_Hero_ProfilePhoto_114_04.png",
-   "title": "UT Hero ProfilePhoto 114 04.png",
-   "url": "https://patchwiki.biligame.com/images/starengine/7/70/nu6yslx7qa68iq45gwwjpbcqkq9n84o.png",
-   "size": 21575,
-   "sha1": "cc143c2cd210d8d7d85650541efd59b65d1399e8"
+   "mirror": true,
+   "url": "https://dl.astral-chip-compass.com/assets/profiles/5db319b443f317f30edec333814b92647e9e6ae2/UT_Hero_ProfilePhoto_114_04.png",
+   "size": 24466,
+   "sha1": "5db319b443f317f30edec333814b92647e9e6ae2",
+   "fallback": {
+    "title": "UT Hero ProfilePhoto 114 04.png",
+    "url": "https://patchwiki.biligame.com/images/starengine/7/70/nu6yslx7qa68iq45gwwjpbcqkq9n84o.png",
+    "size": 21575,
+    "sha1": "cc143c2cd210d8d7d85650541efd59b65d1399e8"
+   }
   },
   {
    "dir": "profiles",
@@ -2469,6 +2866,14 @@
   },
   {
    "dir": "profiles",
+   "file": "UT_Hero_ProfilePhoto_117_04.png",
+   "mirror": true,
+   "url": "https://dl.astral-chip-compass.com/assets/profiles/2bf87c18397921f5805ff08fc121bc91cd541c87/UT_Hero_ProfilePhoto_117_04.png",
+   "size": 31315,
+   "sha1": "2bf87c18397921f5805ff08fc121bc91cd541c87"
+  },
+  {
+   "dir": "profiles",
    "file": "UT_Hero_ProfilePhoto_117_Max.png",
    "title": "UT Hero ProfilePhoto 117 Max.png",
    "url": "https://patchwiki.biligame.com/images/starengine/4/40/tdex0qi6t0p5ad4prddiawklwb6fp5i.png",
@@ -2522,6 +2927,14 @@
    "url": "https://patchwiki.biligame.com/images/starengine/7/70/aarlnpx4crmfn3qtmcu12vf82dzt51u.png",
    "size": 20397,
    "sha1": "582b290002e5f6289f44e585c88f11b84f6b35d2"
+  },
+  {
+   "dir": "profiles",
+   "file": "UT_Hero_ProfilePhoto_119_03.png",
+   "mirror": true,
+   "url": "https://dl.astral-chip-compass.com/assets/profiles/10b2e4d6a4a4f82757047f847c19447f1c783864/UT_Hero_ProfilePhoto_119_03.png",
+   "size": 24015,
+   "sha1": "10b2e4d6a4a4f82757047f847c19447f1c783864"
   },
   {
    "dir": "profiles",
@@ -2677,6 +3090,14 @@
   },
   {
    "dir": "profiles",
+   "file": "UT_Hero_ProfilePhoto_123_03.png",
+   "mirror": true,
+   "url": "https://dl.astral-chip-compass.com/assets/profiles/48fbdec355d6fa8c04e7085fd8cd748d0def195a/UT_Hero_ProfilePhoto_123_03.png",
+   "size": 29841,
+   "sha1": "48fbdec355d6fa8c04e7085fd8cd748d0def195a"
+  },
+  {
+   "dir": "profiles",
    "file": "UT_Hero_ProfilePhoto_123_Max.png",
    "title": "UT Hero ProfilePhoto 123 Max.png",
    "url": "https://patchwiki.biligame.com/images/starengine/0/06/l5bacn4twv4qjifwgntx67x9707e0wq.png",
@@ -2706,6 +3127,14 @@
    "url": "https://patchwiki.biligame.com/images/starengine/7/7c/7rosqdrrvor9nonsx2lyvxawj7a8zj1.png",
    "size": 32336,
    "sha1": "42829d139e20189dfef207fc7cbda487f3d55bdd"
+  },
+  {
+   "dir": "profiles",
+   "file": "UT_Hero_ProfilePhoto_124_03.png",
+   "mirror": true,
+   "url": "https://dl.astral-chip-compass.com/assets/profiles/c3aed18942fbed9e0797db100e71b8a367f57b67/UT_Hero_ProfilePhoto_124_03.png",
+   "size": 33316,
+   "sha1": "c3aed18942fbed9e0797db100e71b8a367f57b67"
   },
   {
    "dir": "profiles",
@@ -2834,6 +3263,22 @@
    "url": "https://patchwiki.biligame.com/images/starengine/5/5b/9r6aopo4rzwm7eze2s51z8au9l8btjp.png",
    "size": 22908,
    "sha1": "5382786e06d780eedd7688d9160094881461f655"
+  },
+  {
+   "dir": "profiles",
+   "file": "UT_Hero_ProfilePhoto_130.png",
+   "mirror": true,
+   "url": "https://dl.astral-chip-compass.com/assets/profiles/4bcb42362eb8e8b7d4b83f4042fb2551d9db2227/UT_Hero_ProfilePhoto_130.png",
+   "size": 28541,
+   "sha1": "4bcb42362eb8e8b7d4b83f4042fb2551d9db2227"
+  },
+  {
+   "dir": "profiles",
+   "file": "UT_Hero_ProfilePhoto_130_Max.png",
+   "mirror": true,
+   "url": "https://dl.astral-chip-compass.com/assets/profiles/ae6ebd46d37b30d7267b2f7e7db680158ed18472/UT_Hero_ProfilePhoto_130_Max.png",
+   "size": 25902,
+   "sha1": "ae6ebd46d37b30d7267b2f7e7db680158ed18472"
   },
   {
    "dir": "profiles",

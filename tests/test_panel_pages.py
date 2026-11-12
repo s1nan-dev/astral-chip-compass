@@ -30,7 +30,7 @@ import numpy as np
 
 from advisor.data import load_db
 from advisor.paths import assets_dir
-from advisor.session import PAGE_SLOTS, PANEL_MIN_CONFIDENCE, Session, Settings
+from advisor.session import PAGE_SLOTS, PANEL_MIN_CONFIDENCE, Session, Settings, split_extra
 from advisor.session import panel as panel_mod
 from advisor.vision import anchors, chip_panel, pipeline, templates
 from advisor.vision.chip_panel import read_chip_panel
@@ -262,6 +262,84 @@ class PatchedAdvise(unittest.TestCase):
         patcher = mock.patch(ADVISE, fake_advise)
         patcher.start()
         self.addCleanup(patcher.stop)
+
+
+class PanelRecomputeTest(PatchedAdvise):
+    """读到「查看筹码」面板、按面板改了已有筹码时，三选一还开着（包括收起来去点面板的）就马上按新的已有筹码重算这一次
+    推荐，重算的 advice 排在 panel_read 后面。"""
+
+    OFFER = (TRUTH[0], FILLER[0], FILLER[1])
+    PANEL = [TRUTH[0], TRUTH[1]]
+
+    def session(self, owned=()) -> Session:
+        s = Session(DB, Settings(hero=HERO))
+        s.game.seen_hero = HERO
+        s.settings.owned = list(owned)
+        s.game.panel_needed = not owned
+        s._clock = lambda: 1000.0
+        return s
+
+    def show(self, s) -> object:
+        return s.on_frame(select(self.OFFER))
+
+    def test_recomputed_advice_after_panel_read(self):
+        """一开始不知道已有筹码（owned_unknown），读到面板以后按面板上的筹码重算：新的 advice 排在 panel_read 后面，
+        局面里的 owned 是面板上的，不再是「不知道」；还是同一次三选一。"""
+        s = self.session()
+        first = self.show(s)
+        self.assertTrue(first.owned_unknown)
+        s.take_events()
+        read = s.on_panel(panel(self.PANEL, "only"))
+        self.assertEqual(read.kind, "panel_read")
+        before, after = split_extra(s.take_events())
+        self.assertEqual(before, [])
+        self.assertEqual([e.kind for e in (read, *after)], ["panel_read", "advice"])
+        advice = after[0]
+        self.assertEqual(tuple(advice.state.owned), tuple(self.PANEL))
+        self.assertFalse(advice.owned_unknown)
+        self.assertEqual(advice.select_no, first.select_no)
+
+    def test_empty_panel_no_recompute(self):
+        """一开始不知道已有筹码，面板上确实一个都没有：已有筹码和局面都没变，推荐也不变，只发 panel_read、不重算（推荐卡片上
+        那行提醒由悬浮窗收到 panel_read 时收起）；之后不再要面板，同一个画面不再重发，同样的读数不再处理。"""
+        s = self.session()
+        first = self.show(s)
+        self.assertTrue(first.owned_unknown)
+        s.take_events()
+        read = s.on_panel(panel([], "only"))
+        self.assertEqual(read.kind, "panel_read")
+        self.assertEqual(s.take_events(), [])
+        self.assertFalse(s.game.panel_needed)
+        self.assertIsNone(self.show(s))
+        self.assertIsNone(s.on_panel(panel([], "only")))
+        self.assertEqual(s.take_events(), [])
+
+    def test_no_recompute_without_select(self):
+        """三选一没显示时读到面板：只发 panel_read，不重算。"""
+        s = self.session()
+        read = s.on_panel(panel(self.PANEL, "only"))
+        self.assertEqual(read.kind, "panel_read")
+        self.assertEqual(s.take_events(), [])
+
+    def test_no_recompute_when_unchanged(self):
+        """面板读数和记着的一样：已有筹码没变，不重算。"""
+        s = self.session(self.PANEL)
+        self.show(s)
+        s.take_events()
+        read = s.on_panel(panel(self.PANEL, "only"))
+        self.assertEqual(read.kind, "panel_read")
+        self.assertEqual(s.take_events(), [])
+
+    def test_no_recompute_on_new_game(self):
+        """按面板判成新的一局：发 newgame，不重算这一次推荐。"""
+        s = self.session(TRUTH[:4])
+        self.show(s)
+        s.take_events()
+        s.game._resume_check = True
+        s.game._resume_base = (list(TRUTH[:4]), {n: "pick" for n in TRUTH[:4]}, {}, {})
+        ev = s.on_panel(panel(TRUTH[4:6], "only"))
+        self.assertEqual(ev.kind, "newgame")
+        self.assertEqual([e.kind for e in s.take_events()], ["panel_read"])
 
 
 class PageSpanTest(unittest.TestCase):

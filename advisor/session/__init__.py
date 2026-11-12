@@ -22,6 +22,11 @@
 
 星数只认左侧玩家列表上读到的，不由三选一的概率行改写。概率行用来判断这次三选一的来源：
 升星和筹码商店的概率行由星数决定（0、1 星是同一行），任务和【循环往复】的由任务等级决定。
+升星和筹码商店的概率行、最左格都一样，这两种按画面上别的迹象分（Session._source_of）：三选一出现之前不久读到的自己的
+升星横幅（横幅上的名次对得上自己在玩家列表上的那一行，on_levelup_banner）、玩家列表上的星数涨了（出现之前，或三选一画面上
+读到多 1）算升星；出现之前不久看到了筹码商店的购买窗（on_shop_window）、出现之前已经是 3 星算筹码商店；两样都有时按升星。
+都没有时拿不准，推荐照旧按升星算；三选一关掉以后第一次在对局画面上读到星数时按涨没涨补准，发 source_settled
+（Session._settle_sources）。怎么定的写在推荐事件上（Event.source_by，取值见 selection.SOURCE_BY）。
 
 概率行还用来判定本局难度（settings.difficulty）：每次三选一的概率行和普通难度的概率表某一行完全相同，本局就是普通难度；
 和困难及以上的表某一行相同，就是困难及以上；都对不上（文字识别失败等）时沿用本局已判定的难度，本局还没判定时按困难及以上。
@@ -87,9 +92,9 @@
 from ..prefs import (GAME_FIELDS, SETTINGS_INT_LIMIT, SETTINGS_ORPHAN, SETTINGS_RETRY_S, _KINDS, Settings, _field_types,
                      _file_key, _fits, _parse_settings, _write_settings)
 from .core import (CHIP_SOURCE_LABEL, CONFIDENCE_LABEL, FOREIGN_CONFIRM, GAIN_GRACE, HERO_SELECT_LOG_S, LEDGER_KEEP,
-                   MAP_SCREEN_SOURCES, MAP_SOURCE_LABEL, MATE_CONFIRM, ROUND_OVER_PROGRESS, STAR_COSTS,
-                   STAR_MIN_CONFIDENCE, UNSUPPORTED_ORDER, UNSUPPORTED_TEXT, WHOLE_GAME_ROUND, SchemeChoice, Session,
-                   WatchHints)
+                   MAP_SCREEN_SOURCES, MAP_SOURCE_LABEL, MATE_CONFIRM, ROUND_OVER_PROGRESS, SOURCE_CUE_S, STAR_COSTS,
+                   STAR_MIN_CONFIDENCE, TABLE_STATS, TABLE_WAIT_S, UNSUPPORTED_ORDER, UNSUPPORTED_TEXT, WHOLE_GAME_ROUND,
+                   SchemeChoice, Session, WatchHints)
 from .difficulty import DIFFICULTY_SOURCE_LABEL, DifficultyInfo, resolve_difficulty
 from .events import FIRST_KINDS, HISTORY, KINDS, Event, EventLog, _event_record, _jsonable, split_extra
 from .game_state import GameState, PendingNextGame, UndoPoint
@@ -99,5 +104,5 @@ from .newgame import (CONFIRM, CONFIRM_S, NEWGAME_PROGRESS_DROP, NEWGAME_PROGRES
 from .offgame import (END_ROUND_CONFIRM_S, OUT_CONFIRM_GAP_S, OUT_CONFIRM_S, OUT_OF_GAME_LABEL, ROOM_KINDS,
                       SCREEN_RULES, ScreenRule, _put_reading)
 from .panel import PAGE_SLOTS, PANEL_MIN_CONFIDENCE, RESUME_CHECK_S, RESUME_MISSING_MIN
-from .selection import (DEFAULTS_KEEP, GONE_FRAMES, HOLD_MAX_S, HOLD_READS, HOLD_RETRY_S, SOURCE_LABEL, AdviceMemo,
-                        SelectTracker, _about_slot, compute_outside)
+from .selection import (DEFAULTS_KEEP, GONE_FRAMES, HOLD_MAX_S, HOLD_READS, HOLD_RETRY_S, SETTLE_BY, SOURCE_BY,
+                        SOURCE_LABEL, AdviceMemo, SelectTracker, _about_slot, compute_outside)

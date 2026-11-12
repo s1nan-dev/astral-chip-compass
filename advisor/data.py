@@ -240,6 +240,10 @@ class HeroSynergy:
     keep_schools: bool | tuple[str, ...] = False
     # 这个角色的扣分（适配表 [[hero]] 的 keep_schools_penalty，负数）；None 时用 rules.toml [synergy] keep_schools
     keep_schools_penalty: float | None = None
+    # 这几张筹码不加「推荐流派」这一笔分（适配表 [[hero]] 的 school_skip）：推荐流派里有几张这名角色用不上的筹码时，
+    # 用它代替一条条写扣分的规则。筹码照旧算这个流派的筹码（要保的流派扣分、开套预判照旧），只是不拿推荐流派的分。
+    # 只用于默认推荐；推荐流派来自玩家思路时不起作用（engine.parts._build_parts）
+    school_skip: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, eq=False)
@@ -1152,6 +1156,37 @@ def _keep_schools(raw: dict, name: str, schools: tuple[str, ...], warn) -> tuple
     return keep, float(penalty)
 
 
+def _school_skip(raw: dict, name: str, schools: tuple[str, ...], chips: dict[str, Chip],
+                 warn) -> tuple[str, ...]:
+    """[[hero]] 的 school_skip（这几张筹码不加「推荐流派」这一笔分）整理成 HeroSynergy.school_skip。
+    schools 是这个角色写对了的推荐流派。
+
+    没写时为空。要写成筹码名的列表；写成别的值时记警告、按没写处理。名单里不是筹码名的、不属于任何流派的、
+    流派不在 schools 里的记警告、去掉（写了也不起作用，多半是写错了）；重复的只算一次。
+    """
+    value = raw.get("school_skip")
+    if value is None:
+        return ()
+    if not _is_names(value):
+        warn(f"角色 {name}：school_skip 应为筹码名的列表，已忽略")
+        return ()
+    out: list[str] = []
+    for chip_name in dict.fromkeys(value):
+        chip = chips.get(chip_name)
+        if chip is None:
+            warn(f"角色 {name}：school_skip 里的筹码「{chip_name}」不存在，已忽略")
+            continue
+        if not chip.school:
+            warn(f"角色 {name}：school_skip 里的筹码「{chip_name}」不属于任何流派，已忽略")
+            continue
+        if chip.school not in schools:
+            warn(f"角色 {name}：school_skip 里的筹码「{chip_name}」的流派「{chip.school}」不在 schools"
+                 f"（推荐流派）里，已忽略")
+            continue
+        out.append(chip_name)
+    return tuple(out)
+
+
 def _player_entry(p: dict, name: str, warn) -> dict:
     """[[player]] 的一段整理成 _merge_players 直接能用的样子（不改原表）：四档里不是筹码名列表的一档（误写成一个字符串时
     按字拆开会变成一串不存在的筹码）记一条警告、整档忽略；写错的规则跳过（_valid_rules）；推荐流派不是名称的列表时忽略，
@@ -1531,7 +1566,9 @@ def load_db(data_path: str | None = None) -> DB:
         for s in schools:
             if s not in SCHOOLS:
                 warn(f"角色 {name}：流派「{s}」不存在")
-        keep, penalty = _keep_schools(h, name, tuple(s for s in schools if s in SCHOOLS), warn)
+        known_schools = tuple(s for s in schools if s in SCHOOLS)
+        keep, penalty = _keep_schools(h, name, known_schools, warn)
+        skip = _school_skip(h, name, known_schools, chips, warn)
         why = h.get("why", "")
         if not isinstance(why, str):
             warn(f"角色 {name}：why 应为文字，已忽略")
@@ -1543,6 +1580,7 @@ def load_db(data_path: str | None = None) -> DB:
             rules=tuple(collected),
             keep_schools=keep,
             keep_schools_penalty=penalty,
+            school_skip=skip,
         )
     for name in heroes:
         if name not in hero_synergy:
@@ -1697,12 +1735,16 @@ def load_db(data_path: str | None = None) -> DB:
     )
 
 
+# rules.toml [pool] leftmost、reroll_leftmost（最左格的出法）的取值；各自怎么出见 advisor/pool.py 的 REROLL_LEFT_*。
+# 放在这里，载入时核对取值不用导入推荐那一层（advisor/pool.py 从这里取）
+LEFTMOST_MODES = ("rarity", "class_pool", "class_tag", "random")
+
 # rules.toml 里推荐要用到的项（_check_rules 载入时核对）：节 → {键: 取值的种类，见 _rule_value_problem}。
 # 缺了这几项，推荐算到那里才出错；载入时先记一条警告，写明缺哪一项
 _RULES_REQUIRED = {
     "rarity": {"rows": "rows", "fixed": "rarities"},
     "reroll": {"initial": "count", "per_star": "count", "endless_cycle": "count"},
-    "pool": {"max_schools": "posint", "keyword_boost": "pos", "leftmost_class_pool": "bool"},
+    "pool": {"max_schools": "posint", "keyword_boost": "pos"},
     "official": {"growth": "num", "fit": "num", "fit_minor": "num", "tag": "num", "keyword": "num", "class_threshold": "num",
                  "keyword_schools": "schools"},
     "synergy": {"core": "num", "first": "num", "second": "num", "avoid": "num", "core_lead": "num", "school": "num",
@@ -1723,7 +1765,8 @@ _RULES_REQUIRED = {
 # 写了才核对的项（不写时推荐按默认值算，或这一项不起作用）
 _RULES_OPTIONAL = {
     "rarity": {"normal": "rows"},
-    "pool": {"accumulate_class_points": "bool"},
+    "pool": {"accumulate_class_points": "bool", "leftmost_class_pool": "bool", "leftmost": "leftmost_mode",
+             "reroll_leftmost": "leftmost_mode"},
     "official": {"scale": "num"},
     "endless_cycle": {"star_rate": "num"},
     "income": {"exempt_traits": "traits", "exempt_owned": "chip_texts", "late": "chip_rounds", "late_factor": "num"},
@@ -1783,6 +1826,8 @@ def _rule_value_problem(kind: str, value, known: dict) -> str | None:
         return None if _is_int(value) and value > 0 else "应为正整数"
     if kind == "bool":
         return None if isinstance(value, bool) else "应为 true 或 false"
+    if kind == "leftmost_mode":  # 最左格的出法（LEFTMOST_MODES）
+        return None if value in LEFTMOST_MODES else f"应为 {'、'.join(LEFTMOST_MODES)} 之一"
     if kind == "rows":  # 行号 = 星数 0～3，每行蓝 / 紫 / 金；一行合计为 0 时按比例换算会除零
         ok = (isinstance(value, list) and len(value) == 4
               and all(isinstance(r, list) and len(r) == 3 and all(_is_number(p) and p >= 0 for p in r) and sum(r) > 0

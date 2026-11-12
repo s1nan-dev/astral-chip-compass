@@ -115,8 +115,16 @@ KNOWN["20261002_214923_chipselect_task_tier2_banner_gone_after_reroll2_real.jpg"
               "紧接着就是 214927 的另一次三选一，中间没有关闭的画面：到 214927 概率行换了才结算这一次（看到的是补录提示，"
               "回放替用户补录银行卡-余额多），这张看完时还没记下")}
 KNOWN["20261002_213051_chipselect_team_task_tier1_real.jpg"] = {"advice.round": (3, REAL_ROUND)}
-# 标注里的来源 → 推荐用的来源（升星和筹码商店的算法相同，画面上也分不出）
-SOURCE_OF = {"levelup": "levelup", "shop": "levelup", "task": "task"}
+
+
+class AnyOf(tuple):
+    """这几个值里任一个都算对（标注是筹码商店、单张截图上又分不出来源时用）。"""
+
+
+# 标注里的来源 → 推荐里算对的来源。单张截图回放时多半没有横幅、购买窗，Session 常常拿不准、照旧按升星算；所以标注是
+# 筹码商店时，推荐里的来源是 shop 或 levelup 都算对（认出来了，或者拿不准）；标注是升星时只有 levelup 算对，定成 shop
+# 就报出来
+SOURCE_OF = {"levelup": AnyOf(("levelup",)), "shop": AnyOf(("shop", "levelup")), "task": AnyOf(("task",))}
 
 
 def describe(ev, session) -> str:
@@ -317,7 +325,11 @@ def check(records: list[dict], labels: dict) -> list[str]:
                 got = advice.advice.best if field == "best" else getattr(advice.state, field)
             else:
                 got = rec[key]
-            if got != value:
+            if isinstance(value, AnyOf):
+                ok = got in value
+            else:
+                ok = got == value
+            if not ok:
                 why = known.get(key, (None, ""))[1]
                 problems.append(f"{name}：{key} 应为 {value!r}，实际 {got!r}" + (f"（{why}）" if why else ""))
     return problems

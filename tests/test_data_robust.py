@@ -331,6 +331,24 @@ class RulesCheckTest(Base):
             "rules.toml [softmax] temperature：应为大于 0 的数",
         ]))
 
+    def test_leftmost_mode_values_warned(self):
+        # 最左格出法的取值写错：载入时记警告，写明应为哪几种（同 reroll_leftmost）
+        edits = (
+            ('leftmost = "class_tag"', 'leftmost = "none-such"'),
+            ('reroll_leftmost = "class_tag"', 'reroll_leftmost = "none-such"'),
+        )
+
+        def broken(text: str) -> str:
+            for old, new in edits:
+                text = self.replace(old, new)(text)
+            return text
+
+        db = self.load(rules_toml=broken)
+        self.assertEqual(sorted(db.warnings), sorted([
+            "rules.toml [pool] leftmost：应为 rarity、class_pool、class_tag、random 之一",
+            "rules.toml [pool] reroll_leftmost：应为 rarity、class_pool、class_tag、random 之一",
+        ]))
+
     def test_non_finite_numbers_warned(self):
         # TOML 认得 inf、nan，它们也是数：共用的数值（[synergy] keep_schools）、当除数的（temperature）、要大于 1 的
         # （end_round）、按星数的列表（[lookahead] picks）写成 inf、nan 时记警告，同角色的 keep_schools_penalty。不这样

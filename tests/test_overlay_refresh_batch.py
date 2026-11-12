@@ -477,8 +477,9 @@ class CollapsedCardTest(unittest.TestCase):
             w.cards["scheme"].toggle.click()  # 收起「筹码方案」
             self.assertFalse(w.card_open("scheme"))
         twin.frame(("on_frame", frame_seen(OFFER, selected=0)))
-        # 紧接着的另一次三选一（概率行换了）：上一次在这一帧里结算，新的这次角色仍待识别
-        self.assertEqual(twin.frame(("on_frame", frame_seen(OFFER2, row=1))), ["picked", "hero_needed"])
+        # 紧接着的另一次三选一（概率行换了）：上一次在这一帧里结算，新的这次角色仍待识别。上一次没给推荐（角色待识别），
+        # 关掉时另发一条 unadvised（推荐日志、对局报告记没给推荐的那几次），排在这一帧的事件后面
+        self.assertEqual(twin.frame(("on_frame", frame_seen(OFFER2, row=1))), ["picked", "hero_needed", "unadvised"])
         merged, single = twin.looks()
         self.assertEqual(merged, single)
         for w in twin.windows():

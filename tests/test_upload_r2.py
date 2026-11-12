@@ -11,7 +11,8 @@
                   文件清单两个附件）、公开地址下回来不对、R2 回错、R2 回重定向时停在哪一步、报的 R2 状态；最后按段取发行包：
                   回 206 时通过，回 200、Content-Range 或长度不对时只打警告；试运行不发上传请求；本地的东西不对（含文件清单
                   不在、和压缩包对不上）、压缩包大小超出上下限时一个请求都不发；任何输出（标准输出、标准错误、异常的说明）里都
-                  没有令牌的值
+                  没有令牌的值。备用地址上的识别图片：--assets-only 只传图片；整套流程里在发行包之前传；本地图片、地址和清单
+                  对不上时一个请求都不发；读回来不对时退出码 2；试运行只列不传
   AddressTest     写死的公开地址、GitHub 接口和程序查更新用的一样（advisor/update.py 的 MIRROR_BASE、GITHUB_API）
 脚本发往本机以外的请求在测试里直接算失败（UploadFlowTest.local_only），不会真的发出去。
 单独跑：python -B tools/run_tests.py --only test_upload_r2
@@ -74,6 +75,14 @@ def write_token(path: Path, *lines: str, bom: bool = False) -> Path:
     """令牌文件：各行用 CRLF 连起来。"""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes((b"\xef\xbb\xbf" if bom else b"") + "\r\n".join(lines).encode("utf-8"))
+    return path
+
+
+def write_manifest(path: Path, items=()) -> Path:
+    """识别图片的清单：只写 items（用不到的几节不写）。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"version": 1, "generated": "2030-01-02", "items": list(items)}, ensure_ascii=False,
+                               indent=1), encoding="utf-8")
     return path
 
 
@@ -492,6 +501,10 @@ class UploadFlowTest(unittest.TestCase):
                                  f"secret_access_key={FAKE_SECRET}", f"endpoint={self.cloud.endpoint}")
         self.notes = self.folder / "notes.txt"
         self.notes.write_bytes(b"\xef\xbb\xbf" + NOTES_TEXT.encode("utf-8"))  # 带 BOM：传上去的不带
+        # 识别图片：本地图片在 --assets-dir 下，清单默认是空的（整套流程里打一行「清单里没有放在备用地址上的图片」）
+        self.images = self.folder / "images"
+        self.images.mkdir()
+        self.manifest = write_manifest(self.folder / "assets_manifest.json")
         self.cloud.github = (200, self.github(VERSION))
         self.outside: list[str] = []
         self.addCleanup(lambda: self.assertEqual(self.outside, [], "脚本往本机以外的地址发了请求"))
@@ -519,7 +532,8 @@ class UploadFlowTest(unittest.TestCase):
 
     def upload(self, *extra: str, notes: bool = True, token: bool = True, zip_arg: bool = True) -> tuple[int, str, str]:
         """跑 main()，返回（退出码, 标准输出, 标准错误）。每次都核对输出里没有令牌的值。"""
-        argv = ["--public-base", self.cloud.url("/pub/"), "--github-api", self.cloud.url("/gh/latest")]
+        argv = ["--public-base", self.cloud.url("/pub/"), "--github-api", self.cloud.url("/gh/latest"),
+                "--manifest", str(self.manifest), "--assets-dir", str(self.images)]
         if zip_arg:
             argv += ["--zip", str(self.zip)]
         if token:
@@ -600,8 +614,8 @@ class UploadFlowTest(unittest.TestCase):
                          ("application/vnd.github+json", "2022-11-28"))
         self.assertTrue(github.get("user-agent", "").startswith("AstralChipCompass/"))
         self.assertIn("已传 100%", out)
-        for step in range(1, 11):
-            self.assertIn(f"第 {step}/10 步", out)
+        for step in range(1, 12):
+            self.assertIn(f"第 {step}/11 步", out)
         for key in expected_headers:
             self.assertIn(self.cloud.url(f"/pub/{key}"), out)
         self.assertIn(f"SHA-256 {self.sha}", out)
@@ -677,7 +691,7 @@ class UploadFlowTest(unittest.TestCase):
                 code, out, err = self.upload()
                 self.assertEqual(code, 1)
                 self.assertEqual(self.cloud.log, [("GET", "/gh/latest")])
-                self.assertIn("停在第 1/10 步（核对 GitHub）", err)
+                self.assertIn("停在第 1/11 步（核对 GitHub）", err)
                 self.assertIn(message, err)
                 self.assertIn("R2 上什么都没动。", err)
         self.assertEqual(self.cloud.objects, {})
@@ -705,7 +719,7 @@ class UploadFlowTest(unittest.TestCase):
                 self.assertEqual(self.cloud.log, [("GET", "/gh/latest"), ("PUT", "/acc-update/releases/ACC-1.0.1.zip"),
                                                   ("GET", "/pub/releases/ACC-1.0.1.zip")])
                 self.assertEqual(sorted(self.cloud.objects), ["releases/ACC-1.0.1.zip"])
-                self.assertIn("停在第 3/10 步（从公开地址下回来核对）：公开地址下回来的和传上去的不一样", err)
+                self.assertIn("停在第 4/11 步（从公开地址下回来核对）：公开地址下回来的和传上去的不一样", err)
                 self.assertIn("已经传上去的：releases/ACC-1.0.1.zip", err)
                 self.assertIn("还没传的：releases/ACC-1.0.1.files.json、ACC-latest.zip（R2 上的还是原来那一份，手动下载拿到的"
                               "不是这一版）", err)
@@ -719,7 +733,7 @@ class UploadFlowTest(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertEqual(self.puts(), ["/acc-update/releases/ACC-1.0.1.zip", "/acc-update/releases/ACC-1.0.1.files.json"])
         self.assertEqual(self.cloud.log[-1], ("GET", "/pub/releases/ACC-1.0.1.files.json"))
-        self.assertIn("停在第 5/10 步（从公开地址读回文件清单核对）：公开地址下回来的和传上去的不一样", err)
+        self.assertIn("停在第 6/11 步（从公开地址读回文件清单核对）：公开地址下回来的和传上去的不一样", err)
         self.assertIn("已经传上去的：releases/ACC-1.0.1.zip、releases/ACC-1.0.1.files.json", err)
         self.assertIn("还没传的：ACC-latest.zip", err)
         self.assertNotIn("latest.json", self.cloud.objects)
@@ -728,7 +742,7 @@ class UploadFlowTest(unittest.TestCase):
         self.cloud.tamper["latest.json"] = b'{"format": 1, "version": "1.0.0"}'
         code, out, err = self.upload()
         self.assertEqual(code, 2)
-        self.assertIn("停在第 9/10 步（从公开地址读回 latest.json 核对）：公开地址读回的 latest.json 和传上去的不一样", err)
+        self.assertIn("停在第 10/11 步（从公开地址读回 latest.json 核对）：公开地址读回的 latest.json 和传上去的不一样", err)
         self.assertIn("已经传上去的：releases/ACC-1.0.1.zip、releases/ACC-1.0.1.files.json、ACC-latest.zip、"
                       "notes/1.0.1.txt、latest.json", err)
         self.assertNotIn("还没传的", err)
@@ -743,7 +757,7 @@ class UploadFlowTest(unittest.TestCase):
         self.cloud.fail_put["ACC-latest.zip"] = (403, body)
         code, out, err = self.upload()
         self.assertEqual(code, 2)
-        self.assertIn("停在第 6/10 步（传 ACC-latest.zip）：传 ACC-latest.zip：R2 回 HTTP 403"
+        self.assertIn("停在第 7/11 步（传 ACC-latest.zip）：传 ACC-latest.zip：R2 回 HTTP 403"
                       "（AccessDenied：key <令牌已隐去> at <令牌已隐去> denied）", err)
         self.assertIn("已经传上去的：releases/ACC-1.0.1.zip、releases/ACC-1.0.1.files.json", err)
         self.assertIn("没传成的：ACC-latest.zip", err)
@@ -760,7 +774,7 @@ class UploadFlowTest(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertEqual(self.cloud.log, [("GET", "/gh/latest"), ("PUT", "/acc-update/releases/ACC-1.0.1.zip")])
         self.assertEqual(self.cloud.problems, [])
-        self.assertIn("停在第 2/10 步（传发行包）：传 releases/ACC-1.0.1.zip：R2 回 HTTP 307", err)
+        self.assertIn("停在第 3/11 步（传发行包）：传 releases/ACC-1.0.1.zip：R2 回 HTTP 307", err)
         self.assertEqual(self.cloud.objects, {})
 
     def test_size_limits(self):
@@ -795,7 +809,8 @@ class UploadFlowTest(unittest.TestCase):
         body = f"<Error><Code>AccessDenied</Code><Message>{FAKE_KEY_ID} {self.cloud.endpoint}</Message></Error>"
         self.cloud.fail_put["ACC-latest.zip"] = (403, body.encode())
         run = upload_r2.Upload(upload_r2.parse_args(["--zip", str(self.zip), "--token-file", str(self.token),
-                                                     "--public-base", self.cloud.url("/pub/")]))
+                                                     "--public-base", self.cloud.url("/pub/"),
+                                                     "--manifest", str(self.manifest), "--assets-dir", str(self.images)]))
         run.prepare()
         with self.assertRaises(upload_r2.UploadError) as caught:
             run.put(run.latest_zip_item)
@@ -813,7 +828,7 @@ class UploadFlowTest(unittest.TestCase):
         with mock.patch.object(upload_r2, "_open", side_effect=interrupt):
             code, out, err = self.upload()
         self.assertEqual(code, 2)
-        self.assertIn("停在第 2/10 步（传发行包）：按了 Ctrl+C，中断了", err)
+        self.assertIn("停在第 3/11 步（传发行包）：按了 Ctrl+C，中断了", err)
         self.assertIn("没传成的：releases/ACC-1.0.1.zip", err)
 
     def test_dry_run_sends_no_upload(self):
@@ -826,11 +841,11 @@ class UploadFlowTest(unittest.TestCase):
         for text in ("releases/ACC-1.0.1.zip", "ACC-latest.zip", 'attachment; filename="ACC-1.0.1.zip"',
                      "notes/1.0.1.txt", "Cache-Control: public, max-age=31536000, immutable", '"version": "1.0.1"',
                      f'"sha256": "{self.sha}"', "令牌文件：三项都在（内容不显示）",
-                     f"文件清单：{self.files}", "  4. 传 releases/ACC-1.0.1.files.json",
+                     f"文件清单：{self.files}", "  5. 传 releases/ACC-1.0.1.files.json",
                      "Content-Type: application/json；Cache-Control: public, max-age=31536000, immutable",
-                     "  5. 从公开地址读回文件清单", '"files": "releases/ACC-1.0.1.files.json"',
+                     "  6. 从公开地址读回文件清单", '"files": "releases/ACC-1.0.1.files.json"',
                      f'"files_size": {self.files_size}', f'"files_sha256": "{self.files_sha}"',
-                     "  10. 从公开地址按段取发行包的前 1024 字节"):
+                     "  11. 从公开地址按段取发行包的前 1024 字节"):
             self.assertIn(text, out)
         self.assertIn("试运行结束：R2 上什么都没动", out)
         self.cloud.log.clear()
@@ -839,7 +854,7 @@ class UploadFlowTest(unittest.TestCase):
         self.cloud.github = (200, self.github("1.0.0"))
         code, out, err = self.upload("--dry-run")
         self.assertEqual(code, 1)
-        self.assertIn("试运行停在第 1/10 步", err)
+        self.assertIn("试运行停在第 1/11 步", err)
         self.assertEqual(self.cloud.objects, {})
 
     def test_local_problems_send_nothing(self):
@@ -931,6 +946,154 @@ class UploadFlowTest(unittest.TestCase):
         self.assertEqual((code, err), (0, ""))
         self.assertIn(f"文件清单：{elsewhere}", out)
         self.assertEqual(self.cloud.objects["releases/ACC-1.0.1.files.json"][0], self.files_bytes)
+
+    # -------------------------------------------------- 备用地址上的识别图片
+
+    def image(self, name: str = "UT_Hero_ProfilePhoto_117_04.png", folder: str = "profiles",
+              data: bytes | None = None, **override) -> dict:
+        """写一张本地图片，返回清单里的一项（mirror 为 true，url 照公开地址和内容的 SHA-1 写）。"""
+        data = os.urandom(300) if data is None else data
+        path = self.images / folder / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        sha1 = hashlib.sha1(data).hexdigest()
+        entry = {"dir": folder, "file": name, "mirror": True, "size": len(data), "sha1": sha1,
+                 "url": self.cloud.url(f"/pub/assets/{folder}/{sha1}/{name}")}
+        entry.update(override)
+        return entry
+
+    def key_of(self, entry: dict) -> str:
+        """清单里的一项对应的 R2 键（公开地址后面那一截）。"""
+        return entry["url"][len(self.cloud.url("/pub/")):]
+
+    def test_assets_only_uploads_only_images(self):
+        """--assets-only：只传图片、读回来核对；键、Content-Type、缓存头都对；不问 GitHub，不传发行包、文件清单和 latest.json。"""
+        entry = self.image()
+        write_manifest(self.manifest, [entry])
+        key = self.key_of(entry)
+        code, out, err = self.upload("--assets-only", notes=False, zip_arg=False)
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(self.cloud.log, [("PUT", f"/acc-update/{key}"), ("GET", f"/pub/{key}")])
+        self.assertEqual(self.cloud.problems, [])
+        headers = self.cloud.objects[key][1]
+        self.assertEqual((headers.get("content-type"), headers.get("cache-control")),
+                         ("image/png", "public, max-age=31536000, immutable"))
+        self.assertEqual(self.cloud.objects[key][0], (self.images / "profiles" / entry["file"]).read_bytes())
+        self.assertIn(f"第 {upload_r2.ASSET_STEP}/{len(upload_r2.STEPS)} 步", out)
+        self.assertIn("大小、SHA-1 都和清单上的一样", out)
+        self.assertIn("全部完成", out.splitlines()[-1])
+        self.assertNotIn("latest.json", out)
+
+    def test_release_flow_uploads_assets_first(self):
+        """照原来的流程：图片在第 2 步、发行包之前传，各一张都读回来核对过；键、请求头都对。"""
+        first = self.image("UT_Hero_ProfilePhoto_117_04.png")
+        second = self.image("UT_Hero_ProfilePhoto_117_05.png", data=os.urandom(500))
+        write_manifest(self.manifest, [first, second])
+        keys = [self.key_of(first), self.key_of(second)]
+        code, out, err = self.upload()
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(self.cloud.log, [
+            ("GET", "/gh/latest"),
+            ("PUT", f"/acc-update/{keys[0]}"),
+            ("PUT", f"/acc-update/{keys[1]}"),
+            ("GET", f"/pub/{keys[0]}"),
+            ("GET", f"/pub/{keys[1]}"),
+            ("PUT", "/acc-update/releases/ACC-1.0.1.zip"),
+            ("GET", "/pub/releases/ACC-1.0.1.zip"),
+            ("PUT", "/acc-update/releases/ACC-1.0.1.files.json"),
+            ("GET", "/pub/releases/ACC-1.0.1.files.json"),
+            ("PUT", "/acc-update/ACC-latest.zip"),
+            ("PUT", "/acc-update/notes/1.0.1.txt"),
+            ("PUT", "/acc-update/latest.json"),
+            ("GET", "/pub/latest.json"),
+            ("GET", "/pub/releases/ACC-1.0.1.zip"),
+        ])
+        self.assertEqual(self.cloud.problems, [])
+        for key, entry in zip(keys, (first, second)):
+            with self.subTest(key=key):
+                headers = self.cloud.objects[key][1]
+                self.assertEqual((headers.get("content-type"), headers.get("cache-control")),
+                                 ("image/png", "public, max-age=31536000, immutable"))
+        self.assertIn(f"第 2/{len(upload_r2.STEPS)} 步：传备用地址上的识别图片", out)
+        self.assertIn(f"第 3/{len(upload_r2.STEPS)} 步：传 releases/ACC-1.0.1.zip", out)
+        # 摘要里图片按清单的 SHA-1 写
+        self.assertIn(f"SHA-1 {first['sha1']}", out)
+
+    def test_local_image_mismatch_stops_before_upload(self):
+        """本地图片和清单对不上（大小、SHA-1、文件不在）：退出码 1，一个请求都没发，说明写明是哪一张、提示重新生成清单。"""
+        for label, override in (("大小", {"size": 301}), ("SHA-1", {"sha1": "0" * 40})):
+            with self.subTest(label):
+                self.cloud.log.clear()
+                write_manifest(self.manifest, [self.image(**override)])
+                code, out, err = self.upload("--assets-only", notes=False, zip_arg=False)
+                self.assertEqual((code, self.cloud.log), (1, []))
+                self.assertIn("备用地址上的识别图片和清单对不上，一张都没传", err)
+                self.assertIn("UT_Hero_ProfilePhoto_117_04.png", err)
+                self.assertIn("tools/make_assets_manifest.py", err)
+        entry = self.image()
+        write_manifest(self.manifest, [entry])
+        (self.images / "profiles" / entry["file"]).unlink()
+        code, out, err = self.upload("--assets-only", notes=False, zip_arg=False)
+        self.assertEqual((code, self.cloud.log), (1, []))
+        self.assertIn("本地没有", err)
+
+    def test_bad_image_url_stops_before_upload(self):
+        """url 不在公开地址下，或者键的样子不对（地址里的 SHA-1 不是清单写的）：退出码 1，一张都没传。"""
+        wrong_key = self.cloud.url("/pub/assets/profiles/" + "1" * 40 + "/UT_Hero_ProfilePhoto_117_04.png")
+        for label, url in (("别的地址", "https://example.com/assets/profiles/x/y.png"), ("键不对", wrong_key)):
+            with self.subTest(label):
+                self.cloud.log.clear()
+                write_manifest(self.manifest, [self.image(url=url)])
+                code, out, err = self.upload("--assets-only", notes=False, zip_arg=False)
+                self.assertEqual((code, self.cloud.log), (1, []))
+                self.assertIn("url 应是以公开地址开头的", err)
+
+    def test_image_readback_mismatch_exits_2(self):
+        """传上去以后读回来不对：退出码 2，说明里写明已经传上去的几张。"""
+        first = self.image("UT_Hero_ProfilePhoto_117_04.png")
+        second = self.image("UT_Hero_ProfilePhoto_117_05.png", data=os.urandom(400))
+        write_manifest(self.manifest, [first, second])
+        keys = [self.key_of(first), self.key_of(second)]
+        self.cloud.tamper[keys[1]] = b"other bytes"
+        code, out, err = self.upload("--assets-only", notes=False, zip_arg=False)
+        self.assertEqual(code, 2)
+        self.assertIn(f"停在第 {upload_r2.ASSET_STEP}/{len(upload_r2.STEPS)} 步", err)
+        self.assertIn("读回的识别图片和清单对不上", err)
+        self.assertIn("已经传上去的：" + "、".join(keys), err)
+
+    def test_image_dry_run_lists_without_r2(self):
+        """--dry-run：核对、列出图片（键、大小），不连 R2；加 --assets-only 时连 GitHub 也不问。"""
+        entry = self.image()
+        write_manifest(self.manifest, [entry])
+        code, out, err = self.upload("--assets-only", "--dry-run", notes=False, zip_arg=False)
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(self.cloud.log, [])
+        self.assertIn("要传的图片：", out)
+        self.assertIn(self.key_of(entry), out)
+        self.assertIn("试运行结束：R2 上什么都没动", out)
+
+    def test_release_dry_run_lists_images(self):
+        """整套流程的 --dry-run：概览里说有几张图片，要做的事的第 2 项列出图片的键和大小；只问 GitHub，不连 R2。"""
+        entry = self.image()
+        write_manifest(self.manifest, [entry])
+        code, out, err = self.upload("--dry-run")
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(self.cloud.log, [("GET", "/gh/latest")])
+        self.assertIn("  备用地址上的识别图片：1 张", out)
+        self.assertIn(f"  2. 传备用地址上的识别图片（1 张）：{self.key_of(entry)}（", out)
+        self.assertIn("  3. 传 releases/ACC-1.0.1.zip", out)
+        self.assertIn("试运行结束：R2 上什么都没动", out)
+        self.assertEqual(self.cloud.objects, {})
+
+    def test_no_mirror_images_in_manifest(self):
+        """清单里没有 mirror 为 true 的项：照原来的流程跑完，打一行「清单里没有放在备用地址上的图片」，不传图片。"""
+        write_manifest(self.manifest, [{"dir": "chips", "file": "UT_RelicBase_Blue.png", "size": 1, "sha1": "0" * 40}])
+        code, out, err = self.upload()
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn("清单里没有放在备用地址上的图片", out)
+        self.assertEqual(self.puts(), ["/acc-update/releases/ACC-1.0.1.zip", "/acc-update/releases/ACC-1.0.1.files.json",
+                                       "/acc-update/ACC-latest.zip", "/acc-update/notes/1.0.1.txt",
+                                       "/acc-update/latest.json"])
 
 
 class AddressTest(unittest.TestCase):

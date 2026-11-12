@@ -19,6 +19,7 @@ HISTORY = 400  # 诊断用的最近事件最多留几条
 KINDS = frozenset({
     "advice", "picked", "unreadable", "idle", "missed_pick", "status", "newgame", "game_over", "hero_needed",
     "refreshing", "panel_prompt", "panel_read", "map_read", "pick_reverted", "unrecorded_gain", "panel_tab",
+    "source_settled", "table", "unadvised",
 })
 # 一次调用 Session 以后取走的提示类事件里，排在这次调用的主要事件前面的几种（见 split_extra）：同一组候选又出现时撤销刚记下
 # 的筹码（pick_reverted），紧接着出现另一次三选一时补发的上一次的结算（picked、missed_pick）。悬浮窗先把它们记到上一次的
@@ -59,6 +60,9 @@ class Event:
     # unrecorded_gain 星数增加，却没有对应的三选一记录（count 个筹码待补录；why 写明星数变化）
     # panel_tab 「查看筹码」面板开着，但选中的是队友的页签（count 是自己的页签从左数第几个）；
     #           提示过之后面板关了或切到了自己的页签时再发一次，count 为 0（收起提示）
+    # source_settled 三选一关掉以后按星数补准了那一次的来源：select_no 是那一次推荐事件上的编号，source 是 levelup 或
+    #           shop，source_by 是 stars（拿不准的、按购买窗定的，关掉以后第一次在对局画面上读到星数时对账，见
+    #           Session._settle_sources）
     kind: str
     advice: Advice | None = None
     state: State | None = None
@@ -81,8 +85,33 @@ class Event:
     # Session 以外建的事件（识别流程的 status 等）为 0
     seq: int = 0
     # advice：这一组候选属于记账里的第几次三选一（SelectTracker._select_no：界面每出现一次加一，紧接着换成另一次时也加）。
-    # 悬浮窗的推荐日志据此认是不是同一次三选一（OfferLog.on_advice）；0 为不知道（Session 以外建的事件）
+    # 悬浮窗的推荐日志据此认是不是同一次三选一（OfferLog.on_advice）；0 为不知道（Session 以外建的事件）。
+    # source_settled：补准的是哪一次三选一（那一次最近一个推荐事件上的编号）。unadvised：这一项是哪一次三选一的
     select_no: int = 0
+    # advice：已有筹码还不知道全，这次推荐只按记下的筹码算（局面里的 owned；一个都没记下时就是按没有筹码算）：算的时候
+    # 已有筹码还要靠面板（Session.game.panel_needed 为真：中途打开、还没读到「查看筹码」面板等）。离开很久后回来要面板核对、
+    # 但还记着之前的筹码时为假（之前的都知道，推荐照记着的筹码算）。悬浮窗据此在推荐卡片上加一行提醒
+    owned_unknown: bool = False
+    # advice：算这次推荐时地图的识别依据（Session.map_source，MAP_SOURCE_LABEL 的键）；地图未知时为 None
+    map_source: str | None = None
+    # advice：算这次推荐时本局难度的依据（DifficultyInfo.source，DIFFICULTY_SOURCE_LABEL 的键）；档位不知道时为 None
+    difficulty_source: str | None = None
+    # advice：和 state.owned 一一对应，各自进「已有筹码」时的来路（CHIP_SOURCE_LABEL 的键，不知道为 None）和
+    # 这一局在「查看筹码」面板上看到过没有
+    owned_sources: list[str | None] = field(default_factory=list)
+    owned_panel: list[bool] = field(default_factory=list)
+    # advice：这次三选一的来源是怎么定的（selection.SOURCE_BY 的键：banner 自己的升星横幅、stars 星数、shop_window 购买窗、
+    # rows 概率行认出是任务、guess 拿不准、照旧按升星算）；source_settled：补准的依据（stars）。不放进局面（State）：
+    # 它不改推荐。Session 以外建的事件为 None
+    source_by: str | None = None
+    # source_settled：补准以后的来源（levelup / shop）。advice 的来源在局面里（state.source）
+    source: str | None = None
+    # table：这一局结算数据表的内容（没有名字、没有等级；各项见 advisor/logbook.py 模块说明里的 table 记录）。
+    # 只交给推荐日志，不写进最近事件和识别记录（名字本来就不在里面）
+    record: dict | None = None
+    # unadvised：一次三选一认出来了、程序放弃等待、没给推荐的那一项（round、reasons、advised、star、source、pick，
+    # 见 SelectTracker._note_unadvised）。select_no 是那一次三选一；交给推荐日志和诊断包，悬浮窗上不显示
+    unadvised: dict | None = None
 
 
 def _jsonable(value):
@@ -100,7 +129,9 @@ def _jsonable(value):
 
 def _event_record(ev: Event) -> dict:
     """事件 → 可写进 JSON 的字典（诊断包用）。有序号的写上序号（seq）；推荐写上是记账里的第几次三选一（select_no），
-    事后查紧接着的两次分没分开、推荐日志按哪一次记，看它就行。"""
+    事后查紧接着的两次分没分开、推荐日志按哪一次记，看它就行。推荐时已有筹码未知（owned_unknown）、地图的识别依据
+    （map_source）、来源是怎么定的（source_by）有值时也写上：事后查那次推荐是按什么局面算的。补准来源（source_settled）
+    另写补准以后的来源（source）。"""
     out: dict = {"kind": ev.kind}
     seq = getattr(ev, "seq", 0)
     if seq:
@@ -108,6 +139,18 @@ def _event_record(ev: Event) -> dict:
     select_no = getattr(ev, "select_no", 0)
     if select_no:
         out["select_no"] = select_no
+    if getattr(ev, "owned_unknown", False):
+        out["owned_unknown"] = True
+    map_source = getattr(ev, "map_source", None)
+    if map_source:
+        out["map_source"] = map_source
+    difficulty_source = getattr(ev, "difficulty_source", None)
+    if difficulty_source:
+        out["difficulty_source"] = difficulty_source
+    for key in ("source_by", "source"):
+        value = getattr(ev, key, None)
+        if value:
+            out[key] = value
     for key in ("chip", "why", "map", "count", "undo", "cause"):
         value = getattr(ev, key)
         if value:
@@ -116,6 +159,9 @@ def _event_record(ev: Event) -> dict:
         value = getattr(ev, key)
         if value:
             out[key] = [list(v) if isinstance(v, tuple) else v for v in value]
+    unadvised = getattr(ev, "unadvised", None)
+    if isinstance(unadvised, dict) and unadvised:
+        out["unadvised"] = _jsonable(unadvised)
     st = ev.state
     if st is not None:
         out["state"] = _jsonable(st)

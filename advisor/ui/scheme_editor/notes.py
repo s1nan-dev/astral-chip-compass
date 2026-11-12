@@ -13,7 +13,7 @@ from statistics import mean
 
 from ...data import CLASSES, SCHOOLS, TIERS
 from ...data import TIER_LABEL as PLAYER_TIER_LABEL
-from ...pool import appear_prob, player_pool, slot_dists
+from ...pool import appear_prob, class_tags, player_pool, slot_dists
 from .. import lang, names
 from ..scheme_list import BLOCK_OTHER, BLOCK_UNMARKED, BlockSpec, GroupSpec, RowSpec
 from ...schemes import (
@@ -198,7 +198,8 @@ def game_chances(db, hero) -> dict[str, float]:
     """开局前的规划下，一局里至少见到某个筹码一次的机会：筹码名 → 概率。hero 是资料库的角色（data.Hero）。
 
     只用 pool.py 现有的 player_pool、slot_dists、appear_prob，按角色的初始职业分值算、不传已有筹码：困难及以上，
-    开局的筹码池，地图未知（地图专属的筹码不在里面）。升星 1、2、3 星各一次（第一次刷出，最左格按职业分值从职业筹码池抽），
+    开局的筹码池，地图未知（地图专属的筹码不在里面）。升星 1、2、3 星各一次（第一次刷出，最左格按职业分值从职业筹码池抽，
+    池按 rules.toml [pool] leftmost 建，现在是筹码的职业标签），
     筹码商店 GAME_SHOPS 次（同升星，星数取平均），任务 GAME_TASKS 次（任务等级 1～3 平均，没有按职业抽的最左格），
     刷新 GAME_REROLLS 次（刷新后的最左格按 rules.toml [pool] reroll_leftmost，和推荐同一个 slot_dists：现在是按职业分值抽、
     职业池按筹码的职业标签建）。一局见到的机会 = 1 − 各次都没出现的概率之积。"""
@@ -238,8 +239,9 @@ def pool_notes(db, hero_name: str | None) -> dict[str, PoolNote]:
 
     - 地图专属的筹码（不论角色）：「仅限地图」，悬停逐个列出能出现的地图；
     - 在职业筹码池里、所在的职业池都不是这个角色自己的池（own_classes），而且一局里至少见到一次的机会（game_chances）
-      低于 HARD_TO_SEE：「较难出现」，悬停写职业池、职业分值和取整后的机会；
-    - 不在任何职业池的筹码、地图直接发放的筹码不标。角色资料库未收录时只有地图专属的提醒。"""
+      低于 HARD_TO_SEE：「较难出现」，悬停写职业池、职业分值和取整后的机会。职业池和推荐的最左格一样按筹码的职业标签
+      （pool.class_tags）算，不按池表；
+    - 不在任何职业池的筹码（只有通用标签）、地图直接发放的筹码不标。角色资料库未收录时只有地图专属的提醒。"""
     out: dict[str, PoolNote] = {}
     for name, chip in db.chips.items():
         if chip.maps and not chip.granted:
@@ -251,9 +253,10 @@ def pool_notes(db, hero_name: str | None) -> dict[str, PoolNote]:
     own = own_classes(hero)
     for name, chance in game_chances(db, hero).items():
         chip = db.chips[name]
-        if name in out or not chip.pools or own & set(chip.pools) or chance >= HARD_TO_SEE:
+        tags = class_tags(chip)
+        if name in out or not tags or own & set(tags) or chance >= HARD_TO_SEE:
             continue
-        classes = [cls for cls in CLASSES if cls in chip.pools]
+        classes = [cls for cls in CLASSES if cls in tags]
         if not classes:  # 职业池里的名字都不在 CLASSES 里：不提醒（资料库不该这样，防越界）
             continue
         fields = dict(chip=names.chip_name(chip), classes=_quoted(classes), hero=names.hero_name(hero),

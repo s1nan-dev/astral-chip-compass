@@ -23,7 +23,8 @@ from advisor import cli, paths
 from advisor.data import (
     GENERAL_TAG, LEVEL_NORMAL, NORMAL, RARITIES, RARITY_WORD, STARLIGHT_USE, SeriesPair, load_db, strict_problems,
 )
-from advisor.engine import LOW_NOTE, REROLL, STARLIGHT_NO_USE, Scorer, advise, compare_text, shown_percents, tie_key
+from advisor.engine import (LOW_NOTE, REROLL, SERIES_NEAR_TIP, STARLIGHT_NO_USE, Scorer, advise, compare_text,
+                            shown_percents, tie_key)
 from advisor.pool import State, Teammate
 from tests.test_engine import BANNED_WORDING, SCORE_WORDING
 from tools import check_data
@@ -653,12 +654,15 @@ class SeriesAdviceTest(Base):
             (dict(hero="阿尔", star=3, round=9, owned=("金色飞星",)),
              "星光层数另有用处（阿尔每 6 层星光攻击力、防御力各 +1；已持有「金色飞星」：放过首领时，首领额外受到等同星光层数的伤害）"),
         ]
+        # 这几组里稀有度较高的用不完本来就排在前面，悬停末尾不接 SERIES_NEAR_TIP（两张接近、低一级略高时才接）
+        near: set[str] = set()
         for kw, use in cases:
             adv = advise(self.db, State(rerolls=2, **kw), offer)
             gold, purple, _ = adv.evals
             want = raw.replace(STARLIGHT_USE, use)
+            tail = SERIES_NEAR_TIP.format(x="银行卡-用不完") if kw["hero"] in near else ""
             with self.subTest(**{k: v for k, v in kw.items() if k != "owned"}, owned=kw.get("owned")):
-                self.assertEqual([v[2] for v in gold.versus + purple.versus], [want, want])
+                self.assertEqual([v[2] for v in gold.versus + purple.versus], [want + tail, want])
                 self.assertNotIn("{", want)
                 self.assertNotIn("例如", want)
                 if kw["hero"] != "阿尔":

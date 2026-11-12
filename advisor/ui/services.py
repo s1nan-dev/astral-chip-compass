@@ -1,7 +1,11 @@
 """悬浮窗调用的几个外部模块：推荐日志、导出诊断、识别图片下载、版本与「关于」、处理器占用的采样。
 
 这些模块（advisor/logbook.py、diagnostics.py、assets.py、version.py、usage.py）由发布工程负责。悬浮窗只按约定的接口调用：
-  logbook      record_offer(state, advice, offer_id)、record_pick(offer_id, chosen)、
+  logbook      record_offer(state, advice, offer_id, client=None, map_source=None, source_by=None,
+               difficulty_source=None, owned_sources=None, owned_panel=None)、
+               record_source(offer_id, source, by) → 三选一关掉以后补准了来源、record_pick(offer_id, chosen)、
+               record_unadvised(select_no, round=None, reasons=None, advised=False, star=None, source=None,
+               pick=None) → 认出了三选一、没给推荐的那一次、
                record_feedback(offer_id, reason, note)、game_count_since_calibration()、
                records_between(start, end=None) → 这段时间的推荐日志（诊断包用）、
                record_game_over(**info) → 记下对局结束（同一局只调一次；撤销了误认的结束时，真正结束时再调一次；

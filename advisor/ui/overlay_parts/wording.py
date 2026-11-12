@@ -40,6 +40,7 @@ __all__ = [  # layout.py 用 import * 取这些
     "NEWGAME_OWNED", "NEWGAME_TEXT",
     "NEW_USER_COLLAPSED",
     "NOTICE_AREA", "NO_DOWNLOAD_ENV", "NO_GAME", "OPEN_TASKS", "OWNED_EMPTY", "OWNED_UNIT", "OWNED_UNKNOWN",
+    "OWNED_UNKNOWN_ADVICE",
     "PANEL_FIXED", "PANEL_READ", "PANEL_TAB", "PANEL_UNKNOWN", "PAUSED", "PAUSED_BIT", "PAUSED_MIN_TIP", "PAUSED_TIP",
     "PICKED_LABEL", "POLL_MS", "PREVIEW_DELAY_MS", "PROGRESS_TIP", "PROMPT_HERO", "PROMPT_PANEL",
     "PROMPT_PANEL_RESUME", "RAW_TEXT_TIP", "RECOG_CAPTURE", "RECOG_ERROR_MS", "RECOG_FRAME", "RECOG_ITEM",
@@ -271,8 +272,10 @@ DOWNLOAD_BLOCKED_RETRY = "立即尝试下载一张图片：成功时以较慢的
 # 开头一句写图片保存在哪：在个人目录里时（发行版平时，所有版本共用一份）用 ASSETS_TIP，{folder} 是
 # %LOCALAPPDATA%\AstralChipCompass\assets（paths.personal_shown）；在程序文件夹里时（开发版、个人目录用不了退回时）用
 # ASSETS_TIP_PROGRAM，{folder} 按用户看到的程序文件夹写（paths.shown，发行版 app\assets）
-ASSETS_TIP = "识别角色、星数、已有筹码需要从 wiki 下载的图片，首次运行时下载一次，保存在 {folder} 中，换新版本后沿用。"
-ASSETS_TIP_PROGRAM = "识别角色、星数、已有筹码需要从 wiki 下载的图片，首次运行时下载一次，保存在程序文件夹的 {folder} 中。"
+ASSETS_TIP = ("识别角色、星数、已有筹码需要从 wiki 下载的图片，首次运行时下载一次，"
+              "保存在 {folder} 中，换新版本后沿用。")
+ASSETS_TIP_PROGRAM = ("识别角色、星数、已有筹码需要从 wiki 下载的图片，首次运行时下载一次，"
+                      "保存在程序文件夹的 {folder} 中。")
 ASSETS_TIP_PAUSED = "下载完成前，后台识别暂停。"
 ASSETS_TIP_QUIET = "这次只需补充下载少量图片，下载期间后台识别照常进行；新下载的图片在下载完成后用于识别。"
 ASSETS_TIP_BLOCKED = ("站点防护暂时拒绝这台电脑的下载期间，拾星助手不再发送下载请求，到达上述时刻后以较慢的速度自动继续"
@@ -332,6 +335,10 @@ GAIN_WHY = "星数已增加，但未检测到对应的筹码三选一界面"
 MISSED_PROMPT = "⚠ 未检测到上一次筹码三选一选择的筹码。请点击下方对应的筹码按钮补录。"
 REVERTED_NOTICE = "同一组候选筹码再次出现，已撤销刚记录的「{chip}」。界面关闭时按这一次的选择重新记录。"
 REVERTED_PROMPT = "⚠ 同一组候选筹码再次出现，已撤销刚记录的「{chip}」，这一次也未检测到选择的筹码。请点击下方对应的筹码按钮补录。"
+# 对局中途才打开拾星助手、还没读到「查看筹码」面板：推荐照常给（只按记下的筹码算，一个都没记下时按没有筹码算），「推荐」卡片
+# 最上面挂这一行（⚠ 橙色，不改边框颜色）。一个都没记下、看着三选一记下了几个，都只写这一句，不写个数。读到面板时这一行收起；
+# 三选一开着时已有筹码按面板变了，马上按读到的重算
+OWNED_UNKNOWN_ADVICE = "⚠ 还不知道已有筹码，可能不准。"
 NEWGAME_TEXT = "已判定为新的一局（依据：{why}），已清空上一局的已有筹码、星数、轮次和地图。"
 # 对局中途（按轮次、星数或角色）判定的新一局：「需要您操作」级别，「已有筹码」卡片里另放一行
 NEWGAME_MIDGAME = "⚠ 对局中途判定为新的一局（依据：{why}），已清空已有筹码、星数、轮次和地图。如果这一局还没有结束，请点击「撤销」。"
@@ -507,6 +514,7 @@ NEW_USER_COLLAPSED = ("owned",)
 # （有新版本、下载、出错等 update，刚换上新版本 updated）、性能自检（ocr_check）是全局提示
 NOTICE_AREA = {
     "unsupported": "recog", "newgame": "recog", "newgame_owned": "owned", "reverted": "advice", "panel": "owned",
+    "owned_unknown": "advice",
     "gain": "owned", "removed": "owned", "map_switch": "scheme", "assets": "global", "calibrate": "global",
     "export": "global", "capture": "recog_top", "schemes": "global", "storage": "global", "unlocked": "recog",
     "free": "global", "hant": "global", "stopped": "global", "dpi": "global", "folder": "global", "hotkey": "global",
@@ -657,9 +665,9 @@ UPDATE_DONE = "拾星助手已更新到 {version}。"
 # 刚换上新版本那一条（UPDATE_DONE）下面列的这一版的主要改动（update_done_text）：换上的正是 UPDATE_NEWS_VERSION 这一版时，
 # UPDATE_NEWS 一条一行、前面加「· 」（UPDATE_NEWS_ITEM），最后一行是 UPDATE_NEWS_SOON（空时不写）；版本号对不上（改了版本号、
 # 列表没跟着改）或者列表是空的，只写 UPDATE_DONE 那一句。发版定号时照这一版的发布说明挑几条短的改这几项（软件维护说明「版本号」）
-UPDATE_NEWS_VERSION = "1.1.0"
-UPDATE_NEWS = ("TapTap 版支持", "两个客户端同时开", "繁中游戏识别及软件界面", "方案按地图自动切换", "推荐模型优化",
-               "性能优化")
+UPDATE_NEWS_VERSION = "1.2.0"
+UPDATE_NEWS = ("新角色苍鲤、森秋幻境的新筹码", "优化了对局中途打开拾星助手时，推荐的准确度", "推荐模型优化", "性能表现优化",
+               "Bug修复")
 UPDATE_NEWS_ITEM = "· {item}"
 UPDATE_NEWS_SOON = ""  # 即将上线的（例如「即将上线：……」）；这一版不写
 # 出错的几种（update_failed_text 按种类选一句；{reason} 是白话原因，{version} 是没换上的版本号）：检查、下载、解压核对失败；

@@ -191,7 +191,8 @@ def _build_parts(sc: Scorer, name: str, owned, rnd: int | None, map_name) -> lis
         # 筹码方案：推荐流派（默认推荐的一部分）不加分；没标的筹码另有目标流派倾向、锁定保护、被锁的流派按不选
         layer.extend(_scheme_school_parts(sc, name, owned))
     else:
-        if chip.school and chip.school in sc.pref_schools:
+        # 角色在 school_skip 里列出的筹码不加这一笔（它的流派仍在推荐流派里，下面那个 elif 不会命中）
+        if chip.school and chip.school in sc.pref_schools and name not in sc.school_skip:
             layer.append(Part("推荐流派", s["school"], f"「{chip.school}」是该角色的推荐流派",
                               short=f"推荐流派：{chip.school}"))
         elif chip.school and chip.school in _adopted_schools(sc, owned):

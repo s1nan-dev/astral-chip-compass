@@ -243,6 +243,8 @@ class Lanes:
         if self.shared_settings is None:
             return None
         session = self._new_session()
+        # 对局报告的开关全程序一份（第二张没有自己的 startup）：第二张的记账照第一张那份设置设上
+        session.report_enabled = bool(getattr(self.shared_settings, "report_enabled", False))
         if self.record:
             # taptap 子文件夹由记录器打开时自己建；建不出来、写不进时它记一次错误、不写盘，照样加上第二张
             session.eventlog.recorder = self.recorder_factory(Path(games_dir()) / TAPTAP).open("startup")
@@ -478,6 +480,7 @@ class Lanes:
         self._copy_hotkey_state(window)
         with self.lock:
             lane.session.settings.sync_from_shared()
+            lane.session.report_enabled = bool(getattr(primary.session.settings, "report_enabled", False))
         window._manual = primary.manual
         window._lowend = primary.lowend
         window._opaque = primary.opaque

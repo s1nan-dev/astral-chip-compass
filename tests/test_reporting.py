@@ -355,6 +355,7 @@ class DispatchTest(unittest.TestCase):
         self.session = SimpleNamespace(game_over_info={"why": "结算"} if info else None, games=3,
                                        result_settled=settled,
                                        settings=SimpleNamespace(star=0, star_read=False, owned=[]),
+                                       owned_snapshot=lambda: ([], [], []),
                                        game=SimpleNamespace(progress=0))
         return EventHandlers(
             db=None, session=self.session, lock=threading.Lock(), live=None, message=None, notice_model=None,
@@ -430,6 +431,7 @@ class DispatchTest(unittest.TestCase):
         info = {"why": "检测到主菜单", "outcome": None, "how": None}
         session = SimpleNamespace(game_over_info=info, games=1, result_settled=True, panel_prompt_active=False,
                                   settings=SimpleNamespace(star=0, star_read=False, owned=[]),
+                                  owned_snapshot=lambda: ([], [], []),
                                   game=SimpleNamespace(progress=0))
         said = []
         handler = EventHandlers(

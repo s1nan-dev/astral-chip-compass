@@ -8,13 +8,17 @@
 from __future__ import annotations
 
 import copy
+import difflib
+import re
 import time
+import unicodedata
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 from typing import NamedTuple
 
-from ..data import DB, LEVEL_NORMAL, NORMAL
+from ..data import DB, DIFFICULTIES, EXTREME, HARD, LEVEL_NORMAL, NORMAL
 from ..engine import default_rerolls, endless_wait, plan_of
+from ..engine.context import TOP_STAR
 from ..pool import State, difficulty_of, rarity_rows
 from ..prefs import GAME_FIELDS, Settings
 from ..schemes import taggable_maps
@@ -22,10 +26,10 @@ from . import offgame, panel, selection
 from .difficulty import DifficultyInfo, resolve_difficulty
 from .events import Event, EventLog, _jsonable
 from .game_state import GameState, PendingNextGame, UndoPoint
-from .newgame import CONFIRM, NEWGAME_PROGRESS_DROP, ROUND_RANGE, NewGameJudge
+from .newgame import CONFIRM, NEWGAME_PROGRESS_DROP, NEWGAME_VETO_S, ROUND_RANGE, ROUND_STEP, NewGameJudge
 from .offgame import _put_reading
 from .panel import RESUME_CHECK_S, explained, panel_fixes, panel_order
-from .selection import SelectTracker
+from .selection import SETTLE_BY, SelectTracker
 
 # 各状态字段名 → 放在 Session 的哪个属性上。守卫（__setattr__）、撤销时按名字写回 _end_cleared，以及基准工具
 # （tools/baseline/session.py 的 _holder）把磁带里的字段名换回放它的对象，都按它：
@@ -40,9 +44,17 @@ _FIELD_HOLDERS = {
 }
 
 ROUND_OVER_PROGRESS = 4  # 轮次读数比进度条当前格大这么多以上时按读错处理（任务奖励「进度-1」最多退回几格）
+# 轮次往前跳时，比进度条同一段时间里走过的格数最多多出这么多；再多按读错处理。进度每轮至少 +1，多出来的只能是
+# 任务奖励「进度-1」等个别情形；拦错了的代价只是轮次晚一点跟上（见 Session.on_hud）
+ROUND_JUMP_SLACK = 2
 STAR_MIN_CONFIDENCE = 0.6  # 星数读数的把握（OwnStars.confidence）低于这个值时不用
 STAR_COSTS = (15, 20, 25)  # 升星要的星币：0→1 星、1→2 星、2→3 星（见 next_star_cost）
 GAIN_GRACE = 2  # 星数增加后，再在对局画面上读到几次新的星数仍没有出现三选一，才算「没有对应的三选一记录」
+# 认三选一的来源（升星还是筹码商店，见 Session._source_of）的两样迹象——自己的升星横幅、筹码商店的购买窗——在三选一出现
+# 之前这么多秒以内看到的才算。对局录像上量的：自己的横幅之后 0.8～1.3 秒出三选一，横幅停留约 1.9～2.8 秒；点了购买窗的
+# 「购买！」以后约 0.9～1.1 秒出三选一；棋盘上约 0.5 秒看一帧。留出慢电脑上隔得更久才看一帧的余地，又不让早些时候
+# 点了「离开」的购买窗算到之后的三选一头上（例如点了离开、7 秒以后自己升星：那一次另有横幅，横幅优先）
+SOURCE_CUE_S = 6.0
 MATE_CONFIRM = 2  # 同一行认成同一个队友角色几次才采用
 FOREIGN_CONFIRM = 2  # 连续几次三选一类画面读不到简体或繁体的标题，才提示游戏语言
 HANT_CONFIRM = 2  # 连续几次三选一完整识别读到繁体标题，才记下这次运行里游戏是繁体中文
@@ -59,6 +71,10 @@ PANEL_WAIT_S = 20.0
 # 循环往复给的额外那次三选一过了到期那一轮以后再算几轮（Session.endless_pending）：被击倒时那一回合不计，额外那次可能晚
 # 一轮；再晚还没认出来的（认漏了）不再算，不会一直多算 1 次
 ENDLESS_GRACE = 1
+# 结算画面结束本局以后等识别数据表最多等多久（秒）：结算页每页自动停 20 秒，数据表常被玩家点过去，超过这么久就不再等
+TABLE_WAIT_S = 90.0
+# 数据表的五行（和 advisor/vision/result_table.STATS 同序、同名）：记账不导入识别模块（不依赖图像库），这里单列一份
+TABLE_STATS = ("kills", "downs", "damage_dealt", "damage_taken", "heal")
 
 # 当前地图的识别依据（Session.map_source），以及给人看的叫法。match、room 是对局外的「匹配成功」画面、
 # 创建房间界面和自建房间上读到、留给下一局的地图（session.pending._next_map），新的一局开始时用上
@@ -93,7 +109,7 @@ class ChipRemoval:
     变过」要的移出之后的样子。只记最近移出的那一个。"""
 
     chip: str
-    before: tuple  # 移出之前的（已有筹码, 来源, 不经三选一获得的记号），照原样放回
+    before: tuple  # 移出之前的（已有筹码, 来源, 不经三选一获得的记号, 来路, 面板记号），照原样放回
     undo: object  # 移出之前新一局的撤销点（Session._undo：移出时还剩筹码就清掉了，放回时一起接回）
     after: tuple  # 移出之后这一局和已有筹码有关的各项（Session._removal_mark）：放回时一项不差才放回
     game: object  # 移出时的这一局（GameState 对象：判新的一局、撤销新一局都换成别的对象）
@@ -143,6 +159,9 @@ class Session:
         self._name_votes: dict[str, int] = {}
         self._unsupported: dict[str, str] = {}
         self._foreign = 0
+        # 开着「帮助拾星助手改善推荐准确度」没有（全程序一份）：悬浮窗启动时和设置里改开关时设上。开着时才在结算画面
+        # 结束本局以后等识别数据表（见 wants_table、on_result_table）
+        self.report_enabled = False
         # 这次运行里认出游戏是繁体中文（三选一完整识别连着 HANT_CONFIRM 次读到繁体标题）：不写进设置文件和对局记录，
         # 认出来以后一直为真（界面是简体时悬浮窗据此提示一次可以换界面语言）
         self.hant_game = False
@@ -256,6 +275,9 @@ class Session:
             "map_candidates": list(self.game.map_candidates),
             "map_ask": self.game.map_ask,
             "chip_sources": sources,
+            "owned_sources": dict(self.game.owned_sources),
+            "panel_seen": sorted(self.game._panel_seen),
+            "cap_rejected": sorted(self.game._cap_rejected),
             "missed_offer": list(self.game.missed_offer) if self.game.missed_offer else None,
             "panel_needed": self.game.panel_needed,
             "teammates": [dict(t) for t in self.game.teammates],
@@ -456,8 +478,22 @@ class Session:
         """这一局记下了筹码：新一局的撤销到此为止。"""
         self._undo = None
 
+    def owned_marks(self, names=None) -> tuple[list, list]:
+        """按 names（默认已有的全部）的先后给出各自的来路和面板记号：来路是进「已有筹码」时的依据
+        （CHIP_SOURCE_LABEL 的键，不知道为 None），面板记号是这一局在「查看筹码」面板上看到过没有。"""
+        names = list(self.settings.owned if names is None else names)
+        g = self.game
+        return [g.owned_sources.get(n) for n in names], [n in g._panel_seen for n in names]
+
+    def owned_snapshot(self) -> tuple[list[str], list, list]:
+        """已有筹码和它的来路、面板记号（对局结束的记录用）：三样按同一个先后取，调用方在锁里调用。"""
+        owned = list(self.settings.owned)
+        sources, panel = self.owned_marks(owned)
+        return owned, sources, panel
+
     def set_owned(self, names) -> list[str]:
-        """按名字设置已有筹码（用户手动输入），返回认不出的名字。"""
+        """按名字设置已有筹码（用户手动输入），返回认不出的名字。新加进来的来路记为手动，原来就在的照旧；去掉的连同
+        来路和面板记号一起去掉。"""
         owned, unknown = [], []
         for text in names:
             try:
@@ -472,6 +508,8 @@ class Session:
         self.settings.owned = owned
         g = self.game
         g.chip_sources = {n: g.chip_sources.get(n, "manual") if n in before else "manual" for n in owned}
+        g.owned_sources = {n: (g.owned_sources.get(n) if n in before else "manual") for n in owned}
+        g._panel_seen &= set(owned)
         g.direct &= set(owned)  # 不在已有筹码里的（「×」移出的）跟着去掉
         g.missed_offer = None  # 用户手改过已有筹码，漏记的提示就不用再显示了
         g.unrecorded = 0
@@ -486,12 +524,14 @@ class Session:
         数目、请打开「查看筹码」面板的提示都和它无关，照旧保留；其余和手改已有筹码（set_owned）相同（还剩筹码时，新一局的
         撤销到此为止）。
         移出动的是：已有筹码（settings.owned，去掉这一个，其余的先后不变）、记录来源（game.chip_sources，去掉这一个）、
+        来路和面板记号（game.owned_sources、game._panel_seen，去掉这一个）、
         不经三选一获得的记号（game.direct，去掉这一个）、新一局的撤销点（_undo，还剩筹码时清掉），以及局面版本（_edits）
         和存盘。移出之前的样子记进 _removal，撤销移出（restore_chip）照原样放回。"""
         if name not in self.settings.owned:
             return False
         g = self.game
-        before = (tuple(self.settings.owned), tuple(g.chip_sources.items()), frozenset(g.direct))
+        before = (tuple(self.settings.owned), tuple(g.chip_sources.items()), frozenset(g.direct),
+                  dict(g.owned_sources), frozenset(g._panel_seen))
         undo = self._undo
         keep = g.missed_offer, g.unrecorded, g.panel_needed
         self.set_owned([n for n in self.settings.owned if n != name])
@@ -506,6 +546,7 @@ class Session:
         本局结束没有。"""
         g = self.game
         return (tuple(self.settings.owned), tuple(g.chip_sources.items()), frozenset(g.direct),
+                tuple(g.owned_sources.items()), frozenset(g._panel_seen),
                 tuple(g._pick_offers.items()), tuple(g.missed_offer) if g.missed_offer is not None else None,
                 g.unrecorded, g.panel_needed, g._last_panel, g._endless_due, g._endless_given, g._endless_chip,
                 g._endless_open, g.game_over)
@@ -520,19 +561,21 @@ class Session:
                 and self.select._select_no == r.select_no and self._removal_mark() == r.after)
 
     def restore_chip(self) -> str | None:
-        """撤销最近一次「×」移出：can_restore_chip 时照移出之前的样子放回——已有筹码（原来的位置）、记录来源、不经三选一获得
-        的记号、新一局的撤销点，局面版本加一（在锁外算的推荐作废，下一帧照放回后的局面重算），存盘。返回放回的筹码名；放不回
-        时为 None，什么都不改。放回、放不回都只这一次（移出的记录随之清掉）。"""
+        """撤销最近一次「×」移出：can_restore_chip 时照移出之前的样子放回——已有筹码（原来的位置）、记录来源、来路和
+        面板记号、不经三选一获得的记号、新一局的撤销点，局面版本加一（在锁外算的推荐作废，下一帧照放回后的局面重算），
+        存盘。返回放回的筹码名；放不回时为 None，什么都不改。放回、放不回都只这一次（移出的记录随之清掉）。"""
         ok = self.can_restore_chip
         r, self._removal = self._removal, None
         if not ok or r is None:
             return None
-        owned, sources, direct = r.before
+        owned, sources, direct, origins, panel = r.before
         g = self.game
         self._edits += 1
         self.settings.owned = list(owned)
         g.chip_sources = dict(sources)
         g.direct = set(direct)
+        g.owned_sources = dict(origins)
+        g._panel_seen = set(panel)
         self._undo = r.undo
         self.save()
         return r.chip
@@ -550,6 +593,8 @@ class Session:
         self._edits += 1
         self.settings.owned.append(chip)
         self.game.chip_sources[chip] = source
+        self.game.owned_sources[chip] = (
+            "direct" if direct else source if source in CHIP_SOURCE_LABEL else None)
         if direct:
             self.game.direct.add(chip)
         if self.game.unrecorded:
@@ -580,6 +625,7 @@ class Session:
             self._edits += 1
             self.settings.owned.append(name)
             g.chip_sources[name] = "missed"
+            g.owned_sources[name] = "missed"
             g._pick_offers[name] = offer
             if at is not None:
                 rnd, source, endless = at
@@ -766,6 +812,7 @@ class Session:
         g.game_over, g._ended, g._end_votes, g._ended_by_screen = False, None, None, False
         g._end_cleared, g._end_screen, g._left = None, None, False
         g._ended_at, g._reward_seen, g._reward_coins = None, False, None
+        g._table_wait, g._table_pending = False, None  # 这一局接着打，不再等数据表（记过的那份和它读到几个数都留着）
         g._victory_at = g._game_over_at = None
 
     @property
@@ -884,6 +931,23 @@ class Session:
             self.trace("round_implausible", round=hud.round, progress=progress)
             hud = copy.copy(hud)
             hud.round = None
+        was = self.game._round_at_progress
+        last_progress = self.judge._last_progress_read
+        if (hud.round is not None and s.round is not None and hud.round > s.round + ROUND_STEP
+                and progress is not None and was is not None and was[0] == s.round
+                and not (self.game.progress_cap is not None and progress >= self.game.progress_cap - 1)
+                and last_progress is not None and self._clock() - last_progress[1] <= NEWGAME_VETO_S
+                and last_progress[0] == progress
+                and (hud.round - s.round) - (progress - was[1]) > ROUND_JUMP_SLACK):
+            # 进度条最近读到过、记下的轮次也没被别的路径改过：轮次涨得比进度条走的多出太多，多半是同一次读错又原样
+            # 连读了几次的（同一个静止画面读错一次往往会原样再错几次），按读错处理。进度条到了红叉前一格时不比：再走
+            # 一格就到红叉、判负，进度不会再跟着轮次往前走，拿它核对等不到它跟上来（这时最多只剩这一轮）。最近一次读到的
+            # 进度和采用了的不一样时也不比：进度条正跟着轮次一起往前跳（游戏切到后台好几轮、回来时两样一起变），新的格数
+            # 要连读两次才采用，拿还没跟上的旧进度比会把读对的轮次拦下；三选一里只读两次轮次，拦下就一直用旧的轮次
+            self.trace("round_jump_implausible", round=hud.round, was=s.round, progress=progress,
+                       progress_then=was[1])
+            hud = copy.copy(hud)
+            hud.round = None
         if hud.round is not None and ROUND_RANGE[0] <= hud.round <= ROUND_RANGE[1]:
             self._entered_game(hud.round)
             self.game._select_guard = False
@@ -901,6 +965,15 @@ class Session:
                 result = self._auto_new_game("round", hud.round, why)
                 s.round, self.game._round_seen, self.game._round_floor = hud.round, CONFIRM, hud.round
                 self.save()
+            if step in ("changed", "newgame") and s.round == hud.round:
+                # 记下采用这个轮次时的进度条当前格，之后往前跳时拿它核对（见上面 round_jump_implausible）；别的路径改了
+                # 轮次时这里不跟着改，核对时轮次对不上就不比。取 self.game 的：刚开的新一局还没有进度（None），不能带上
+                # 上一局的（上面的 progress 是判新一局之前取的）。采用的轮次比原来的小（改正读错、新的一局）时记 None，
+                # 下一次往前跳不比：读错的可能正是变小的这一次（「14」连读成「11」），读回真的轮次要往前跳，进度却没多走，
+                # 拿它核对会一直拦着
+                now_progress = self.game.progress
+                lower = old is not None and hud.round < old
+                self.game._round_at_progress = None if now_progress is None or lower else (hud.round, now_progress)
             if (step == "newgame" or (step == "changed" and old is None)) and hud.round <= WHOLE_GAME_ROUND \
                     and not s.owned:
                 self.game.whole_game = True  # 这一局从第 1、2 轮就看着（启动时正在加载等）：算从开局看起
@@ -996,6 +1069,7 @@ class Session:
 
         in_select：这是在三选一界面上读到的（说明是这次三选一时的星数，升星的那一颗已经算上了）。
         本局已结束后读到的不起作用（不记进这一局）。
+        对局画面上读到、采用了的星数另用来补准关掉了的三选一是升星还是筹码商店（_settle_sources）。
         """
         stars = getattr(own, "stars", None)
         if self.game.game_over:
@@ -1025,6 +1099,9 @@ class Session:
             return ev
         if in_select and s.star == stars:
             self.game._select_star = self.select._fresh_select_star = stars
+        if in_select and step == "changed" and self.select._fresh_prior is None:
+            # 这一帧出现的要是新的一次三选一，改之前的星数就是它出现之前的（见 SelectTracker._fresh_prior）
+            self.select._fresh_prior = (old, was_read)
         if step == "changed":
             if was_read and s.star > old:
                 self._star_gained(old, s.star)
@@ -1032,6 +1109,7 @@ class Session:
                 self.game._gain = None  # 增加的那次是读错，已经改正
         if not in_select and s.star == stars:
             self._star_read_on_hud(fresh=step == "changed")
+            self._settle_sources(stars)
         if step == "changed":
             self.save()
             return self._event("status")
@@ -1278,15 +1356,57 @@ class Session:
         """本局的进度上限还没从进度条上读到（红叉所在的格）。"""
         return self.game.progress_cap is None
 
+    def _cap_allowed(self) -> set[str]:
+        """按三选一的概率行（settings.difficulty），进度上限可能对应的难度名（和 MapInfo.difficulties_at 给的一样是
+        难度名「普通」「困难」等，不是 NORMAL、HARD 这两个档位值）。还没判定时五个都算。"""
+        rows = self.settings.difficulty
+        if rows == NORMAL:
+            return {DIFFICULTIES[0]}
+        hard = set(DIFFICULTIES[1:]) | {EXTREME}
+        return hard if rows == HARD else set(DIFFICULTIES) | {EXTREME}
+
+    def _cap_fits(self, cap: int) -> bool | None:
+        """进度上限和地图资料对不对得上：True 对得上，False 没有一种可用难度是这么多格，None 判断不了
+        （地图待识别、地图在 rules.toml 的 cap_untrusted 里、资料不全）。"""
+        s = self.settings
+        info = self.db.map_info.get(s.map) if s.map else None
+        if info is None:
+            return None
+        if s.map in (self.db.rules.get("difficulty") or {}).get("cap_untrusted", ()):
+            return None
+        found = info.difficulties_at(int(cap))
+        if found is None:
+            return None
+        return bool(set(found) & self._cap_allowed())
+
+    def _reject_cap(self, cap: int) -> None:
+        """不采用这个进度上限：记进这一局没采用过的（同一个数只记一次），没有时记一条识别读数。"""
+        self.game._cap_pending = None
+        if cap in self.game._cap_rejected:
+            return
+        self.game._cap_rejected.add(cap)
+        self.trace("cap_rejected", cap=cap, map=self.settings.map, difficulty=self.settings.difficulty)
+
     def on_progress_cap(self, cap: int | None) -> Event | None:
         """进度条上读到红叉所在的格（读不到时传 None）。连续两次读到同一个数才采用（防文字识别读错）。
+        采用前核这张地图的资料：资料完整可信、却没有一种可用难度是这个格数时不采用，这个数记进这一局没采用过的，
+        以后再读到、仍对不上时直接忽略（识别流程在进度条样子没变时会重复交同一个读数）。地图改了、概率行改判以后对得上了
+        （或者判断不了）的，照常连读两次再采用：当时对不上也可能是地图认错、概率行判错，不能因此整局都用不上读对的数。
+        已经拒过的数在两次读数中间出现时不打断「连着两次读到另一个数」：拒过的数一定是读错，直接忽略、不动还在等的那个数
+        （例如读到 17、8、17，8 拒过，第二个 17 照常采用）。
         采用后重新合并本局难度（按地图和进度上限推算）。"""
         if cap is None or self.game.progress_cap is not None or self.game.game_over:
+            return None
+        cap = int(cap)
+        if cap in self.game._cap_rejected and self._cap_fits(cap) is False:
             return None
         if self.game._cap_pending != cap:
             self.game._cap_pending = cap
             return None
-        self.game.progress_cap, self.game._cap_pending = int(cap), None
+        if self._cap_fits(cap) is False:
+            self._reject_cap(cap)
+            return None
+        self.game.progress_cap, self.game._cap_pending = cap, None
         self._difficulty_changed()
         return self._event("status")
 
@@ -1476,7 +1596,14 @@ class Session:
         """重新合并本局难度。push 时，难度胶囊上的写法（DifficultyInfo.label）变了就发一个 status 事件。
 
         结果（或各来源之间的矛盾）变了时记一条识别读数。不记的：只由概率行决定、又没有矛盾的（概率行的判定已经
-        记在每次推荐的 state 里），新的一局清空后什么都还不知道的。"""
+        记在每次推荐的 state 里），新的一局清空后什么都还不知道的。
+
+        地图后来知道了、概率行的判断变了，已经采用的上限又对不上资料时在这里去掉（progress_cap 回到 None，识别流程
+        会重读）；去掉上限本身会改难度，所以只在开头核一次，不回头再调自己。"""
+        cap = self.game.progress_cap
+        if cap is not None and self._cap_fits(cap) is False:
+            self.game.progress_cap = None
+            self._reject_cap(cap)
         info, conflict = self._resolve_difficulty()
         old = self.game._difficulty_key
         if old == (info, conflict):
@@ -1532,9 +1659,14 @@ class Session:
 
     @property
     def game_over_info(self) -> dict | None:
-        """本局已结束时的 {why, map, difficulty, level, rounds, cap, outcome, how}（difficulty 是难度胶囊上的写法，见
-        DifficultyInfo.label；rounds 优先取结算画面上的轮次；outcome、how 是胜负和依据，见 offgame.outcome，不知道时为
-        None）；还没结束时为 None。"""
+        """本局已结束时的 {why, map, difficulty, level, rounds, cap, difficulty_source, cap_rejected, outcome,
+        how, map_source, map_in_game}（difficulty 是难度胶囊上的写法，见 DifficultyInfo.label；rounds 优先取结算画面上的
+        轮次；difficulty_source 是难度依据（DIFFICULTY_SOURCE_LABEL 的键），cap_rejected 是这一局没采用的进度上限有几个；
+        outcome、how 是胜负和依据，见 offgame.outcome，不知道时为 None）；还没结束时为 None。
+
+        map 用哪张地图：玩家手动指定的照旧用手动的，否则结算画面上读到了就用它（比局里认的准），都没有时用局里认的。
+        map_source 是这张地图怎么来的（manual / result / 局里认的依据）；map_in_game 是局里认的地图，不管最后用了哪张
+        都照写（没认出时 None）。见 offgame.end_info。"""
         return dict(self.game._ended) if self.game.game_over and self.game._ended is not None else None
 
     @property
@@ -1542,6 +1674,66 @@ class Session:
         """本局已结束、胜负定了（结束以后读到了奖励画面，之后不会再有新的依据）：悬浮窗这时才拼这一局的对局报告，还没定的
         先等（见 dispatch.log_game_over）。"""
         return self.game.game_over and self.game._reward_seen
+
+    # ------------------------------------------------------------ 结算数据表
+
+    @property
+    def wants_table(self) -> bool:
+        """要不要在识别流程里每帧看一眼是不是结算数据表：开着对局报告、这一局是结算画面结束的、还没认定一份表
+        （见 on_result_table；淡入时先记下的不完整的那份不算认定），从结束起还没满 TABLE_WAIT_S 秒。"""
+        g = self.game
+        if not (self.report_enabled and g.game_over and g._table_wait and not g._table_done):
+            return False
+        return g._table_at is not None and self._clock() - g._table_at < TABLE_WAIT_S
+
+    def stop_table_wait(self) -> None:
+        """不再等这一局的结算数据表（认出了别的对局外画面、结束被撤回时）。"""
+        self.game._table_wait = False
+
+    def _start_table_wait(self) -> None:
+        """结算画面结束了这一局：开着对局报告、这一局还没认定一份表时开始等（别的画面结束的不等）。"""
+        g = self.game
+        if self.report_enabled and not g._table_done:
+            g._table_wait, g._table_at = True, self._clock()
+
+    def on_result_table(self, reading) -> Event | None:
+        """喂入一次结算数据表的识别结果（advisor.vision.result_table.TableReading；不是数据表时传 None）。
+
+        只在等表时处理（看 wants_table）。consistent 为真当场认定：记一条、结束等表（_table_done、_table_wait 都改），
+        这一局不再记。为假时先记下（_table_pending），再读到五项数字、BEST、两个星币数都完全一样的一次才算读到一份
+        （不一样就换成新的这次再等）；读到一份时：
+          - 这一局还没记过表：记一条，但不结束等表——表淡入的那几帧读得到一份不完整的数，后面完整的那一帧不该丢掉；
+          - 已经记过（只会是 consistent 为假的）：这次读到的数比记过的那一次多才再记一条；一样多或更少时不记，并结束等表
+            （_table_done、_table_wait 照 consistent 为真时那样改）：表已经停稳，再读也读不出更多，接着每帧读表只是白占处理器。
+        报告取同一局的最后一条 table，所以先记下不完整的，是为了程序在表读全以前被关掉时这一局也有记录，
+        最后留下的则是读得最全的那一次。
+        五项数字一个都没读出来的（滑进来时的过渡帧等）不算读到。记一条时算出一份不带名字的记录（各项见 _table_record），
+        返回 table 事件。
+        """
+        if reading is None or not self.wants_table:
+            return None
+        if not any(v is not None for c in reading.columns for v in (c.stats or {}).values()):
+            return None
+        g = self.game
+        consistent = bool(getattr(reading, "consistent", False))
+        if not consistent:
+            signature = _table_signature(reading)
+            if g._table_pending != signature:
+                g._table_pending = signature
+                return None
+        g._table_pending = None
+        if consistent:
+            g._table_done = True
+            g._table_wait = False
+        else:
+            known = _table_known_count(reading)
+            if known <= g._table_known:
+                if g._table_known:  # 记过一份以后又读稳了一份、数不比它多：结束等表
+                    g._table_done = True
+                    g._table_wait = False
+                return None
+            g._table_known = known
+        return self._event("table", record=_table_record(self, reading))
 
     # ------------------------------------------------------------ 三选一
 
@@ -1553,12 +1745,21 @@ class Session:
         对上哪张就同时判定本局难度，见 _rarity_table）。
         最左格的稀有度优先用画面上读到的（left_rarity，图标边框颜色），读不到时用第 1 个候选筹码在资料库里的稀有度；
         两者都没有时不按最左格判断。team=True：标题上方有「……正在选择强化筹码…」（全队同时三选一）。
+        这一局还没读到星数时，估出的星数不低于升星、筹码商店三选一估过的最高星（GameState._star_guess_floor）：
+        任务三选一的行号是任务等级、不是星数，估出来的可能比之前的低，而一局之内星数只增不减。算出的来源不是任务、
+        最左格的稀有度又知道时，把这个下限抬到估出的星数；只记这个下限，记下的星数（settings.star）照旧不改。
+        最左格的稀有度不知道（第 1 个候选没读出、边框颜色也没读到）时不抬：这时不按最左格判断，任务三选一也会估成升星，
+        把下限抬到任务等级的话，这一局之后比它低的升星都会按任务算。估出的星数照样不低于下限。
         """
         s = self.settings
         rows = self._rarity_table(probabilities)
         left = left_rarity or (self.db.chips[names[0]].rarity if names and names[0] in self.db.chips else None)
-        return selection.judge_source(rows, self.db.rules["rarity"]["fixed"], probabilities, left, s.star,
-                                      s.star_read, s.source, self.game._select_star, team)
+        star, source, tier = selection.judge_source(rows, self.db.rules["rarity"]["fixed"], probabilities, left, s.star,
+                                                    s.star_read, s.source, self.game._select_star, team,
+                                                    self.game._star_guess_floor)
+        if not s.star_read and source != "task" and left is not None:
+            self.game._star_guess_floor = max(self.game._star_guess_floor, star)
+        return star, source, tier
 
     def build_state(self, seen, star_shift: int | None = None) -> State:
         """这一帧三选一的局面（传给 engine.advise）。star_shift：按记下的星数加几计算（None 时按 SelectTracker.first_star
@@ -1570,8 +1771,12 @@ class Session:
         star, source, tier = self.judge_source(probabilities, seen.names, rarity[0], bool(getattr(seen, "team", False)))
         # 这次三选一的来源：第一次算局面时记下，同一组候选后来读对了时重新判（要在 first_star 之前：重新判时清掉它的结论）
         self._open_judged(seen, source)
+        # 不是任务的再按画面上的迹象分升星还是筹码商店（依据记成 select._source_by）；first_star 按分出来的判。概率行比记下的
+        # 星数正好高一星（judge_source 按刚升星算的那种）也记在这次三选一的记录上，关掉以后补准时用
+        source = self._source_of(source, row_up=s.star_read and star == s.star + 1)
         if star_shift is None:
-            star_shift = 1 if self.select.first_star(seen, star, source, owned) == "up" else 0
+            check = self.select.first_star(seen, star, source, owned, self.select._source_by)
+            star_shift = 1 if check == "up" else 0
         star += star_shift
         map_name = s.map
         if map_name is None:
@@ -1674,6 +1879,194 @@ class Session:
             first["rerolls"] = rerolls
         first["in_table"] = in_table
 
+    # ------------------------------------------------------------ 三选一的来源：升星还是筹码商店
+
+    def on_levelup_banner(self, rank: int) -> Event | None:
+        """读到一次升星横幅（「NTH GOT A NEW STAR」）上的名次 rank：那名玩家在玩家列表上的第几行，从 1 数。识别流程在持锁时、
+        不是三选一的帧上调用；同一次横幅连着好几帧都读到，照样每次调。记下最后一次读到的时刻和名次（GameState._banner_cue），
+        下一次三选一出现时收进那一次的记录（_take_cues）。定来源时名次对得上自己在玩家列表上的那一行（own_row，从 0 数：
+        rank - 1 == own_row）才算自己升星（_source_of）；队友升星也出横幅，对不上、不算。
+        本局已结束后、名次不合理（不是 1～8 的整数）时不记。不发事件，返回 None。第一次读到（名次变了、离上一次读到隔了
+        SOURCE_CUE_S 以上也算）时记一条识别读数 read:levelup_banner。"""
+        g = self.game
+        if g.game_over or not isinstance(rank, int) or isinstance(rank, bool) or not 1 <= rank <= 8:
+            return None
+        now = self._clock()
+        prev, g._banner_cue = g._banner_cue, (now, rank)
+        if prev is None or prev[1] != rank or now - prev[0] > SOURCE_CUE_S:
+            self.trace("levelup_banner", rank=rank, own_row=g.own_row)
+        return None
+
+    def on_shop_window(self, price: int | None) -> Event | None:
+        """认出一次筹码商店的购买窗，price 是窗上的价格（读不出为 None）。识别流程在持锁时、不是三选一的帧上调用；同一个购买窗
+        连着好几帧都认出，照样每次调。记下最后一次看到的时刻和价格（GameState._shop_cue；这一次读不出价格时沿用刚才读到的），
+        下一次三选一出现时收进那一次的记录（_take_cues）。点了「购买！」以后约 1 秒出三选一，点「离开」就不出；它只当加分：
+        同时有自己的升星横幅、星数涨了时按升星（_source_of）。
+        本局已结束后不记。不发事件，返回 None。第一次看到（价格变了、离上一次隔了 SOURCE_CUE_S 以上也算）时记一条识别读数
+        read:shop_window。"""
+        g = self.game
+        if g.game_over:
+            return None
+        if not isinstance(price, int) or isinstance(price, bool) or price < 0:
+            price = None
+        now = self._clock()
+        prev = g._shop_cue
+        fresh = prev is None or now - prev[0] > SOURCE_CUE_S
+        if price is None and not fresh:
+            price = prev[1]
+        g._shop_cue = (now, price)
+        if fresh or price != prev[1]:
+            self.trace("shop_window", price=price)
+        return None
+
+    def _take_cues(self) -> tuple[int | None, tuple | None]:
+        """一次三选一出现了（_select_opened）：取走出现之前 SOURCE_CUE_S 秒以内读到的横幅名次和购买窗（(价格,)），没有时各为
+        None。记着的一律清掉：一个迹象只算给它之后的第一次三选一，太早的不算；同一组候选关了又出现时也清（那之前读到的
+        在这一次三选一之前，不算给之后的）。三选一关掉以后、下一次出现之前读到的照常留给下一次。"""
+        g = self.game
+        now = self._clock()
+        banner, shop = g._banner_cue, g._shop_cue
+        g._banner_cue = g._shop_cue = None
+        rank = banner[1] if banner is not None and now - banner[0] <= SOURCE_CUE_S else None
+        window = (shop[1],) if shop is not None and now - shop[0] <= SOURCE_CUE_S else None
+        return rank, window
+
+    def _current_rec(self) -> dict | None:
+        """显示着的这一次三选一的记录（GameState._select_rec），不是这一次的（这一次是在开新的一局以前出现的，或撤销新一局时
+        换回来的旧记录）时为 None。"""
+        rec = self.game._select_rec
+        return rec if rec is not None and rec["no"] == self.select._select_no else None
+
+    def _source_of(self, source: str, row_up: bool = False) -> str:
+        """这次三选一是升星还是筹码商店（build_state 每次算局面时调用；source 是按概率行判断的来源，判成任务的照旧）。返回
+        定下的来源；依据（selection.SOURCE_BY 的键）记成 SelectTracker._source_by，写进推荐事件（Event.source_by），也记在这次
+        三选一的记录上（关掉以后补准看它，_settle_sources）。row_up：这一帧的概率行比记下的星数正好高一星（judge_source 按
+        刚升星算的那种），不是任务的记在记录上（row_up，一次读到过就一直算），补准时不补成筹码商店。
+        不是任务的按这一次出现时收下的迹象和这会儿的局面定，按先后：
+          1. 出现之前不久读到了自己的升星横幅：名次对得上这会儿自己在玩家列表上的那一行（own_row；还不知道自己在第几行就
+             不算）→ 升星，banner；
+          2. 出现之前玩家列表上的星数已经涨了、正好算到这一次头上（_select_opened 里扣掉的那一次 _gain；上一次三选一是任务、
+             这一次出现之前的星数比它出现之前的多 1 也算），或者这一次三选一画面上读到自己的星数比出现之前多 1
+             （_rose_in_select）→ 升星，stars；
+          3. 出现之前不久看到了筹码商店的购买窗 → 筹码商店，shop_window；
+          4. 出现之前已经是 3 星（TOP_STAR，读到过的）→ 筹码商店，stars（刚升到 3 星的那一次是第 2 条）；
+          5. 都没有 → 照旧（按记下的来源，即升星），guess。
+        关掉以后补准过的（同一组候选关了又出现时）按补准的，stars。显示着的不是这一局里出现的那一次（开新的一局以前就显示着）
+        时没有记录，按 5。同一次三选一里依据变了（三选一画面上后来才读到星数 +1、这时才认出自己在第几行）就照新的定：
+        局面跟着变的照常重算、重发推荐，局面没变的也重发一次（SelectTracker.frame 的去重键里有依据）。"""
+        rec = self._current_rec()
+        if source == "task":
+            by = "rows"
+        elif rec is None:
+            by = "guess"
+        elif rec["settled"] is not None:
+            source, by = rec["settled"], "stars"
+        else:
+            source, by = self._levelup_or_shop(rec, source)
+        self.select._source_by = by
+        if rec is not None:
+            rec["source"], rec["by"] = source, by
+            if row_up and by != "rows":
+                rec["row_up"] = True
+        return source
+
+    def _levelup_or_shop(self, rec: dict, source: str) -> tuple[str, str]:
+        """不是任务的三选一按记录里的迹象和这会儿的局面分升星还是筹码商店（规则见 _source_of），返回（来源, 依据）。"""
+        own = self.game.own_row
+        if rec["banner"] is not None and own is not None and rec["banner"] - 1 == own:
+            return "levelup", "banner"
+        if rec["gain"] or self._rose_in_select(rec):
+            return "levelup", "stars"
+        if rec["shop"] is not None:
+            return "shop", "shop_window"
+        if rec["before"] is not None and rec["before"] >= TOP_STAR:
+            return "shop", "stars"
+        return source, "guess"
+
+    def _rose_in_select(self, rec: dict) -> bool:
+        """这一次三选一画面上读到的自己的星数（GameState._select_star）比出现之前的（rec 的 before）多 1，而且多出来的这 1 星
+        只能是这一次的：上一次对账以来（_source_books），这一次之前不是任务的几次出现以后都读到过星数（rec 的 seen），出现
+        之前的星数已经算上了它们可能升的星。之前有哪一次没读到过（三选一画面上自己那一行常被标题带挡住、关掉以后还没在对局
+        画面上读星数），那一次也可能是升星，不认；不在这一段里的（关了又出现、中间对过账）也不认。"""
+        g = self.game
+        star, before = g._select_star, rec["before"]
+        if star is None or before is None or star != before + 1:
+            return False
+        for other in g._source_books:
+            if other is rec:
+                return True
+            if other["by"] != "rows" and not other["seen"]:
+                return False
+        return False
+
+    def _select_star_seen(self) -> None:
+        """这一帧在显示着的这一次三选一上读到了自己的星数（SelectTracker.frame 交来的这一帧的读数）：记在这一次的记录上
+        （seen），之后的三选一出现之前的星数就算上了这一次可能升的星（_rose_in_select）。"""
+        rec = self._current_rec()
+        if rec is not None:
+            rec["seen"] = True
+
+    def _own_banner_age(self) -> float | None:
+        """还没有三选一收走的升星横幅读到了多少秒：名次对得上自己那一行，或者还不知道自己在第几行（可能是自己的）；没有、
+        是队友的时为 None。三选一出现时横幅都收走了（_take_cues），这里剩下的是上一次三选一以后读到的。
+        自己升星的那次三选一在横幅之后约 1 秒才出：SOURCE_CUE_S 以内是它可能还在路上，玩家列表上的星数已经涨了；过了还没出，
+        是那次三选一没认出来（或横幅读错了）。两样都让涨的星数对不上之前的几次（_settle_sources）。"""
+        g = self.game
+        cue = g._banner_cue
+        if cue is None or (g.own_row is not None and cue[1] - 1 != g.own_row):
+            return None
+        return self._clock() - cue[0]
+
+    def _settle_sources(self, star: int) -> None:
+        """对局画面上读到了自己的星数（star，已经采用的读数；on_stars 调用）：上一次对账以来出现过的三选一（GameState._source_books，
+        先后照出现的先后）一起对账，把拿不准的、按购买窗定的（selection.SETTLE_BY）按星数补准，各发一个 source_settled
+        （select_no 是那一次推荐事件上的编号，source 为 levelup 或 shop，source_by 为 stars），记在那一次的记录上（settled）。
+        横幅、星数定的不改，任务的不算。
+        星数从这一段第一次不是任务的三选一出现之前起涨了几颗，扣掉其中已经认准是升星的几次（横幅、星数定的；出现之前星数就
+        已经涨过、算在起点里的不扣），剩下的和还拿不准的次数（拿不准的、按购买窗定的、一直没给出推荐的）比：
+          相同 → 都是升星；一颗没涨 → 都是筹码商店；其余对不上的不补，留着拿不准。
+        只有一次时就是「涨了 1 是升星，没涨是筹码商店」。对账以后这一段清掉，下一段从之后出现的三选一算起。
+        要补成筹码商店时，概率行比记下的星数正好高一星的那几次（记录的 row_up）不补：筹码商店的概率行是当时星数的那一行，
+        高一星的是升星那一行，星数却没涨，多半是任务的三选一碰巧对上（最左格正好是那个星数的固定稀有度）或者概率行读错了，
+        留着拿不准。
+        先不对、留到下一次读到星数：三选一还显示着（正要按关掉处理、被玩家隐藏着）；星数涨了、还有三选一没出现（_gain）；
+        刚读到自己的升星横幅、升星的那次三选一可能还在路上（_own_banner_age 不到 SOURCE_CUE_S）。横幅读到以后过了这么久那次
+        三选一还没出（没认出来，或横幅读错了）：涨的星数里可能有一颗不属于这几次，照常清掉这一段、不补。
+        不论对不对账，这一段里的几次都记下出现以后读到过星数（seen）。
+        读数的保护照现有的：只用采用了的读数（连读确认的确认了才算，NewGameJudge.read_star）。本局结束以后读到的星数不起作用
+        （on_stars），开了新的一局换了 GameState，没补上的不再补。每次对账记一条识别读数 read:source_settle。"""
+        g = self.game
+        books = g._source_books
+        for rec in books:
+            rec["seen"] = True
+        banner = self._own_banner_age()
+        if not books or self.select._visible or g._gain is not None or (banner is not None and banner <= SOURCE_CUE_S):
+            return
+        g._source_books = []
+        books = [rec for rec in books if rec["by"] != "rows"]
+        targets = [rec for rec in books if rec["by"] in SETTLE_BY]
+        if not targets:
+            return
+        base = books[0]["before"]
+        known = sum(1 for rec in books if rec["by"] in ("banner", "stars") and rec["source"] == "levelup"
+                    and not (rec["gain"] and base is not None and rec["gain_to"] <= base))
+        unknown = sum(1 for rec in books if rec["by"] not in ("banner", "stars"))
+        left = None if base is None or banner is not None else star - base - known
+        source = "levelup" if left == unknown else "shop" if left == 0 else None
+        extra = {"banner_s": round(banner, 1)} if banner is not None else {}  # 没等来三选一的横幅读到了多少秒
+        kept = [rec["no"] for rec in targets if rec["row_up"]] if source == "shop" else []
+        if kept:
+            extra["row_up"] = kept  # 概率行高一星、星数没涨，不补成筹码商店的几次
+        self.trace("source_settle", star=star, base=base, levelups=known, unsure=unknown, source=source,
+                   selects=[rec["no"] for rec in books], **extra)
+        if source is None:
+            return
+        for rec in targets:
+            if rec["no"] in kept:
+                continue
+            rec["settled"] = source
+            self._push(self._event("source_settled", select_no=rec["no"], source=source, source_by="stars"))
+
     @property
     def endless_pending(self) -> bool:
         """循环往复给的额外那次三选一还没给（State.endless_pending：引擎给剩余三选一次数另加 1 次）。
@@ -1763,24 +2156,57 @@ class Session:
         elif n == prev[1]:
             g.per_star_rerolls = False
 
-    def _select_opened(self, names: tuple) -> None:
-        """一次三选一界面出现了（刷新不算新的一次；同一组候选关闭后又出现也不算，见下面「刚关掉的同一组候选又出现了」）。"""
+    def _select_opened(self, names: tuple, prior: tuple[int, bool] | None = None) -> None:
+        """一次三选一界面出现了（刷新不算新的一次；同一组候选关闭后又出现也不算，见下面「刚关掉的同一组候选又出现了」）。
+        prior：这一帧在三选一界面上读到的星数改了记下的星数时，改之前的（星数, 读到过没有），就是这一次出现之前的星数
+        （SelectTracker._fresh_prior）；没改时为 None，出现之前的就是现在记下的。
+
+        出现之前不久读到的升星横幅、购买窗收进这一次的记录、之前的作废（_take_cues）。新的一次另记下认来源要的几项
+        （GameState._select_rec，放进这一段的对账 _source_books）：出现之前的星数，出现之前涨的星数算到了这一次头上没有
+        （扣掉的 _gain，或上一次是任务、星数比它出现之前多 1），收下的横幅名次和购买窗。"""
         self._entered_game(offer=True)
         closed, self.game._last_closed = self.game._last_closed, None
         reopened = closed is not None and closed[0] == names
+        banner, shop = self._take_cues()
+        prev = self.game._select_rec
         if not reopened:
             # 新的一次三选一：来源和那一组候选的读数在第一次给推荐时记下（_open_judged），是不是循环往复给的额外那次也是
             # （_endless_judged）
             self.game._open_source = self.game._open_read = None
             self.game._endless_open = False
             # 每次三选一都可能是升星的那一次（星数增加后还差的那几次，见 _star_gained）
-            if self.game._gain is not None:
-                self.game._gain["missing"] -= 1
-                if self.game._gain["missing"] <= 0:
+            gain = self.game._gain
+            if gain is not None:
+                gain["missing"] -= 1
+                if gain["missing"] <= 0:
                     self.game._gain = None
             else:
                 self.game._selects_since_read += 1
+            s = self.settings
+            star, read = prior if prior is not None else (s.star, s.star_read)
+            before = star if read else None
+            # 出现之前的星数已经算上了这一段里之前几次可能升的星：之前不是任务的几次出现以后都读到过星数（见 _rose_in_select）
+            clean = all(other["by"] == "rows" or other["seen"] for other in self.game._source_books)
+            # 上一次三选一是任务、这一次出现之前的星数比那一次出现之前的多 1：任务的三选一不升星，涨的这一颗只能是这一次的。
+            # 中间没在对局画面上读到过星数时，星数增加的那一下按 _selects_since_read 算到了那一次任务头上，_gain 没有留下。
+            # 那一次出现之前的星数要已经算上了更早几次可能升的星（clean），不然涨的这一颗也可能是更早那几次的
+            rose = (gain is None and prev is not None and prev["by"] == "rows" and prev["clean"]
+                    and prev["before"] is not None and before is not None and before == prev["before"] + 1)
+            # no 第几次三选一（推荐事件的 select_no）；before 出现之前的星数（这一局还没读到时为 None）；clean 见上；gain、gain_to
+            # 出现之前星数涨了、涨的那一颗算到了这一次头上（扣掉的 _gain，或上面的 rose），涨到了几星；banner、shop 出现之前
+            # 不久读到的横幅名次、购买窗（(价格,)）；source、by 最近一次定的来源和依据（_source_of）；row_up 读到过比记下的
+            # 星数正好高一星的概率行（_source_of）；seen 出现以后读到过星数（_select_star_seen、_settle_sources）；settled 关掉
+            # 以后补准的来源（_settle_sources）
+            rec = {"no": self.select._select_no, "before": before, "clean": clean, "gain": gain is not None or rose,
+                   "gain_to": gain["to"] if gain is not None else before if rose else None, "banner": banner,
+                   "shop": shop, "source": None, "by": None, "row_up": False, "seen": False, "settled": None}
+            self.game._select_rec = rec
+            self.game._source_books.append(rec)
             return
+        rec = self.game._select_rec
+        if rec is not None and rec["no"] == self.select._select_no - 1:
+            # 仍是同一次三选一：定来源接着用这一次的记录，推荐事件换了编号（select_no），补准时按新的编号发
+            rec["no"] = self.select._select_no
         # 刚关掉的同一组候选又出现了（中间没有别的三选一）：刚才记下的不算，撤销，等这一次再记
         first = self.game._open_read
         if first is not None and first["names"] == names:
@@ -1793,6 +2219,8 @@ class Session:
         if chip and chip in self.settings.owned and self.game.chip_sources.get(chip) in ("pick", "missed"):
             self.settings.owned.remove(chip)
             self.game.chip_sources.pop(chip, None)
+            self.game.owned_sources.pop(chip, None)
+            self.game._panel_seen.discard(chip)
             self.game._pick_offers.pop(chip, None)
             self.save()
             self._push(self._event("pick_reverted", chip=chip, offer=list(names)))
@@ -1811,6 +2239,7 @@ class Session:
         if picked and picked in self.db.chips and picked not in self.settings.owned:
             self.settings.owned.append(picked)
             g.chip_sources[picked] = "pick"
+            g.owned_sources[picked] = "pick"
             g._pick_offers[picked] = tuple(offer)
             if picked == self.db.rules["endless_cycle"]["chip"]:
                 self._endless_got(self.settings.round, g._open_source)
@@ -1862,15 +2291,17 @@ class Session:
 
         本局已结束后出现三选一（没有先调 begin_offer 时）：先开新的一局（返回 newgame，请用户打开「查看筹码」面板），
         这次三选一在新的一局里照常处理，事件（推荐等）放进待取队列，排在新一局之后。
-        识别流程每帧先读星数（on_stars）再调这里：这一帧在三选一界面上读到的星数，紧接着换成另一次三选一时算新的这一次的。
+        识别流程每帧先读星数（on_stars）再调这里：这一帧在三选一界面上读到的星数，紧接着换成另一次三选一时算新的这一次的；
+        那次读数改了记下的星数时，改之前的星数是这一帧出现的新的一次三选一出现之前的星数（SelectTracker._fresh_prior）。
         界面这一侧的状态机（开关、刷新等待、去重、给推荐）在 SelectTracker.frame。"""
         self._note_game_language(seen)
         sel = self.select
         fresh, sel._fresh_select_star = sel._fresh_select_star, None
+        prior, sel._fresh_prior = sel._fresh_prior, None
         if seen is None or not self.game.game_over:
-            return sel.frame(seen, fresh)
+            return sel.frame(seen, fresh, prior)
         newgame = self.begin_offer()
-        ev = sel.frame(seen, fresh)
+        ev = sel.frame(seen, fresh, prior)
         if ev is not None:
             self._push(ev)
         return newgame
@@ -1892,6 +2323,122 @@ class Session:
         """正在等候选筹码读全（三选一刚出现时有筹码没读出来、刷新动画的中间帧、只读到共同部分的筹码名，见
         SelectTracker.hold_frame）。悬浮窗在这期间接着截图（手动模式不跟随三选一时也是），最多 selection.HOLD_MAX_S。"""
         return self.select.holding
+
+
+def _table_name_key(text) -> str:
+    """数据表上的名字和记账里的名字比较时用的写法。记账里的名字（player_name）是玩家列表上读到的名字的主干
+    （advisor/vision/stars.py 的 name_key：去掉空白、标点和括号，英文字母转小写，去掉首尾连带读进来的数字），表上的
+    名字照同一个写法取主干才比得上；两边再先统一全半角（NFKC）。记账不导入识别模块，这里照写一份。"""
+    t = re.sub(r"[\W_]+", "", unicodedata.normalize("NFKC", str(text or ""))).lower()
+    return re.sub(r"^\d+|\d+$", "", t)
+
+
+# 表上的名字和记账里自己的名字相似到这么高就算同一个名字（difflib 的比例）。要和 advisor/vision/stars.py 的 NAME_MATCH
+# 一致：玩家列表上认出自己那一行用的是同一套规矩，同一份名字识别结果在两边不能给出不同的答案。
+_TABLE_NAME_MATCH = 0.8
+
+
+def _table_same_name(key: str, text) -> bool:
+    """两个名字的主干（_table_name_key 的结果）是不是同一个名字，和 advisor/vision/stars.py 的 _same_name 一样：读到的那个
+    里含着记下的那个，或者两者的相似度不低于 _TABLE_NAME_MATCH。有一边是空的就不算（空的不说明任何事）。"""
+    got = _table_name_key(text)
+    if not key or not got:
+        return False
+    return key in got or difflib.SequenceMatcher(None, key, got).ratio() >= _TABLE_NAME_MATCH
+
+
+def _table_signature(reading) -> tuple:
+    """核对「两次读到的是不是同一份数」（on_result_table）：各栏的五项数字、BEST、两个星币数，按座位排好。"""
+    rows = []
+    for c in sorted(reading.columns, key=lambda c: c.seat):
+        stats = c.stats or {}
+        rows.append((c.seat, tuple((k, stats.get(k)) for k in TABLE_STATS),
+                     tuple(sorted(c.best or ())), c.coins_all, c.coins_transferred))
+    return tuple(rows)
+
+
+def _table_known_count(reading) -> int:
+    """这份表读到了几个数（on_result_table）：各栏的五项数字、两个星币数里不是 None 的个数。
+
+    用来判断后来读到的是不是更全的一份：报告取同一局的最后一条 table，记下的应该是读得最全的那一次。
+    """
+    count = 0
+    for c in reading.columns:
+        stats = c.stats or {}
+        count += sum(stats.get(k) is not None for k in TABLE_STATS)
+        count += (c.coins_all is not None) + (c.coins_transferred is not None)
+    return count
+
+
+def _table_self_seat(session, columns) -> int | None:
+    """哪一栏是自己：返回座位，认不准时为 None。
+
+    两条线索：表上名字和记账里自己的名字一样（_table_same_name，和玩家列表上认名字的同一套规矩，容得下识别的一两个
+    字读错）；座位和自己在玩家列表的那一行对得上（own_row 第 k 行就是第 k+1 座）。两条指向不同的栏、名字对上不止一栏时，
+    都不认。
+
+    名字一栏都没对上、只剩座位这一条时，座位那一栏的名字读出来了、自己的名字也知道、两者又对不上，就不认：名字对不上
+    多半是座位认错了（own_row 读错）。哪一边的名字没读出来时，仍按座位认：没有名字可比，座位就是唯一的线索。
+
+    「加好友」钮不是灰的（muted 为 False）那一栏一定不是自己；是灰的（muted 为 True）也说明不了是自己（电脑、已经是好友的
+    人也是灰的）。电脑那一栏也不是自己。
+    """
+    game = session.game
+    key = _table_name_key(session.player_name)
+    by_name = [c.seat for c in columns if _table_same_name(key, c.name)]
+    by_seat = None
+    if game.own_row is not None and any(c.seat == game.own_row + 1 for c in columns):
+        by_seat = game.own_row + 1
+    if len(by_name) > 1:
+        return None
+    name_seat = by_name[0] if by_name else None
+    if name_seat is not None and by_seat is not None and name_seat != by_seat:
+        return None
+    seat = name_seat if name_seat is not None else by_seat
+    if seat is None:
+        return None
+    column = next(c for c in columns if c.seat == seat)
+    if name_seat is None and key and _table_name_key(column.name):
+        return None
+    if column.muted is False or column.bot is True:
+        return None
+    return seat
+
+
+def _table_record(session, reading) -> dict:
+    """结算数据表 → 推荐日志里的 table 记录：map、difficulty、rounds 和每栏一项的 players（seat、self、bot、hero、五项数字、
+    best、两个星币数、chips、chips_unknown、badges），不带名字、不带等级。拿不准的项写 None。
+
+    自己那一栏用记账里自己的角色；别的栏按座位 k 对应局里玩家列表第 k 行，取 game.teammates 里那一行认出的角色。
+    电脑以表上名字的写法为准，名字读不出时用玩家列表上那一行读名字判过的（_mate_bots；没判过的不算，teammates 里那一行
+    的 bot 没判过时也写着 False）。
+    """
+    columns = sorted(reading.columns, key=lambda c: c.seat)
+    own_seat = _table_self_seat(session, columns)
+    game = session.game
+    own_row = game.own_row
+    own_hero = session.settings.hero if session.hero_source != "pending" else None
+    mates = {int(t.get("row", -1)): t for t in game.teammates}
+    players = []
+    for c in columns:
+        mate = mates.get(c.seat - 1)
+        own = own_row is not None and c.seat == own_row + 1
+        stats = c.stats or {}
+        players.append({
+            "seat": c.seat,
+            "self": None if own_seat is None else c.seat == own_seat,
+            "bot": c.bot if c.bot is not None else game._mate_bots.get(c.seat - 1),
+            "hero": own_hero if own else (mate.get("hero") if mate else None),
+            **{k: stats.get(k) for k in TABLE_STATS},
+            "best": [k for k in TABLE_STATS if k in (c.best or ())],
+            "coins_all": c.coins_all,
+            "coins_transferred": c.coins_transferred,
+            "chips": list(c.chips) if c.chips is not None else None,
+            "chips_unknown": c.chips_unknown,
+            "badges": ([{"kind": kind, "value": value} for kind, value in c.badges]
+                       if c.badges is not None else None),
+        })
+    return {"map": reading.map, "difficulty": reading.difficulty, "rounds": reading.rounds, "players": players}
 
 
 @dataclass(frozen=True)
@@ -1942,6 +2489,8 @@ class WatchHints:
     round_now: int | None = None
     # 已经当作不在对局里了（Session.game_quiet）：识别流程又读到对局里的东西时据此清掉，满了时长也不重复置
     game_quiet: bool = False
+    # 在等结算数据表（Session.wants_table）：识别流程每帧先看一眼是不是数据表，像的才读
+    wants_table: bool = False
 
     @classmethod
     def of(cls, session, seen=None) -> WatchHints:
@@ -1964,4 +2513,5 @@ class WatchHints:
             select_noted=session.select.noted,
             round_now=session.settings.round,
             game_quiet=session.game_quiet is True,
+            wants_table=session.wants_table,
         )

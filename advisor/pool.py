@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .data import CLASSES, DB, HARD, NORMAL, RARITIES, Chip, Hero
+from .data import CLASSES, DB, HARD, LEFTMOST_MODES, NORMAL, RARITIES, Chip, Hero
 
 Dist = dict[str, float]  # 筹码名 → 出现在这一格的概率
 
@@ -186,35 +186,46 @@ def difficulty_of(db: DB, probabilities) -> str | None:
     return None
 
 
-# 刷新后的三选一，最左格的出法（rules.toml [pool] reroll_leftmost）
+# 最左格的出法：rules.toml [pool] 的 leftmost 管第一次刷出，reroll_leftmost 管刷新以后
 REROLL_LEFT_RARITY = "rarity"  # 固定稀有度，从该稀有度的全部筹码（玩家筹码池）里按普通权重抽，不限职业筹码池
-REROLL_LEFT_CLASS_POOL = "class_pool"  # 与第一次刷出相同：固定稀有度，按职业权重从职业筹码池（池表）出
-# 固定稀有度，像第一次刷出那样按职业权重选职业筹码池，但职业筹码池按筹码的职业标签建（tags 里属于职业的那几个就是它所在的
+REROLL_LEFT_CLASS_POOL = "class_pool"  # 固定稀有度，按职业权重从职业筹码池（池表）出
+# 固定稀有度，按职业权重选职业筹码池，但职业筹码池按筹码的职业标签建（tags 里属于职业的那几个就是它所在的
 # 职业池），不按池表：带职业标签却不在池表里的筹码（磨刀石、电磁炮等）也可能出现
 REROLL_LEFT_CLASS_TAG = "class_tag"
 REROLL_LEFT_RANDOM = "random"  # 与其余两格一样随机，不固定稀有度
-REROLL_LEFT_MODES = (REROLL_LEFT_RARITY, REROLL_LEFT_CLASS_POOL, REROLL_LEFT_CLASS_TAG, REROLL_LEFT_RANDOM)
+# 全部取值（载入 rules.toml 时也按它核对，所以放在 data 那一层）：就是上面这四个
+REROLL_LEFT_MODES = LEFTMOST_MODES
 
 
 def class_tags(chip: Chip) -> tuple[str, ...]:
-    """筹码的职业标签：tags 里属于职业（data.CLASSES）的那几个，按标签的先后。刷新后最左格按 REROLL_LEFT_CLASS_TAG 出时，
+    """筹码的职业标签：tags 里属于职业（data.CLASSES）的那几个，按标签的先后。最左格按 REROLL_LEFT_CLASS_TAG 出时，
     它们就是这个筹码所在的职业筹码池。"""
     return tuple(t for t in dict.fromkeys(chip.tags) if t in CLASSES)
 
 
-def reroll_leftmost_mode(db: DB) -> str:
-    """刷新后最左格的出法。没有 reroll_leftmost 时按旧开关 reroll_leftmost_class_pool（true = 职业池，false = 随机）。
+def leftmost_mode(db: DB, reroll: bool = False) -> str:
+    """最左格的出法：reroll=False（第一次刷出）读 rules.toml [pool] leftmost，reroll=True（刷新以后）读 reroll_leftmost。
 
-    现在采用 REROLL_LEFT_CLASS_TAG：稀有度按星数固定，按职业权重选职业筹码池，池按筹码的职业标签建。依据见
-    rules.toml [pool] 的注释。
+    没有 leftmost 时按旧开关 leftmost_class_pool（true = 职业池，false = 随机），两个都没写时是 class_pool；
+    刷新以后同理按旧开关 reroll_leftmost_class_pool。现在采用 REROLL_LEFT_CLASS_TAG：稀有度按星数固定，按职业权重选
+    职业筹码池，池按筹码的职业标签建。依据见 rules.toml [pool] 的注释。
     """
     cfg = db.rules["pool"]
-    mode = cfg.get("reroll_leftmost")
+    if reroll:
+        key, legacy = "reroll_leftmost", cfg.get("reroll_leftmost_class_pool", True)
+    else:
+        key, legacy = "leftmost", cfg.get("leftmost_class_pool", True)
+    mode = cfg.get(key)
     if mode is None:
-        return REROLL_LEFT_CLASS_POOL if cfg.get("reroll_leftmost_class_pool", True) else REROLL_LEFT_RANDOM
+        return REROLL_LEFT_CLASS_POOL if legacy else REROLL_LEFT_RANDOM
     if mode not in REROLL_LEFT_MODES:
-        raise ValueError(f"rules.toml [pool] reroll_leftmost 应为 {'、'.join(REROLL_LEFT_MODES)} 之一（现为「{mode}」）")
+        raise ValueError(f"rules.toml [pool] {key} 应为 {'、'.join(REROLL_LEFT_MODES)} 之一（现为「{mode}」）")
     return mode
+
+
+def reroll_leftmost_mode(db: DB) -> str:
+    """刷新后最左格的出法（leftmost_mode(db, True)）。"""
+    return leftmost_mode(db, True)
 
 
 def rarity_row(db: DB, star: int, source: str, tier: int | None, reroll: bool = False,
@@ -229,11 +240,8 @@ def rarity_row(db: DB, star: int, source: str, tier: int | None, reroll: bool = 
     else:
         row = rows[star]
         fixed = db.rules["rarity"]["fixed"][star]
-        # 刷新后的最左格和第一次刷出时分开设：刷新后按 reroll_leftmost，第一次刷出按 leftmost_class_pool
-        if reroll:
-            if reroll_leftmost_mode(db) == REROLL_LEFT_RANDOM:
-                fixed = None
-        elif not db.rules["pool"]["leftmost_class_pool"]:
+        # 刷新后的最左格和第一次刷出时分开设：刷新后按 reroll_leftmost，第一次刷出按 leftmost
+        if leftmost_mode(db, reroll) == REROLL_LEFT_RANDOM:
             fixed = None
     total = sum(row)
     return [p / total for p in row], fixed
@@ -256,9 +264,10 @@ def slot_dists(
     """返回（最左格的分布，其余两格的分布）。任务筹码没有特殊的最左格，返回 None。
 
     probabilities / left_rarity 是从画面上读到的概率和最左格稀有度，给了就用它们。
-    reroll=True 时按「刷新后刷出的三选一」算最左格（rules.toml [pool] reroll_leftmost）：现在采用 class_tag，固定稀有度、
-    像第一次刷出那样按职业权重选职业筹码池，但池按筹码的职业标签建（class_tags），带职业标签却不在池表里的磨刀石等也可能
-    出现；另有 rarity（不按职业权重，从该稀有度的全部筹码里按普通权重抽）、class_pool（同第一次刷出，按池表）、random。
+    reroll=True 时按「刷新后刷出的三选一」算最左格（rules.toml [pool] reroll_leftmost），False 时按第一次刷出
+    （[pool] leftmost）：现在都采用 class_tag，固定稀有度、按职业权重选职业筹码池，但池按筹码的职业标签建（class_tags），
+    带职业标签却不在池表里的磨刀石等也可能出现；另有 rarity（不按职业权重，从该稀有度的全部筹码里按普通权重抽）、
+    class_pool（按池表）、random。
     刷新的估值、自己的方案里「刷出排在前面的概率」、循环往复多出来的刷新、编辑方案的「较难出现」都经这里取刷新后的分布。
     difficulty 为 NORMAL 时按普通难度的概率表取稀有度概率（画面上读到的概率仍然优先）。
     class_owned：已拿的筹码。给了时最左格选职业筹码池的权重按职业分值累加（class_weights：初始职业分值 + 这些筹码的
@@ -291,14 +300,14 @@ def slot_dists(
 
     left: Dist = {}
     fixed_members = by_rarity.get(fixed, ())
-    mode = reroll_leftmost_mode(db) if reroll else None
+    mode = leftmost_mode(db, reroll)
     if mode == REROLL_LEFT_RARITY:
-        # 刷新后：稀有度仍固定，但不按职业权重、不限职业筹码池（同流派加权照常）
+        # 稀有度仍固定，但不按职业权重、不限职业筹码池（同流派加权照常）
         for c in fixed_members:
             left[c.name] = w[c.name]
     else:
-        # 按职业权重选职业筹码池，池里按同流派加权抽。第一次刷出（和刷新后按 class_pool）的池按池表（Chip.pools）；
-        # 刷新后按 class_tag 时池按筹码的职业标签（class_tags）
+        # 按职业权重选职业筹码池，池里按同流派加权抽。class_pool 的池按池表（Chip.pools）；
+        # class_tag 的池按筹码的职业标签（class_tags）
         weights = class_weights(db, hero, class_owned)
         by_class: dict[str, list[Chip]] = {}
         for c in fixed_members:

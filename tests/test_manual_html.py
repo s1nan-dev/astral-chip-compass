@@ -36,7 +36,7 @@ MANUAL = PROJECT / "docs" / "使用说明.md"
 MANUAL_DIR = PROJECT / "docs" / "manual"
 LAUNCHER = build_release.LAUNCHER_EXE  # 根目录双击的启动程序：工具的中文名加 .exe（app 里的程序本体叫 ACC.exe）
 # 首页 README 开头用粗体写的那句：docs/使用说明.md 里不重复；发行版里没有首页，使用说明网页的开头照写
-PURE_VISION = f"{version.APP_NAME}为纯视觉方案，不会操作游戏，不会影响游戏收发包，不会注入游戏内存。"
+PURE_VISION = f"{version.APP_NAME}为无接触式工具。采用纯视觉方案，不会操作游戏，不会影响游戏收发包，不会注入游戏内存。"
 # 和纯视觉声明并列的一条，下载之前就要看到：Steam 版的国服、国际服和 TapTap 版都认，拾星助手只认简体中文、繁体中文的游戏界面
 LANGUAGE_NOTE = "目前仅支持 PC 端，游戏语言为简体中文或繁体中文。支持 Steam 版（国服和国际服）和 TapTap 版。"
 # 使用说明的各节（「### 」标题）：先是简介和系统需求（下载、解压之前就要知道电脑够不够），再是简短的上手和
@@ -468,7 +468,7 @@ class ReadmeManualTest(unittest.TestCase):
         notes = "\n".join(re.findall(r"^  - (.+)$", minimum, re.M))
         lowend = module_constant(PROJECT / "advisor" / "ui" / "settings" / "dialog.py", "LOWEND_TITLE")
         self.assertEqual(module_constant(PROJECT / "advisor" / "vision" / "window_capture.py", "WINDOW_BUILD"), 19041)
-        for words in ("约 43 MB", "「全屏」或「窗口化」", f"「{lowend}」", "Windows 10 版本 2004 起"):
+        for words in ("约 24 MB", "「全屏」或「窗口化」", f"「{lowend}」", "Windows 10 版本 2004 起"):
             with self.subTest(notes=words):
                 self.assertIn(words, notes)
         for words in ("简体中文", "1000 像素", "563 像素", "黄色细框", "vc_redist.x64.exe"):
@@ -485,7 +485,7 @@ class ReadmeManualTest(unittest.TestCase):
         """「三步上手」：解压的位置、解压出来有什么、Windows 的安全提示怎么点、杀毒软件、第一次运行的下载、窗口化和合作挑战。"""
         part = self.part("## 三步上手")
         for words in ("路径可以含中文", "C:\\Program Files", f"「{LAUNCHER}」「使用说明.html」和 app 文件夹", f"双击「{LAUNCHER}」",
-                      "「Windows 已保护你的电脑」", "「更多信息」", "「仍要运行」", "杀毒软件", "约 43 MB", "一分多钟",
+                      "「Windows 已保护你的电脑」", "「更多信息」", "「仍要运行」", "杀毒软件", "约 24 MB", "一分多钟",
                       "「全屏」或「窗口化」", "合作挑战"):
             with self.subTest(words=words):
                 self.assertIn(words, part)

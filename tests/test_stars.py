@@ -34,7 +34,8 @@ ALANA_FRAME = (3840, 2160)
 TILTED_PHOTO = "UT_Hero_RolePhoto_103_01.png"  # 阿兰娜泳装的角色照（data/photo_tilt.json 里转 17°）
 # 阿兰娜泳装的健全版：从卡面现裁的角色照（data/card_crops.json），对局里同样斜着摆，photo_tilt.json 里转 17.1°
 TILTED_SFW = "UT_Hero_RolePhoto_103_01_sfw.png"
-# 派德曼「酷暑难耐」：从卡面现裁的角色照，对局里显示斜着约 42° 的整张卡面，photo_tilt.json 里转 -42.3°
+# 派德曼「酷暑难耐」：BWIKI 上没有角色照（官方版本从备用地址下游戏内的图，复刻的版本从卡面现裁），对局里显示斜着约 42° 的
+# 整张卡面，photo_tilt.json 里转 -42.3°
 TILTED_PADMAN = "UT_Hero_RolePhoto_105_01.png"
 
 
@@ -586,7 +587,7 @@ class TiltedPhotoTest(unittest.TestCase):
 
         path = hero.heroes_dir() / TILTED_PADMAN
         if not path.is_file():
-            self.skipTest(f"没有识别图片 assets\\heroes\\{TILTED_PADMAN}（第一次运行拾星助手时下载卡面、现裁）")
+            self.skipTest(f"没有识别图片 assets\\heroes\\{TILTED_PADMAN}（第一次运行拾星助手时下载）")
         with tempfile.TemporaryDirectory(dir=sandbox.work_dir()) as tmp, \
                 mock.patch.object(hero, "user_dir", return_value=Path(tmp) / "user"):
             hero.reload_templates()

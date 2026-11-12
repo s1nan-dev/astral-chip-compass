@@ -388,7 +388,9 @@ def _write_review(out: str | None) -> None:
                 f"- 特性：{'、'.join(hs.traits)}",
                 f"- 特性说明：{'；'.join(db.traits[t] for t in hs.traits)}",
                 f"- 推荐流派：{'、'.join(ps.schools if ps and ps.schools else hs.schools) or '无'}"
-                + keep_note(db, hero.name),
+                + keep_note(db, hero.name)
+                # 名单只在推荐流派来自角色自己的 schools 时起作用（engine.context.Context.school_skip）
+                + (f"；不加推荐流派分的筹码：{'、'.join(hs.school_skip)}" if hs.school_skip and not (ps and ps.schools) else ""),
                 f"- 依据：{hs.why}",
             ]
             # 只在某个难度生效的角色专属规则：下面的表不分难度（难度未知），这类规则不出现在表里，单独列出

@@ -15,7 +15,7 @@ import unittest
 from datetime import datetime, timedelta
 from unittest import mock
 
-from advisor import logbook, paths
+from advisor import game_report, logbook, paths
 from advisor.diagnostics import _jsonable
 from advisor.pool import State
 from advisor.ui.services import Services
@@ -65,6 +65,90 @@ class DefaultLaneTest(LaneTestBase):
         self.assertEqual([r.get("client") for r in offers], ["taptap", None, None])
         self.assertNotIn("client", offers[1])
         self.assertNotIn("client", offers[2])
+
+    def test_map_source_written_only_when_known(self):
+        """offer 记录顶层的 map_source：在白名单里才写；没给、值不认识时不写。"""
+        state = State(hero="芬妮", round=3, owned=("大背包",))
+        for source in ("tasks", "manual", "别的", None):
+            self.later()
+            logbook.record_offer(state, {"best": "大背包"}, f"o-{source}", map_source=source)
+        offers = [r for r in self.records() if r["t"] == "offer"]
+        self.assertEqual([r.get("map_source") for r in offers], ["tasks", "manual", None, None])
+        self.assertNotIn("map_source", offers[2])
+        self.assertNotIn("map_source", offers[3])
+
+    def test_difficulty_source_written_only_when_known(self):
+        """offer 记录顶层的 difficulty_source：在 DIFFICULTY_SOURCES 里才写；没给、值不认识时不写。"""
+        state = State(hero="芬妮", round=3, owned=("大背包",))
+        for source in ("rows", "cap", "别的", None):
+            self.later()
+            logbook.record_offer(state, {"best": "大背包"}, f"o-{source}", difficulty_source=source)
+        offers = [r for r in self.records() if r["t"] == "offer"]
+        self.assertEqual([r.get("difficulty_source") for r in offers], ["rows", "cap", None, None])
+        self.assertNotIn("difficulty_source", offers[2])
+
+    def test_owned_lists_written_only_when_aligned(self):
+        """offer 记录顶层 owned_sources、owned_panel：和 state.owned 一样长、每项合格才写；长度不对、值不认识时不写。"""
+        state = State(hero="芬妮", round=3, owned=("大背包", "书签"))
+        self.later()
+        logbook.record_offer(state, {"best": "大背包"}, "o-1",
+                             owned_sources=["pick", None], owned_panel=[True, False])
+        self.later()
+        logbook.record_offer(state, {"best": "大背包"}, "o-2",
+                             owned_sources=["pick"], owned_panel=[True, False])  # 来路长度不对：只写面板记号
+        self.later()
+        logbook.record_offer(state, {"best": "大背包"}, "o-3",
+                             owned_sources=["pick", "别的"], owned_panel=[True, "是"])  # 值不对：那一样不写
+        offers = [r for r in self.records() if r["t"] == "offer"]
+        self.assertEqual((offers[0]["owned_sources"], offers[0]["owned_panel"]), (["pick", None], [True, False]))
+        self.assertNotIn("owned_sources", offers[1])
+        self.assertIn("owned_panel", offers[1])  # 两样各看各的：面板记号合格就写
+        self.assertNotIn("owned_sources", offers[2])
+        self.assertNotIn("owned_panel", offers[2])
+
+    def test_unadvised_cleaned(self):
+        """unadvised 记录写之前清理：reasons 只留那三种、不重复；round、star 不是非负整数写 null；advised 不是布尔值写
+        False；source 不在 SOURCES 里写 null；pick 不是文字写 null；一项原因都不剩时不记。"""
+        game = logbook.new_game()
+        self.later()
+        logbook.record_unadvised(0, reasons=["别的"])  # 一项原因都不剩（值都不认得）：不记
+        self.assertEqual([r for r in self.records() if r["t"] == "unadvised"], [])
+        self.later()
+        logbook.record_unadvised(3, round=5, reasons=["name", "name", "别的", "unknown", "hero"],
+                                 advised="是", star=-1, source="别的", pick=7)
+        self.later()
+        logbook.record_unadvised(4, round=-2, reasons=["hero"], advised=True, star=True, source="task", pick="书签")
+        records = [r for r in self.records() if r["t"] == "unadvised"]
+        self.assertEqual(len(records), 2)
+        first, second = records
+        self.assertEqual((first["game"], first["select_no"], first["round"]), (game, 3, 5))
+        self.assertEqual(first["reasons"], ["name", "unknown", "hero"])
+        self.assertFalse(first["advised"])
+        self.assertIsNone(first["star"])
+        self.assertIsNone(first["source"])
+        self.assertIsNone(first["pick"])
+        self.assertEqual((second["round"], second["star"], second["source"], second["advised"], second["pick"]),
+                         (None, None, "task", True, "书签"))
+        self.assertEqual(list(first)[:4], ["t", "time", "game", "select_no"])
+
+    def test_unadvised_on_second_lane_has_lane(self):
+        """第二张悬浮窗那条线写出的 unadvised 记录另带 "lane"（它没有 offer_id 可加前缀）：定局号以前挂着、后补写的
+        那条也一样。"""
+        line = logbook.lane("taptap")
+        self.later()
+        line.record_unadvised(1, reasons=["hero"])  # 这次运行还没定局号：先挂着
+        game = line.new_game()
+        self.later()
+        line.record_unadvised(2, reasons=["hero"])
+        records = [r for r in self.records() if r["t"] == "unadvised"]
+        self.assertEqual([(r["lane"], r["game"], r["select_no"]) for r in records],
+                         [("taptap", None, 1), ("taptap", game, 2)])
+
+    def test_whitelists_match_labels(self):
+        """推荐日志的白名单和记账里的叫法一致（改了一边忘了另一边时在这里看出来）。"""
+        from advisor.session import CHIP_SOURCE_LABEL, DIFFICULTY_SOURCE_LABEL
+        self.assertEqual(logbook.DIFFICULTY_SOURCES, frozenset(DIFFICULTY_SOURCE_LABEL))
+        self.assertEqual(logbook.OWNED_SOURCES, frozenset(CHIP_SOURCE_LABEL))
 
     def test_lane_client(self):
         line = logbook.lane("taptap")
@@ -364,6 +448,66 @@ class RestartTest(LaneTestBase):
         self.assertIsNone(taptap.resumable())
         fourth = self.offer(taptap, "凛", 3, ["短刀", "护符", "腰带"], "t3")
         self.assertNotEqual(fourth, third)
+
+
+class HeldUnadvisedTest(LaneTestBase):
+    """这次运行还没定局号时记的 unadvised 先挂着：日志里接得上的那一局可能是上次运行没打完的另一局，等头一次三选一判过
+    是不是新的一局再写；之前先来了新一局、对局结束、数据表的，game 写 null。"""
+
+    def unadvised(self) -> list[dict]:
+        return [r for r in self.records() if r["t"] == "unadvised"]
+
+    def test_first_offer_decides_game(self):
+        """上次运行打到第 8 轮没结束，重启半小时后先来了一次没给推荐的三选一（角色还没认出来），接着头一次三选一换了
+        角色、轮次变小：判出是新的一局，挂着的那项写进新的这一局（时刻照记的时候的，排在那次三选一前面），只进新这一局的
+        报告、不进上次那一局的。定了局号以后的照常直接写。"""
+        old = self.offer(logbook, "芬妮", 8, ["大背包"], "p8")
+        logbook._reset_for_tests()  # 重启：日志文件留着
+        self.later(30 * 60)
+        held_at = self.clock.isoformat(timespec="seconds")
+        logbook.record_unadvised(1, round=2, reasons=["hero"])
+        self.assertEqual(self.unadvised(), [])  # 还没定局号：先不写
+        self.later(30)
+        new = logbook.record_offer(State(hero="凛", round=2, owned=()), {"best": "护符"}, "p2")
+        self.assertNotEqual(new, old)
+        records = self.records()
+        self.assertEqual([r["t"] for r in records][-2:], ["unadvised", "offer"])
+        self.assertEqual((records[-2]["game"], records[-2]["time"], records[-2]["select_no"], records[-2]["round"]),
+                         (new, held_at, 1, 2))
+        self.assertEqual(len(game_report.build(records, new, install="0" * 32)["unadvised"]), 1)
+        self.assertEqual(game_report.build(records, old, install="0" * 32)["unadvised"], [])
+        self.later()
+        logbook.record_unadvised(2, reasons=["name"])
+        self.assertEqual([(r["game"], r["select_no"]) for r in self.unadvised()], [(new, 1), (new, 2)])
+
+    def test_game_unknown_when_other_records_come_first(self):
+        """定局号以前先来了新的一局、对局结束或数据表：挂着的不知道属于哪一局，game 写 null（时刻照记的时候的），
+        写在那一条前面；之后的照常写进当前这一局。"""
+        steps = (("new_game", logbook.new_game),
+                 ("record_game_over", lambda: logbook.record_game_over(why="检测到结算画面")),
+                 ("record_table", lambda: logbook.record_table(map="m", rounds=10)))
+        for name, step in steps:
+            with self.subTest(name):
+                logbook._reset_for_tests()
+                self.later(60)
+                held_at = self.clock.isoformat(timespec="seconds")
+                logbook.record_unadvised(1, round=2, reasons=["name"])
+                self.later()
+                game = step()
+                records = self.records()
+                self.assertEqual(records[-2]["t"], "unadvised")
+                self.assertEqual((records[-2]["game"], records[-2]["time"]), (None, held_at))
+                self.later()
+                logbook.record_unadvised(2, reasons=["hero"])
+                self.assertEqual(self.records()[-1]["game"], game)
+
+    def test_held_at_most_max(self):
+        """挂着的最多 MAX_HELD_UNADVISED 条，多的丢掉（留先来的）。"""
+        for n in range(logbook.MAX_HELD_UNADVISED + 5):
+            self.later()
+            logbook.record_unadvised(n, reasons=["hero"])
+        self.offer(logbook, "芬妮", 1, ["大背包"], "p1")
+        self.assertEqual([r["select_no"] for r in self.unadvised()], list(range(logbook.MAX_HELD_UNADVISED)))
 
 
 class LaneApiTest(LaneTestBase):

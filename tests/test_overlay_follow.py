@@ -1249,7 +1249,8 @@ class TrayShowRefreshTest(BehaviorBase):
         self.feed(self.session.begin_offer)  # 三选一界面上开新的一局
         self.offer(selected=0)
         self.w.hide()  # 照托盘的做法收起来
-        self.assertEqual(self.kinds(self.close()), ["picked"])
+        # 新的一局里角色待识别、这次没给推荐：关掉时另发一条 unadvised（推荐日志、对局报告记没给推荐的那几次）
+        self.assertEqual(self.kinds(self.close()), ["picked", "unadvised"])
         self.w.tray_part.show_from_tray()
         self.assertFalse(self.w.isHidden())
         shown = self.w.height()

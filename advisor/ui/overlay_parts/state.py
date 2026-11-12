@@ -24,9 +24,13 @@ EV_ADVICE, EV_UNREADABLE, EV_REFRESHING, EV_HERO_NEEDED = "advice", "unreadable"
 EV_PICKED, EV_MISSED_PICK, EV_IDLE, EV_PICK_REVERTED = "picked", "missed_pick", "idle", "pick_reverted"
 EV_NEWGAME, EV_GAME_OVER, EV_STATUS, EV_UNRECORDED_GAIN = "newgame", "game_over", "status", "unrecorded_gain"
 EV_PANEL_PROMPT, EV_PANEL_READ, EV_PANEL_TAB, EV_MAP_READ = "panel_prompt", "panel_read", "panel_tab", "map_read"
+EV_SOURCE_SETTLED = "source_settled"
+EV_TABLE = "table"
+EV_UNADVISED = "unadvised"
 EVENT_KINDS = frozenset({
     EV_ADVICE, EV_UNREADABLE, EV_REFRESHING, EV_HERO_NEEDED, EV_PICKED, EV_MISSED_PICK, EV_IDLE, EV_PICK_REVERTED,
     EV_NEWGAME, EV_GAME_OVER, EV_STATUS, EV_UNRECORDED_GAIN, EV_PANEL_PROMPT, EV_PANEL_READ, EV_PANEL_TAB, EV_MAP_READ,
+    EV_SOURCE_SETTLED, EV_TABLE, EV_UNADVISED,
 })
 CLOSED = {EV_IDLE, EV_PICKED, EV_MISSED_PICK}  # 三选一界面关掉时 Session 发的事件
 # 三选一显示期间的事件：按序号（Event.seq）只认最新的。界面线程按新方案、改正后的候选、选好的角色重算的推荐当场就处理，
@@ -41,7 +45,8 @@ class LiveState:
     on：筹码三选一界面正显示着（推荐卡片显示推荐）；kind：显示的是哪一种（advice 推荐 / unreadable 候选筹码列表 / hero_needed
     请选择角色 / refreshing 刚点了刷新）；seq：每出现一组新的候选筹码加一（「推荐」卡片按它自动展开）；bits：候选筹码那一行
     （候选筹码的说明、来源、按几星计算、剩余刷新次数，识别卡片的状态胶囊，不会被一次性提示挤掉）；hero_needed：三选一出现了但
-    角色待识别（推荐暂停）；reverted_chip：同一组候选再次出现、撤销了刚记下的筹码（三选一界面还开着时提示）。recent 是界面
+    角色待识别（推荐暂停）；reverted_chip：同一组候选再次出现、撤销了刚记下的筹码（三选一界面还开着时提示）；owned_unknown：
+    显示着的推荐不知道全部已有筹码（推荐事件的 owned_unknown，「推荐」卡片最上面提示，读到面板时收起）。recent 是界面
     处理过的事件（Session 记的最近事件读不出来或是空的时候，导出诊断用它）。"""
 
     def __init__(self):
@@ -51,6 +56,7 @@ class LiveState:
         self.bits: dict = {}
         self.hero_needed = False
         self.reverted_chip = ""
+        self.owned_unknown = False
         self.recent: deque = deque(maxlen=300)
 
     @property
@@ -166,6 +172,9 @@ class SessionAPI(Protocol):
     has_game_state: bool  # 有这一局的对局状态（性能自检据此判断在不在对局里）
     scheme_for: object  # 按角色取保存的筹码方案（悬浮窗接上方案存储时设置）
     schemes_of: object  # 按角色取这个角色的全部方案（先后同方案下拉框；同上）
+    # 开着「帮助拾星助手改善推荐准确度」没有：启动时、改开关时、开第二张时由悬浮窗照设置设上（Reporting.ensure、set_enabled，
+    # lanes）。开着时记账才在结算画面结束本局以后等结算页上的数据表
+    report_enabled: bool
     # 用户改正的候选筹码（OverlaySession）：第几个候选 →（识别到的原文, 改正后的名字）、最近一帧实际套用了的、最近一次三选一
     # 的识别结果（原样）和套用了改正以后的
     fixes: dict
@@ -195,6 +204,8 @@ class SessionAPI(Protocol):
     def result_settled(self) -> bool: ...  # 本局已结束、胜负定了：这时才拼对局报告（dispatch 的 log_game_over）
     @property
     def holding(self) -> bool: ...
+    @property
+    def wants_table(self) -> bool: ...  # 在等结算页上的数据表：识别线程照三选一显示着时的间隔取帧（watcher）
 
     # 识别线程交来的画面、手动改正和重算（返回要处理的推荐类事件，没有时为 None）
     def on_frame(self, seen) -> object: ...
@@ -228,6 +239,8 @@ class SessionAPI(Protocol):
     def log_state(self, kind: str, **data) -> None: ...
     def recent_events(self, seconds: float = 120) -> list[dict]: ...
     def snapshot(self) -> dict: ...
+    # 推荐日志的对局结束记录用：已有筹码和各自的来路、面板记号（三样按同一个先后取）
+    def owned_snapshot(self) -> tuple: ...
 
 
 @dataclass(frozen=True)

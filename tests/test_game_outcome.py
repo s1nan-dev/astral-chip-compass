@@ -20,7 +20,8 @@ from advisor.data import load_db
 from advisor.session import GameState, Session, Settings, offgame
 
 RESULT = SimpleNamespace(kind="result", difficulty="噩梦", map="异变图书馆", rounds=12)
-ENDED_KEYS = {"why", "map", "difficulty", "level", "rounds", "cap", "outcome", "how"}
+ENDED_KEYS = {"why", "map", "difficulty", "level", "rounds", "cap", "difficulty_source", "cap_rejected",
+              "outcome", "how", "map_source", "map_in_game"}
 
 
 def screen(kind, coins=None):

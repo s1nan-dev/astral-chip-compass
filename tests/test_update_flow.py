@@ -375,8 +375,13 @@ class FlowCase(unittest.TestCase):
                          "endpoint=http://127.0.0.1:9\n", encoding="utf-8")
         notes = self.work / "notes.txt"
         notes.write_text(NOTES_TEXT, encoding="utf-8")
+        # 识别图片的清单给一份没有备用地址上的图片的：项目的清单里备用地址上那几项的地址是正式的公开地址，和这里本机的假镜像对不上
+        # （备用地址上的图片由 tests/test_upload_r2.py 测）
+        assets = self.work / "assets_manifest.json"
+        assets.write_text(json.dumps({"version": 1, "items": []}), encoding="utf-8")
         args = upload_r2.parse_args(["--zip", str(self.zip_path), "--notes", str(notes), "--token-file", str(token),
-                                     "--public-base", self.mirror.url("/"), "--github-api", self.github.url(API_PATH)])
+                                     "--public-base", self.mirror.url("/"), "--github-api", self.github.url(API_PATH),
+                                     "--manifest", str(assets), "--assets-dir", str(self.work / "assets")])
         job = upload_r2.Upload(args)
         with mock.patch.object(upload_r2, "VERSION", NEW_VERSION), mock.patch.dict(os.environ):
             os.environ.pop(upload_r2.TOKEN_ENV, None)

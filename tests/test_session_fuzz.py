@@ -14,8 +14,9 @@ from collections import Counter, deque
 from types import SimpleNamespace
 from unittest import mock
 
-from advisor.data import load_db
+from advisor.data import DIFFICULTIES, load_db
 from advisor.session import NEWGAME_ROUND_MAX, NEWGAME_VETO_S, Session, Settings
+from advisor.session.core import TOP_STAR
 
 SEED = 20261003
 GAMES = 220  # 主测试的局数（要求至少 200 局）
@@ -118,6 +119,14 @@ class Game:
         self.mates = [{"row": r, "hero": h, "bot": rng.random() < 0.3} for r, h in zip(rows, mates)]
         self.map = rng.choice(list(db.maps))
         self.cap = rng.randint(14, 20)
+        # 进度上限采用前核地图资料（Session.on_progress_cap）：资料齐全的地图上，真的上限只会是某个难度的格数。三选一的
+        # 概率行按 rarity.rows 给（记账判成困难及以上），随机到的数不是困难及以上哪个难度的格数时，换成最接近的那一个
+        # （不多抽随机数，后面的随机序列不变）
+        info = db.map_info.get(self.map)
+        if info is not None and info.difficulties_at(self.cap) is not None:
+            caps = sorted({info.progress_caps[d] for d in DIFFICULTIES[1:]})
+            if self.cap not in caps:
+                self.cap = min(caps, key=lambda c: (abs(c - self.cap), c))
         self.last = rng.randint(8, 20)  # 最后一轮
         first = rng.randint(2, 5)
         second = first + rng.randint(2, 5)
@@ -816,13 +825,18 @@ class SessionFuzzTest(unittest.TestCase):
             signal = rng.choice(("round", "star", "hero", "select"))
             s0 = rng.randint(1, 3) if signal == "star" else 0
             m = rng.choice(list(self.db.maps))
+            # 进度上限采用前核这张地图的资料（Session.on_progress_cap）：资料齐全、却没有一种难度是 17 格的地图上 17 不采用，
+            # 换成它困难难度的格数
+            info = self.db.map_info.get(m)
+            cap = 17 if info is None or info.difficulties_at(17) != () else info.progress_caps[DIFFICULTIES[1]]
             for _ in range(3):
                 clock[0] += rng.uniform(*TICK)
                 s.on_hud(hud(round=r0, map=m, map_confidence="high", map_candidates=[m], tasks_seen=["任务"]))
                 s.on_stars(own(s0))
-                s.on_progress_cap(17)
+                s.on_progress_cap(cap)
             s.set_owned(["书签"])
-            before = (["书签"], s0, r0, m, 17)
+            self.assertEqual(s.game.progress_cap, cap)
+            before = (["书签"], s0, r0, m, cap)
             clock[0] += rng.choice((rng.uniform(0.5, 15.0), rng.uniform(25.0, 90.0)))
             if signal == "round":
                 reads = [s.on_hud(hud(round=1)) for _ in range(2)]
@@ -953,8 +967,9 @@ class SessionFuzzTest(unittest.TestCase):
 
     def test_team_select_stays_task_after_banner_disappears(self):
         """全队任务三选一里「正在选择强化筹码」那一行随机消失（其他玩家选完、刷新后），概率行偶尔读不到，
-        同一次三选一里始终按任务来源；界面关了以后的下一次三选一不再沿用。刷新时候选换一组、刷新次数少 1（概率行一样、三张
-        全换而次数没少的是紧接着出现的另一次三选一，不是刷新）。"""
+        同一次三选一里始终按任务来源；界面关了以后的下一次三选一不再沿用：出现之前不到 3 星的按升星，已经 3 星的到顶了、
+        不会再升星，按筹码商店。刷新时候选换一组、刷新次数少 1（概率行一样、三张全换而次数没少的是紧接着出现的另一次
+        三选一，不是刷新）。"""
         rng = random.Random(SEED + 5)
         drv = Driver(self, self.db, SEED + 5)
         rows = drv.rows
@@ -981,13 +996,14 @@ class SessionFuzzTest(unittest.TestCase):
                         self.assertEqual(ev.state.source, "task")
             s.on_frame(None)
             s.on_frame(None)
-            # 下一次是升星（概率行和最左格都是这个星数的）：不再按任务算
+            # 下一次不是任务（概率行和最左格都是这个星数的）：不再按任务算。出现之前已经是 3 星的不会再升星，是筹码商店
+            # （记账按出现之前的星数分升星和商店）
             first = rng.choice(drv.by_rarity[drv.fixed[star]])
             names = [first, *rng.sample([n for n in drv.plain if n != first], 2)]
             rarity = [self.db.chips[n].rarity for n in names]
             ev = s.on_frame(frame(names, 2, rows[star], rarity))
-            with self.subTest(case=case, after="closed"):
-                self.assertEqual(ev.state.source, "levelup")
+            with self.subTest(case=case, after="closed", star=star):
+                self.assertEqual(ev.state.source, "shop" if star >= TOP_STAR else "levelup")
 
 
 if __name__ == "__main__":

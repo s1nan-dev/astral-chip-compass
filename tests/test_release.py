@@ -36,7 +36,7 @@ from unittest import mock
 
 import numpy as np
 
-from advisor import assets, diagnostics, gamelog, logbook, paths, update_files, version, winhttp
+from advisor import assets, diagnostics, gamelog, logbook, paths, update, update_files, version, winhttp
 from advisor.pool import State
 from tests.support import sandbox
 
@@ -56,10 +56,10 @@ def tmpdir() -> tempfile.TemporaryDirectory:
 
 class VersionTest(unittest.TestCase):
     def test_version_format(self):
-        self.assertEqual(version.VERSION, "1.1.0")
+        self.assertEqual(version.VERSION, "1.2.0")
         self.assertRegex(version.VERSION, r"^\d+\.\d+\.\d+$")
-        self.assertEqual(version.file_version(), (1, 1, 0, 0))
-        self.assertEqual(version.version_text(), f"{version.APP_NAME} 1.1.0")
+        self.assertEqual(version.file_version(), (1, 2, 0, 0))
+        self.assertEqual(version.version_text(), f"{version.APP_NAME} 1.2.0")
 
     def test_data_date_from_meta(self):
         with tmpdir() as d:
@@ -210,7 +210,7 @@ class VersionTest(unittest.TestCase):
     def test_disclaimer(self):
         """免责声明的八条：「关于」窗口的「免责声明」一节、THIRD_PARTY_NOTICES.md 第五节、使用说明的「声明」一节同一套写法
         （version.DISCLAIMER_ITEMS）。Markdown 里标题加粗、第三方声明的网址加尖括号；第 7 条后面接各自指向隐私说明的一句；
-        最后一行是 DISCLAIMER_CLOSING。第 3 条写明违反用户协议、账号可能受罚、风险自担。"""
+        使用说明的第 6 条后面另接网站核对页的一句；最后一行是 DISCLAIMER_CLOSING。第 3 条写明违反用户协议、账号可能受罚、风险自担。"""
         items = version.DISCLAIMER_ITEMS
         self.assertEqual([t for t, _ in items],
                          ["非官方工具", "工作方式", "账号风险", "推荐仅供参考", "不作担保", "获取渠道", "隐私", "联系"])
@@ -249,11 +249,15 @@ class VersionTest(unittest.TestCase):
         fifth = notices.split("\n## 五、", 1)[1].split("\n## ", 1)[0]
         manual = (ROOT / "docs" / "使用说明.md").read_text(encoding="utf-8")
         statement = manual.split("\n## 声明\n", 1)[1].split("\n## ", 1)[0]
-        for name, text, pointer in (("THIRD_PARTY_NOTICES.md", fifth, "详见使用说明的「隐私」一节。"),
-                                    ("使用说明", statement, "详见「隐私」一节。")):
+        # 使用说明的「获取渠道」后面另接网站核对页的一句：程序里不放核对页的链接，「关于」窗口和第三方声明里没有这一句
+        verify = ("从别处拿到的拾星助手，可以在核对页面 https://astral-chip-compass.com/verify/ 核对是不是官方发布的原样："
+                  "把压缩包或解压出来的文件夹拖进页面，校验值在您的电脑上算，文件不会上传。")
+        for name, text, extra in (("THIRD_PARTY_NOTICES.md", fifth, {"隐私": "详见使用说明的「隐私」一节。"}),
+                                  ("使用说明", statement, {"隐私": "详见「隐私」一节。", "获取渠道": verify})):
             with self.subTest(doc=name):
-                self.assertEqual(markdown_items(text), [(t, b + pointer if t == "隐私" else b) for t, b in items])
+                self.assertEqual(markdown_items(text), [(t, b + extra.get(t, "")) for t, b in items])
                 self.assertIn("\n" + version.DISCLAIMER_CLOSING + "\n", text + "\n")
+        self.assertNotIn("verify", " ".join(b for _, b in items))
 
     def test_license_file(self):
         """仓库根目录的 LICENSE 是 gnu.org 的 GNU AGPL 3.0 原文（https://www.gnu.org/licenses/agpl-3.0.txt，一字不改）：
@@ -655,15 +659,19 @@ class ManifestTest(unittest.TestCase):
         for item in items:
             self.assertNotIn(item.name, seen)
             seen.add(item.name)
-            self.assertIn(item.dir, {"heroes", "profiles", "chips", "stars"})
+            self.assertIn(item.dir, {"heroes", "profiles", "chips", "achieve", "stars"})
             self.assertTrue(item.file.lower().endswith(".png"), item.file)
             self.assertGreater(item.size, 0, item.name)
             self.assertRegex(item.sha1, r"^[0-9a-f]{40}$", item.name)
             if not item.bundled:
-                # 都取自吉星派对 WIKI（BWIKI）：不带指向别的 wiki 的 api，地址都在 BWIKI 的图床上
+                # 都取自吉星派对 WIKI（BWIKI），或 wiki 上没有、放在备用地址上的
                 self.assertEqual(item.api, "", item.name)
-                self.assertTrue(item.url.startswith("https://patchwiki.biligame.com/images/starengine/"), item.url)
-                self.assertTrue(item.title, item.name)
+                if item.mirror:
+                    self.assertFalse(item.title, item.name)
+                    self.assertEqual(item.url, f"{update.MIRROR_BASE}assets/{item.dir}/{item.sha1}/{item.file}")
+                else:
+                    self.assertTrue(item.url.startswith("https://patchwiki.biligame.com/images/starengine/"), item.url)
+                    self.assertTrue(item.title, item.name)
             if item.crop is not None:
                 # 从卡面现裁的角色照：下的是 BWIKI 上同一编号、同一皮肤的卡面，裁法是 6 个数
                 self.assertEqual((item.dir, item.api), ("heroes", ""), item.name)
@@ -1801,7 +1809,7 @@ class BuildReleaseCheckTest(unittest.TestCase):
         self.assertFalse([a for a in cmd if a.startswith(("--company-name", "--windows-company-name"))])
         # 根目录的启动程序的版本信息和真正的程序取同一份（version_strings）
         info = br.version_strings()
-        self.assertEqual(info["version"], "1.1.0.0")
+        self.assertEqual(info["version"], "1.2.0.0")
         self.assertEqual(sorted(info), ["copyright", "description", "product", "version"])
         self.assertIn(version.AUTHOR, info["copyright"])
         for arg in (f"--product-name={info['product']}",
@@ -1809,7 +1817,7 @@ class BuildReleaseCheckTest(unittest.TestCase):
                     f"--file-version={info['version']}", f"--product-version={info['version']}"):
             self.assertIn(arg, cmd)
         header = br.launcher_header()
-        for line in ("#define ACC_VERSION_NUMS 1,1,0,0", '#define ACC_VERSION_TEXT "1.1.0.0"',
+        for line in ("#define ACC_VERSION_NUMS 1,2,0,0", '#define ACC_VERSION_TEXT "1.2.0.0"',
                      '#define ACC_PRODUCT "Astral Chip Compass"',
                      '#define ACC_DESCRIPTION "Astral Chip Compass"', f'#define ACC_COPYRIGHT "{info["copyright"]}"',
                      f'#define ACC_INTERNAL_NAME "{version.APP_NAME}"',

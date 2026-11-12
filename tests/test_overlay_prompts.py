@@ -15,7 +15,7 @@ from advisor.data import load_db, LEVEL_NIGHTMARE  # noqa: E402
 from advisor.session import Event  # noqa: E402
 from advisor.ui.overlay import Overlay
 from advisor.ui.overlay_parts.wording import ADD_TIP, PROMPT_HERO, GAME_OVER_TIP, GAME_OVER_WAITING, OWNED_EMPTY, EXTRA_CHIP_MUTATORS, GAME_OVER_BIT, EXTRA_CHIP_TIP, EXTRA_CHIP_OWNED
-from advisor.ui.overlay_parts.wording import OPEN_TASKS
+from advisor.ui.overlay_parts.wording import OPEN_TASKS, OWNED_UNKNOWN_ADVICE
 from advisor.ui.overlay_parts.app import UiSettings, OverlaySession
 from advisor.ui.services import Services  # noqa: E402
 from advisor.ui.text import tip_lines, tip_paragraphs_html, TIP_CHAR, TIP_BLANK_GAP, TIP_LINE  # noqa: E402
@@ -79,6 +79,81 @@ class OverlayPromptTest(unittest.TestCase):
         self.assertEqual(w.owned_empty.text(), "已有筹码待识别")
         w.notices.buttons("panel")[0].click()  # 忽略
         self.assertEqual(w.owned_empty.text(), OWNED_EMPTY)
+
+    def handle_all(self, ev) -> None:
+        """交给悬浮窗：这一次调用的事件，连同 Session 随后放进队列的（例如读到面板以后重算的推荐）。"""
+        if ev is not None:
+            self.window.handle(ev)
+        for extra in self.session.take_events():
+            self.window.handle(extra)
+
+    @staticmethod
+    def own_panel(owned) -> SimpleNamespace:
+        """自己那一页「查看筹码」面板的读数（只有一页）。"""
+        return SimpleNamespace(is_panel=True, self_tab=True, self_index=None, selected_tab=None, owned=list(owned),
+                               unknown_slots=0, confidence=0.95, page_full=False, problems=[], page="only")
+
+    def test_owned_unknown_advice(self):
+        """对局中途打开、还没读到「查看筹码」面板（也没记下筹码）：推荐照常给，「推荐」卡片最上面（推荐内容的上面）挂一行
+        「还不知道已有筹码，可能不准。」（⚠ 橙色，不改边框颜色）。三选一关掉时这一行收起；看着三选一记下了一个、之前的还不
+        知道，下一次三选一照样挂这一句（不写个数）；三选一开着时读到面板，按面板重算的推荐不带它，这一行收起，推荐照常显示。"""
+        w, s = self.window, self.session
+        s.game.seen_hero = "凛"
+        s.game.panel_needed = True
+        offer = ["书签", "标靶", "缓冲盾牌"]
+        first = s.on_frame(frame(offer, selected=0))
+        self.assertEqual(first.kind, "advice")
+        self.assertTrue(first.owned_unknown)
+        self.handle_all(first)
+        self.assertEqual(w.notice_model.texts().get("owned_unknown"), OWNED_UNKNOWN_ADVICE)
+        self.assertIn("还不知道已有筹码，可能不准。", shown(w, w.advice_card))
+        self.assertEqual(len(name_buttons(w)), 3)  # 推荐照常显示
+        self.assertEqual(w.notice_model.notices["owned_unknown"][2], "warn")  # 这一行本身不改边框颜色
+        w.show()
+        APP.processEvents()
+        self.assertTrue(w.advice_notices.isVisibleTo(w.panel))
+        self.assertLess(w.advice_notices.geometry().top(), w.body.geometry().top())  # 在推荐内容的上面
+        w.hide()
+        # 选了第 1 个、三选一关掉：这一行跟着收起
+        s.on_frame(None)
+        self.handle_all(s.on_frame(None))
+        self.assertFalse(w.live_state.on)
+        self.assertNotIn("owned_unknown", w.notice_model.texts())
+        self.assertEqual(s.settings.owned, ["书签"])
+        # 下一次三选一：记下了 1 个、之前的还不知道，照样只写这一句，不写个数
+        self.handle_all(s.on_frame(frame(["电击手套", "额外电池", "鹰眼瞄具"])))
+        self.assertTrue(w.live_state.owned_unknown)
+        self.assertEqual(w.notice_model.texts().get("owned_unknown"), OWNED_UNKNOWN_ADVICE)
+        self.assertIn("还不知道已有筹码，可能不准。", shown(w, w.advice_card))
+        self.assertNotIn("按记下的", shown(w, w.advice_card))
+        # 三选一开着时读到面板：按面板上的筹码重算，这一行收起
+        read = s.on_panel(self.own_panel(["书签", "大背包"]))
+        self.assertEqual(read.kind, "panel_read")
+        self.handle_all(read)
+        self.assertEqual(s.settings.owned, ["书签", "大背包"])
+        self.assertTrue(w.live_state.on)
+        self.assertFalse(w.live_state.owned_unknown)
+        self.assertNotIn("owned_unknown", w.notice_model.texts())
+        self.assertNotIn("还不知道", shown(w, w.advice_card))
+        self.assertEqual(len(name_buttons(w)), 3)
+        self.assertEqual(tuple(w.advice.last_ev.state.owned), ("书签", "大背包"))
+
+    def test_owned_unknown_cleared_by_empty_panel(self):
+        """面板上确实一个筹码都没有：已有筹码没变，推荐不重算，那行「还不知道已有筹码」照样收起，推荐照常显示。"""
+        w, s = self.window, self.session
+        s.game.seen_hero = "凛"
+        s.game.panel_needed = True
+        ev = s.on_frame(frame(["书签", "标靶", "缓冲盾牌"]))
+        self.handle_all(ev)
+        self.assertIn("owned_unknown", w.notice_model.texts())
+        read = s.on_panel(self.own_panel([]))
+        self.assertEqual(read.kind, "panel_read")
+        self.assertEqual(s.take_events(), [])  # 没有重算的推荐
+        self.handle_all(read)
+        self.assertTrue(w.live_state.on)
+        self.assertNotIn("owned_unknown", w.notice_model.texts())
+        self.assertIs(w.advice.last_ev, ev)
+        self.assertEqual(len(name_buttons(w)), 3)
 
     def test_map_read(self):
         ev = Event("map_read")

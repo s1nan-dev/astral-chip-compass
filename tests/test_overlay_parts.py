@@ -19,6 +19,7 @@ from advisor.ui.overlay_parts.wording import (
     HERO_AUTO_TIP,
     HERO_PAUSED_TIP,
     HERO_PENDING_TIP,
+    OWNED_UNKNOWN_ADVICE,
     PAUSED,
     PAUSED_MIN_TIP,
     PROMPT_PANEL,
@@ -327,6 +328,24 @@ class NoticeModelTest(unittest.TestCase):
         self.assertIn("从左数第 2 个", notice_rows(model)[0][1])
         self.assertEqual(notice_rows(model, view_of(game_over=True)), [])
 
+    def test_owned_unknown_advice(self):
+        """不知道已有筹码（一个都没记下、看着三选一记下了几个都一样）：三选一显示着才有这一行，放在「推荐」卡片里、排在撤销
+        那一行前面（卡片最上面），⚠ 橙色、不带按钮、边框不变色，只写一句、不写个数；三选一没显示、本局已结束、推荐知道已有
+        筹码时都不出。"""
+        model = notices.NoticeModel()
+        rows = notice_rows(model, live=True, owned_unknown=True, reverted_chip="标靶")
+        self.assertEqual([(k, lvl) for k, _, lvl, _ in rows], [("owned_unknown", "warn"), ("reverted", "info")])
+        self.assertEqual(rows[0][1], OWNED_UNKNOWN_ADVICE)
+        self.assertEqual(rows[0][1], "⚠ 还不知道已有筹码，可能不准。")
+        self.assertEqual(rows[0][3], [])
+        self.assertEqual(model.area("owned_unknown"), "advice")
+        model.notices = {r[0]: r for r in rows}
+        self.assertFalse(model.needs_action())
+        self.assertIn(f"notice:owned_unknown:{OWNED_UNKNOWN_ADVICE}", model.keys("advice"))
+        self.assertEqual(notice_rows(model, live=False, owned_unknown=True), [])
+        self.assertEqual(notice_rows(model, view_of(game_over=True), live=True, owned_unknown=True), [])
+        self.assertEqual(notice_rows(model, live=True), [])
+
     def test_gain_and_unlocked(self):
         model = notices.NoticeModel()
         rows = notice_rows(model, view_of(unrecorded=2), unlocked=[(3, "解锁了", unlock.SECRETS[3])])
@@ -482,6 +501,22 @@ class OfferLogTest(unittest.TestCase):
         self.assertTrue(self.log.game_over(undecided, 2))  # 又改回不知道（两边矛盾）：照样再记，以后一条为准
         self.assertEqual(self.logbook.game_overs, [undecided, lost, undecided])
         self.assertTrue(self.log.game_over(undecided, 3))  # 下一局
+
+    def test_game_over_again_when_map_changes(self):
+        """房间等画面先结束了这一局、随后读到结算画面：结束的地图改按结算画面（map_source 为 result），再记一条，推荐日志里
+        同一局以后一条为准；之后同样的内容不再记，只是依据的写法变了也不记。"""
+        by_room = {"why": "检测到组队房间", "map": "魔法学院", "map_source": "tasks", "map_in_game": "魔法学院",
+                   "outcome": None, "how": None}
+        by_result = {**by_room, "why": "检测到结算画面（异变图书馆）", "map": "异变图书馆", "map_source": "result"}
+        self.assertTrue(self.log.game_over(by_room, 2))
+        self.assertTrue(self.log.game_over(by_result, 2))
+        self.assertFalse(self.log.game_over(by_result, 2))
+        self.assertFalse(self.log.game_over({**by_result, "why": "结算"}, 2))
+        # 下一局：结算画面上是同一张地图，只是来源改成了结算画面，照样再记
+        same_map = {**by_room, "why": "检测到结算画面（魔法学院）", "map_source": "result"}
+        self.assertTrue(self.log.game_over(by_room, 3))
+        self.assertTrue(self.log.game_over(same_map, 3))
+        self.assertEqual(self.logbook.game_overs, [by_room, by_result, by_room, same_map])
 
 
 if __name__ == "__main__":

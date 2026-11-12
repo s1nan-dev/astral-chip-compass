@@ -41,8 +41,10 @@ COVERED_NAMES = (
     "CC_STAT_WIDTH", "CHAIN_APPROX_SIMPLE", "COLOR_BGR2BGRA", "COLOR_BGR2GRAY", "COLOR_BGR2HSV", "COLOR_BGRA2BGR",
     "COLOR_GRAY2BGR", "COLOR_GRAY2BGRA", "COLOR_RGB2BGR", "FONT_HERSHEY_SIMPLEX", "HOUGH_GRADIENT", "HOUGH_GRADIENT_ALT",
     "HoughCircles", "IMREAD_COLOR", "IMREAD_GRAYSCALE", "IMREAD_UNCHANGED", "IMWRITE_PNG_COMPRESSION", "INTER_AREA",
-    "INTER_CUBIC", "INTER_LINEAR", "INTER_NEAREST", "LINE_AA", "MORPH_CLOSE", "RETR_LIST", "TM_CCOEFF_NORMED",
-    "add", "bitwise_and", "bitwise_not", "boxPoints", "circle", "connectedComponentsWithStats", "copyMakeBorder",
+    "INTER_CUBIC", "INTER_LINEAR", "INTER_NEAREST", "LINE_AA", "MORPH_CLOSE", "RETR_EXTERNAL", "RETR_LIST",
+    "TM_CCOEFF_NORMED",
+    "add", "bitwise_and", "bitwise_not", "boxPoints", "circle", "connectedComponentsWithStats", "contourArea",
+    "copyMakeBorder",
     "cvtColor", "dilate", "error", "fillPoly", "findContours", "findNonZero", "getPerspectiveTransform",
     "getRotationMatrix2D", "imdecode", "imencode", "inRange", "invertAffineTransform", "matchTemplate", "mean",
     "medianBlur", "minAreaRect", "minMaxLoc", "morphologyEx", "putText", "resize", "rotate", "setNumThreads",
@@ -195,6 +197,7 @@ def one(img_path: Path) -> dict:
     opt("inRange", lambda: mask)
     opt("connectedComponentsWithStats", lambda: cv2.connectedComponentsWithStats(bitmap, connectivity=8))
     opt("findContours", lambda: cv2.findContours(bitmap, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE))
+    opt("findContours_external", lambda: cv2.findContours(bitmap, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE))
 
     def first_contour():
         contours = cv2.findContours(bitmap, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)[-2]

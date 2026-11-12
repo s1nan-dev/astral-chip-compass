@@ -570,31 +570,31 @@ class RerollRuleTest(Base):
         # 茉莉 3 星第 11 轮、5 次刷新（之后不到 1 次三选一：留 1 次、再多留 1 次）、一张都没标的方案
         st = State(hero="茉莉", star=3, round=11, map="魔法学院", rerolls=5)
         empty = Plan(name="空方案", hero="茉莉", tiers=())
-        adv = advise(self.db, st, ["速度轮滑-初级", "小猪存钱罐", "银行卡-用不完"], scheme=empty)
+        adv = advise(self.db, st, ["速度轮滑-中级", "小猪存钱罐", "银行卡-用不完"], scheme=empty)
         v = self.view(adv)
         top = adv.evals[v.compare]
         self.assertEqual((top.chip.name, v.basis, v.verdict, adv.best),
-                         ("速度轮滑-初级", BASIS_UNMARKED, VERDICT_WORSE, "速度轮滑-初级"))
+                         ("速度轮滑-中级", BASIS_UNMARKED, VERDICT_WORSE, "速度轮滑-中级"))
         self.assertGreater(v.p_before, 0.5)
         self.assertEqual((adv.reroll.cost, adv.reroll.kept, adv.reroll.spare, adv.reroll.chain), (0.0, 2, 3, 3))
         self.assertLess(adv.reroll.value, top.total)
         from advisor.ui import text as ui_text
         pills = ui_text.scheme_reroll_pills(adv, st.rerolls)
         self.assertEqual([p.text for p in pills],
-                         ["预计不如速度轮滑-初级", "72% 概率刷出排在速度轮滑-初级前面的筹码", "留 2 次，多出 3 次不必留"])
+                         ["预计不如速度轮滑-中级", "62% 概率刷出排在速度轮滑-中级前面的筹码", "留 2 次，多出 3 次不必留"])
         self.assertIn("但刷新会放弃本次的三个候选筹码：综合最多连续刷新 3 次可能出现的筹码", pills[0].tip)
         self.assertIn("（之后的筹码三选一留 2 次刷新，含以防估少多留的 1 次；多出来的 3 次可以连续使用）", pills[0].tip)
         self.assertNotIn("刷新次数紧", pills[0].tip)
-        # 换一张更高的未标记（速度轮滑-中级）：刷出排在它前面的不到一半（约 17%），只写概率，不另加「预计不如」
-        adv = advise(self.db, st, ["速度轮滑-中级", "小猪存钱罐", "银行卡-用不完"], scheme=empty)
+        # 换一张更高的未标记（速度轮滑-高级）：刷出排在它前面的不到 1%，只写概率，不另加「预计不如」
+        adv = advise(self.db, st, ["速度轮滑-高级", "小猪存钱罐", "银行卡-用不完"], scheme=empty)
         v = self.view(adv)
         self.assertEqual((adv.evals[v.compare].chip.name, v.verdict, adv.best),
-                         ("速度轮滑-中级", VERDICT_WORSE, "速度轮滑-中级"))
+                         ("速度轮滑-高级", VERDICT_WORSE, "速度轮滑-高级"))
         self.assertLess(v.p_before, 0.5)
         pills = ui_text.scheme_reroll_pills(adv, st.rerolls)
         self.assertEqual([p.text for p in pills],
-                         ["17% 概率刷出排在速度轮滑-中级前面的筹码", "留 2 次，多出 3 次不必留"])
-        self.assertIn("排在「速度轮滑-中级」前面的筹码", pills[0].tip)
+                         ["不到 1% 概率刷出排在速度轮滑-高级前面的筹码", "留 2 次，多出 3 次不必留"])
+        self.assertIn("排在「速度轮滑-高级」前面的筹码", pills[0].tip)
         self.assertNotIn("刷新次数紧", pills[0].tip)
 
     def test_4_all_avoid(self):
@@ -981,7 +981,7 @@ class SameTierTest(Base):
         self.assertEqual(fan.short, "前瞻：必选、推荐 12%→27%")
         # 括号里变化最大的一两张照旧是各自的出现率
         self.assertEqual(fan.reason, "选择后，筹码方案里必选、推荐的筹码在下一次三选一里至少出现一张的机会 12% → 27%"
-                                     "（魔法箭袋 5% → 10%、标靶 4% → 9%）")
+                                     "（魔法箭袋 4% → 10%、标靶 4% → 9%）")
         self.assertEqual((candy.short, f"{candy.after:.0%}"), ("前瞻：必选、推荐 12%→0%", "0%"))
         self.assertEqual(helmet.short, "")  # 取整后没变：卡片上不做这个标签
         self.assertEqual(self.moves(adv, "手持风扇-小"), [(MOVE_AHEAD, ["摩托头盔-中级"])])

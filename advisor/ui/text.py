@@ -26,7 +26,7 @@ from ..engine import (BASIS_UNMARKED, LOSS_NOW, LOSS_ONE_LEFT, LOSS_TIP, LOST_CO
                       MOVE_LEAD, MOVE_MIXED, MOVE_NEAR, PLACE_LOCKED, PLACE_MARKED, PLACE_STRAYED, PLACE_UNMARKED_TEXT,
                       SCHEME_TIER_ORIGINS, SCHEME_TIER_WORD, VERDICT_BETTER, VERDICT_EVEN_BETTER, VERDICT_EVEN_WORSE,
                       VERDICT_WORSE, place_text)
-from ..session import DIFFICULTY_SOURCE_LABEL
+from ..session import DIFFICULTY_SOURCE_LABEL, SOURCE_BY, SOURCE_LABEL
 from . import lang, names, theme
 from .theme import COMMON as C
 
@@ -1847,6 +1847,23 @@ def advice_scheme_line(adv) -> str:
     return ADVICE_SCHEME.format(name=getattr(plan, "name", "") or SCHEME_DEFAULT, hero=getattr(plan, "hero", "") or hero)
 
 
+# 这次三选一的来源（推荐区上方的状态胶囊「来源 升星」、推荐全文的「来源」）。升星和筹码商店的概率行、最左格都一样，按画面上
+# 别的迹象分（推荐事件的 source_by，取值见 session.SOURCE_BY）：自己的升星横幅、星数、购买窗定下的写「升星」「筹码商店」；
+# 拿不准的写 SOURCE_EITHER，推荐照旧按升星算，三选一关掉以后按星数补准（补准的结果记进推荐日志和对局报告，悬浮窗上不改）
+SOURCE_SURE = frozenset({"banner", "stars", "shop_window"})
+SOURCE_EITHER = "升星或筹码商店"
+
+
+def source_text(source, source_by=None, tier=None) -> str:
+    """这次三选一的来源怎么写（简体；显示处包 t()）：任务写「任务」，知道级别时「任务（2 级）」；升星、筹码商店按画面上的
+    迹象定下的（source_by 在 SOURCE_SURE 里）写「升星」「筹码商店」，拿不准、不知道是怎么定的写「升星或筹码商店」。"""
+    if source == "task":
+        return SOURCE_LABEL["task"] + (f"（{tier} 级）" if tier else "")
+    if source in SOURCE_LABEL and isinstance(source_by, str) and source_by in SOURCE_SURE:
+        return SOURCE_LABEL[source]
+    return SOURCE_EITHER
+
+
 def advice_text(db: DB, ev) -> str:
     """推荐全文（纯文本）：第一行是这次推荐用的筹码方案（advice_scheme_line），然后是各选项的推荐度、总分和全部分项，
     附注和识别提示。写进诊断包。按自己的方案计算时照推荐卡片的先后排（Ranking.order），不写推荐度（按卡片的先后重新分的，
@@ -1862,8 +1879,11 @@ def advice_text(db: DB, ev) -> str:
         lines += [f"识别提示：{p}" for p in getattr(ev, "problems", None) or []]
         return "\n".join(lines) + "\n"
     st = adv.state
-    source = getattr(st, "source", "")
-    source = {"levelup": "升星或筹码商店", "shop": "升星或筹码商店", "task": "任务"}.get(source, source)
+    by = getattr(ev, "source_by", None)
+    source = source_text(getattr(st, "source", ""), by, getattr(st, "tier", None))
+    # 来源是怎么定的（session.SOURCE_BY）：事后查「为什么写升星或筹码商店」「为什么认成筹码商店」
+    if isinstance(by, str) and by in SOURCE_BY:
+        source += f"｜来源依据 {SOURCE_BY[by]}"
     lines = [
         advice_scheme_line(adv),
         "候选筹码：" + "、".join(e.chip.name for e in adv.evals),
@@ -1871,7 +1891,6 @@ def advice_text(db: DB, ev) -> str:
         (
             f"计算依据：角色 {st.hero}｜星数 {st.star}｜轮次 {st.round if st.round is not None else '待识别'}｜"
             f"地图 {st.map or '待识别'}｜来源 {source}"
-            + (f"（{st.tier} 级）" if getattr(st, "tier", None) else "")
             + f"｜{rerolls_text(st.rerolls)}" + ("" if getattr(st, "rerolls_known", True) else REROLLS_UNREAD)
         ),
         "已有筹码：" + ("、".join(st.owned) if st.owned else "无"),

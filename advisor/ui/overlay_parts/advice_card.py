@@ -18,7 +18,7 @@ from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWi
 
 from ...data import _norm
 from ...engine import PLACE_LOCKED_TEXT, PLACE_UNMARKED_TEXT, REROLL
-from ...session import SOURCE_LABEL, Event
+from ...session import Event
 from .. import lang, names
 from ..text import (
     Bit,
@@ -42,6 +42,7 @@ from ..text import (
     rival_word,
     scheme_ahead,
     scheme_name,
+    source_text,
     tip_html,
     unreadable_problem,
 )
@@ -87,8 +88,7 @@ from .wording import (
 
 # 和引擎、会话比对、写进推荐日志的常量不转（界面文字由显示处包 t()）。REROLL_LABEL 是 text 里的显示叫法，但还拿来和
 # 取到的筹码名比（chip in (REROLL, REROLL_LABEL)），照旧写简体。FEEDBACK_REASONS 也写进推荐日志。
-HANT_KEEP = ("PLACE_LOCKED_TEXT", "PLACE_UNMARKED_TEXT", "REROLL", "SOURCE_LABEL", "REROLL_LABEL",
-             "FEEDBACK_REASONS")
+HANT_KEEP = ("PLACE_LOCKED_TEXT", "PLACE_UNMARKED_TEXT", "REROLL", "REROLL_LABEL", "FEEDBACK_REASONS")
 
 
 def fit_basis(hero: str, scheme: str, manual: bool, fm: QFontMetrics, width: int) -> str:
@@ -637,8 +637,9 @@ class AdviceCard:
 
     # ------------------------------------------------------------ 收起时的摘要、状态
 
-    def bits(self, st, adv=None) -> dict[str, Bit]:
-        """三选一显示期间的状态：候选筹码的说明（手动指定、资料库未收录）、这次三选一的来源、
+    def bits(self, st, adv=None, source_by=None) -> dict[str, Bit]:
+        """三选一显示期间的状态：候选筹码的说明（手动指定、资料库未收录）、这次三选一的来源（source_by 是推荐事件上来源的
+        依据：画面上的迹象定下了的写「升星」「筹码商店」，拿不准的写「升星或筹码商店」，见 text.source_text）、
         按几星计算（和读到的星数不同时才写）、剩余刷新次数。剩余刷新次数没读出来（State.rerolls_known 为 False：按「一次都
         没用过」补的默认值，可能偏多）时和读不到其他数字一样写「刷新次数 待识别」（橙色），不写可能不对的次数；悬停说明
         （Bit.tip）写按几次估计、不按多出来的刷新算（和「消耗 1 次刷新」的悬停同一句 UNREAD_COST_TIP）；本次之后预计没有
@@ -653,12 +654,8 @@ class AdviceCard:
         bits: dict[str, Bit] = {}
         if notes:
             bits["candidates"] = Bit("；".join(notes), lang.t("候选筹码"), key="candidates")
-        if st.source == "task":
-            source = lang.t(SOURCE_LABEL["task"] + (f"（{st.tier} 级）" if st.tier else ""))
-        else:
-            # 升星和筹码商店的概率行、最左格规则都一样，画面上分不出，算法也相同
-            source = lang.t(f"{SOURCE_LABEL['levelup']}或{SOURCE_LABEL['shop']}")
-        bits["source"] = Bit(source, lang.t("来源"), key="source")
+        # 升星和筹码商店的概率行、最左格规则都一样、算法也相同：画面上别的迹象定下了才分开写
+        bits["source"] = Bit(lang.t(source_text(st.source, source_by, st.tier)), lang.t("来源"), key="source")
         s = self.session.settings
         if not s.star_read:
             bits["star_calc"] = Bit(lang.t(f"按 {st.star} 星计算"), key="star_calc")

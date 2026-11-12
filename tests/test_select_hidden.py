@@ -171,6 +171,17 @@ class HiddenLedgerTest(PatchedAdvise):
     def kinds(self) -> list:
         return [e.kind for e in self.events if e.kind in SELECT_KINDS]
 
+    def board(self, hidden_text: bool, panel_owned=None):
+        """一帧看不到三选一的画面，照识别流程的先后喂：正要按关掉处理的帧才看那行字（hidden_text 为画面上有没有那行字，
+        认出了 on_select_hidden，否则 on_frame(None)），平时直接 on_frame(None)；panel_owned 不为 None 时「查看筹码」
+        面板开着，接着 on_panel。"""
+        s = self.s
+        self.feed(hidden=hidden_text and s.select.closing)
+        if panel_owned is not None:
+            ev = s.on_panel(panel(panel_owned))
+            before, after = split_extra(s.take_events())
+            self.events += before + ([ev] if ev is not None else []) + after
+
     def hidden_records(self) -> list:
         return [r for r in self.s.recent_events(600) if r["kind"] == "read:select_hidden"]
 
@@ -202,6 +213,72 @@ class HiddenLedgerTest(PatchedAdvise):
         self.feed(None)
         self.assertEqual(self.kinds(), ["advice", "picked"])
         self.assertEqual(self.s.settings.owned, [OFFER[0]])
+
+    def test_panel_while_hidden_recomputes_then_picks(self):
+        """三选一收起来去点「查看筹码」：读到面板的这一帧按面板上的已有筹码重算这一次推荐；之后确定，选择照常记在
+        同一次三选一上。"""
+        s = self.s
+        self.feed(select(OFFER, selected=GREEN))
+        first = [e for e in self.events if e.kind == "advice"][-1]
+        self.feed(None)
+        self.feed(hidden=True)
+        s.on_panel(panel(["书签"]))
+        self.events += s.take_events()
+        recomputed = [e for e in self.events if e.kind == "advice"][-1]
+        self.assertEqual(tuple(recomputed.state.owned), ("书签",))
+        self.assertEqual(recomputed.select_no, first.select_no)  # 还是这一次三选一
+        self.feed(None)
+        self.feed(None)
+        self.assertEqual(self.kinds(), ["advice", "advice", "picked"])
+        self.assertEqual(s.settings.owned, ["书签", OFFER[GREEN]])
+
+    def test_panel_while_hidden_recomputes_then_misses(self):
+        """同上，但绿框一直没看到：重算以后三选一关闭，照常请用户补录。"""
+        s = self.s
+        self.feed(select(OFFER))
+        self.feed(None)
+        self.feed(hidden=True)
+        s.on_panel(panel(["书签"]))
+        self.events += s.take_events()
+        self.feed(None)
+        self.feed(None)
+        self.assertEqual(self.kinds(), ["advice", "advice", "missed_pick"])
+        self.assertEqual(s.game.missed_offer, OFFER)
+
+    def test_panel_while_hidden_keeps_watching_text(self):
+        """读到面板重算以后三选一照旧算隐藏着（重算不算又看到了三选一）：之后每一帧照常是正要按关掉处理的帧，识别流程
+        接着看那行字；识别记录只在开始隐藏时记一条。点显示、确定以后照常记下。"""
+        s = self.s
+        self.feed(select(OFFER, selected=GREEN))
+        self.feed(None)
+        self.board(hidden_text=True)
+        self.board(hidden_text=True, panel_owned=["书签"])  # 打开面板：按面板重算
+        for _ in range(3):
+            self.assertTrue(s.select.closing)
+            self.board(hidden_text=True, panel_owned=["书签"])
+        self.assertEqual(len(self.hidden_records()), 1)
+        self.feed(select(OFFER, selected=GREEN))  # 点显示：同一组候选回来，局面没变，不重发推荐
+        self.feed(None)
+        self.feed(None)
+        self.assertEqual(self.kinds(), ["advice", "advice", "picked"])
+        self.assertEqual(s.settings.owned, ["书签", OFFER[GREEN]])
+
+    def test_panel_while_hidden_then_timeout(self):
+        """读到面板重算以后紧接着思考时间到了（那行字没了，游戏替玩家拿了最左边的，开着的面板上跟着多出这一个）：那一帧照常
+        按关掉处理、记下绿框，面板上多出来的按面板改正；不把已经拿到手的这一个当成已有筹码再重算这一次推荐，已有筹码里
+        也不多出绿框那一个。"""
+        s = self.s
+        self.feed(select(OFFER, selected=GREEN))
+        self.feed(None)
+        self.board(hidden_text=True)
+        self.board(hidden_text=True, panel_owned=["书签"])  # 打开面板：按面板重算
+        for _ in range(3):
+            self.board(hidden_text=False, panel_owned=["书签", OFFER[0]])  # 紧接着时间到了
+        self.assertEqual(self.kinds(), ["advice", "advice", "picked"])
+        self.assertEqual(tuple([e for e in self.events if e.kind == "advice"][-1].state.owned), ("书签",))
+        self.assertEqual(s.settings.owned, ["书签", OFFER[0]])
+        fixed = [e for e in self.events if e.kind == "panel_read" and e.fixes]
+        self.assertEqual([e.fixes for e in fixed], [[(OFFER[GREEN], OFFER[0])]])
 
     def test_hidden_then_timeout(self):
         """隐藏着的时候思考时间到了，游戏替玩家选了：那行字没了、三选一也没回来，照常按关掉处理，记下最后看到的绿框（和没隐藏

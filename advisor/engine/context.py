@@ -494,8 +494,11 @@ class Context:
         self.ps = db.player_synergy.get(st.hero) if use_player else None
         if self.ps and self.ps.schools:
             self.pref_schools = self.ps.schools
+            # 玩家思路点名要的流派不受 school_skip 影响，名单只在推荐流派来自角色自己的 schools 时起作用
+            self.school_skip: frozenset[str] = frozenset()
         else:
             self.pref_schools = self.hs.schools if self.hs else ()
+            self.school_skip = frozenset(self.hs.school_skip) if self.hs else frozenset()
         # 默认推荐里要尽量保住的推荐流派（HeroSynergy.keep_schools：True 为推荐流派都保，元组为只保其中这几个），按推荐流派的
         # 先后；不保时为空。扣分取角色自己写的 keep_schools_penalty，没写时取 rules.toml [synergy] keep_schools
         keep = self.hs.keep_schools if self.hs else False

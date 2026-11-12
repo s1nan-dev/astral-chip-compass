@@ -1,4 +1,4 @@
-"""推荐引擎的健全性测试：35 个角色、固定种子随机生成的局面下，advise() 的输出满足基本约束，并且不出现
+"""推荐引擎的健全性测试：全部角色、固定种子随机生成的局面下，advise() 的输出满足基本约束，并且不出现
 显而易见的错误（例如给辅助推荐星币锤而不推荐金色飞星）。
 
 随机局面覆盖：星数 0~3、轮次（含待识别）、已有筹码 0~10 个、地图已知或待识别（含候选地图）、普通 / 困难及以上、
@@ -217,7 +217,7 @@ class Base(unittest.TestCase):
 
 
 class FuzzTest(Base):
-    """35 个角色 × CASES_PER_HERO 个随机局面，每个局面只算一次推荐（setUpClass），各条约束分开检查。"""
+    """全部角色 × CASES_PER_HERO 个随机局面，每个局面只算一次推荐（setUpClass），各条约束分开检查。"""
 
     @classmethod
     def setUpClass(cls):
@@ -250,7 +250,7 @@ class FuzzTest(Base):
         # 随机局面确实覆盖了要测的各个维度（改了种子或生成方法以后，这条保证覆盖面没有缩水）
         states = [st for _, st, _, _ in self.cases]
         self.assertEqual({st.hero for st in states}, set(self.db.heroes))
-        self.assertEqual(len(self.db.heroes), 35)
+        self.assertEqual(len(self.db.heroes), 36)
         self.assertEqual({st.star for st in states}, {0, 1, 2, 3})
         counts = {len(st.owned) for st in states}
         self.assertTrue({0, 10} <= counts and len(counts) >= 8, counts)
@@ -733,7 +733,7 @@ class TeammateNeedSanityTest(Base):
         names = sorted(self.db.needs)
         checked = lifted = 0
         for hero in self.db.heroes:
-            for _ in range(6):
+            for _ in range(12):  # 被提的局面每 70 局左右才有一局：局数少了，换一组随机数就可能一局都碰不上
                 st, offer, rarity = random_case(self.db, rng, hero, 2)
                 mate = rng.choice([n for n in names if n != hero])
                 others = [t for t in st.teammates if t.hero not in self.db.needs][:2]
@@ -995,8 +995,8 @@ class SupportFlyingStarTest(Base):
             margins.append(ev["金色飞星"].total - ev["星币锤"].total)
         self.assertGreater(min(margins), 50)  # 网格里没有星币锤更高的局面，也没有两张接近的局面
 
-    # 内置分按 ×0.5 计入总分、前瞻不打折时两张才接近（星币锤有角色分 +50、前瞻也大）：这时最接近的是 2 星、轮次待识别、
-    # 已持有银行卡-余额少的局面（已进入星光，金色飞星不预判），差约 6.3 分，网格里仍没有星币锤更高的局面。这一条查的是
+    # 内置分按 ×0.5 计入总分、前瞻不打折时两张才接近（星币锤有角色分 +50、前瞻也大）：这时最接近的是 3 星、轮次待识别、
+    # 已持有银行卡-余额少的局面（已进入星光，金色飞星不预判），差约 8.0 分，网格里仍没有星币锤更高的局面。这一条查的是
     # 分项加起来的先后，用内置分照旧计入、前瞻不打折的资料库副本
     def test_al_hammer_never_ahead_with_official_score(self):
         rules = {k: dict(v) if isinstance(v, dict) else v for k, v in self.db.rules.items()}
@@ -1008,7 +1008,7 @@ class SupportFlyingStarTest(Base):
             ev = self.by_name(advise(db, st, self.OFFER))
             margins.append((ev["金色飞星"].total - ev["星币锤"].total, st))
         closest, st = min(margins, key=lambda x: x[0])
-        self.assertEqual((st.star, st.round, st.owned), (2, None, ("银行卡-余额少", "缓冲盾牌")))
+        self.assertEqual((st.star, st.round, st.owned), (3, None, ("银行卡-余额少", "缓冲盾牌")))
         self.assertGreater(closest, 5)
         self.assertGreater(min(m for m, _ in margins), 0)
 

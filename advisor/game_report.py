@@ -1,8 +1,23 @@
 """对局报告：从本机的推荐日志里挑出格式里写了的字段，拼成一份报告，存进推荐日志文件夹下的 upload，下次启动时发出去。
 
+每次三选一另记当时地图是怎么认出来的（map_source）、本局难度是按什么定的（difficulty_source），以及已有筹码各自
+是怎么进来的、在「查看筹码」面板上看到过没有（owned_sources、owned_panel），对局结束另记结束时的地图是怎么来的、
+局里认的是哪张（map_source、map_in_game；结算画面读到的地图优先，手动指定的除外，见 session.offgame.end_info），
+以及难度依据、已有筹码的两样和这一局没采用的进度上限有几个（difficulty_source、owned_sources、owned_panel、
+cap_rejected），用来核对局里认的地图认错了几次、难度凭什么定、漏记和记错的筹码是怎么来的。每次三选一还另记它的来源
+是凭什么定的（source_by）；三选一关掉以后按星数补准了来源时（source 记录），用补准的改掉报告里那次三选一的来源和依据。
+
 报告是给分析统计数据用的，格式见报告格式说明（三边共用的约定）：只带那里写了的字段，一项不合格整份都收不下，
 而收到 400 以后这一份会被删掉，所以拼的时候宁可少写，也不照抄推荐日志——推荐日志里的筹码资料、给人看的整句、
 补充说明都不能带进去。
+
+第 3 版起外层多了结束时的数据表（table）：取这一局最后一条 table 记录，只带格式里写了的几项，清理时拿不准的
+写 null；players 不是数组、座位重复或超出 1～4 时整张表写 null。table 里一处不合格，收数据的服务只把整个 table
+存成 null、报告其余部分照收，所以这里照它的规矩清理，不让整块被丢掉。
+
+同一版外层还多了认出了三选一、程序却放弃等待、没给推荐的那几次（unadvised）：取这一局、时刻不早于 since 的
+unadvised 记录，按日志里的先后最多 50 项。每一项只带服务那边写了的六个键，不合格的一项丢掉（不让整块变成 null）；
+一项都没有时写空数组。
 
 开关、本机编号、随机值、打开开关的时刻都在设置里，由界面那一层传进来：本模块不读设置文件，也不碰 Qt，一局结束和启动时
 各在后台线程里调用一次。
@@ -39,7 +54,7 @@ from pathlib import Path
 from . import errors, fileio, logbook, paths, schemes, update, winhttp
 from .version import VERSION
 
-SCHEMA = 2
+SCHEMA = 3
 URL = "https://report.astral-chip-compass.com/v1/report"
 URL_ENV = "ACC_REPORT_URL"
 KEEP = 50
@@ -59,8 +74,21 @@ MAX_ARRAY = 200
 MAX_PARTS = 40
 MAX_EVALS = 6
 MAX_OFFERS = 400
+MAX_UNADVISED = 50  # 认出了三选一、没给推荐的那几次，一份报告最多带这么多
+MAX_UNADVISED_REASONS = 3
 MAX_TEAMMATES = 4
 MAX_BODY = 64 * 1024
+
+# 结束时的数据表（table）：五项数字、14 个称号。和 vision/result_table.py 里的 STATS、BADGES 一样；这里不 import
+# 那边（会带进图像库），用测试核两组常量和那边一致，免得以后对不上。
+TABLE_STATS = ("kills", "downs", "damage_dealt", "damage_taken", "heal")
+TABLE_BADGES = ("天选之星", "破坏王", "大荒星陨", "一拳超人", "死神", "百折不挠", "排雷大师",
+                "大富翁", "终结者", "终极医师", "长跑冠军", "蜗牛", "囤积者", "作战大师")
+MAX_TABLE_PLAYERS = 4
+MAX_TABLE_CHIPS = 40
+MAX_TABLE_BADGES = 8
+MAX_TABLE_BEST = 5
+MAX_TABLE_INTEGER = 1_000_000_000
 
 CLIENTS = frozenset({"cn", "int", "taptap"})
 VIAS = frozenset({"panel", "supplement"})
@@ -74,13 +102,22 @@ STATE_FIELDS = (
     "difficulty", "difficulty_level", "difficulty_name", "progress", "progress_cap", "direct",
     "endless_pending", "endless_given", "endless_due",
 )
+# 局里认的地图是怎么来的，和推荐日志的白名单同一组（logbook.MAP_SOURCES，和 MAP_SOURCE_LABEL 的键一致）；
+# 对局结束的地图还多一项 result：结算画面上读到的地图为准
+MAP_SOURCES = logbook.MAP_SOURCES
+END_MAP_SOURCES = MAP_SOURCES | {"result"}
 STATE_LIST_FIELDS = ("map_candidates", "owned", "mutators")
 REROLL_FIELDS = ("expected", "cost", "value", "p_better", "percent", "chain", "kept", "spare", "need", "known")
 PICKS_FIELDS = ("total", "levelups", "extras", "cap", "rounds_left", "capped", "endless")
 EVAL_FIELDS = ("official", "official_raw", "immediate", "lookahead", "total", "percent", "superseded_by")
 PLACE_FIELDS = ("kind", "tier", "rank", "school")
 RANKING_LIST_FIELDS = ("listed", "locked", "strayed", "targets", "entered")
-END_FIELDS = ("why", "map", "difficulty", "level", "rounds", "cap", "star", "progress", "owned")
+END_FIELDS = ("why", "map", "difficulty", "level", "rounds", "cap", "star", "progress", "owned",
+              "map_source", "map_in_game", "difficulty_source", "owned_sources", "owned_panel", "cap_rejected")
+# 本局难度的依据（offer 记录顶层、结束记录的同名项）：和推荐日志的白名单同一组
+DIFFICULTY_SOURCES = logbook.DIFFICULTY_SOURCES
+# 已有筹码的来路（offer 记录顶层 owned_sources、结束记录的同名项）：和推荐日志的白名单同一组
+OWNED_SOURCES = logbook.OWNED_SOURCES
 # result 的两项只认这几个值（大小写一字不差）：别的值收数据的服务整份回 400，收到 400 这一份就删了，所以写 null
 OUTCOMES = frozenset({"win", "loss"})
 HOWS = frozenset({"victory", "reward", "game_over"})
@@ -164,7 +201,10 @@ def build(records: Iterable[dict], game: str, *, install: str, since: datetime |
     first_seen: dict[str, tuple[datetime | None, int]] = {}
     picks: dict[str, dict] = {}
     feedbacks: dict[str, str | None] = {}
+    sources: dict[str, dict] = {}
     endings: list[dict] = []
+    table: dict | None = None
+    unadvised: list[dict] = []
     when = _local(since)
     for order, record in enumerate(records):
         if not isinstance(record, dict):
@@ -174,6 +214,20 @@ def build(records: Iterable[dict], game: str, *, install: str, since: datetime |
             if record.get("game") == game:
                 endings.append(record)
             continue
+        if kind == "table":
+            # 只按局号挑，不按时刻：同一局读到几次时以最后一条为准
+            if record.get("game") == game:
+                table = record
+            continue
+        if kind == "unadvised":
+            # 按日志里的先后；时刻不早于 since（同 offer 记录：时刻读不出、since 给了的不算）
+            if record.get("game") == game:
+                moment = _local(record.get("time"))
+                if when is None or (moment is not None and moment >= when):
+                    item = _unadvised_item(record)
+                    if item is not None:
+                        unadvised.append(item)
+            continue
         offer_id = record.get("offer_id")
         if not isinstance(offer_id, str) or not offer_id:
             continue
@@ -181,6 +235,8 @@ def build(records: Iterable[dict], game: str, *, install: str, since: datetime |
             picks[offer_id] = record
         elif kind == "feedback":
             feedbacks[offer_id] = record
+        elif kind == "source":
+            sources[offer_id] = record  # 三选一关掉以后补准了来源：同一个 offer_id 以后一条为准
         elif kind == "offer":
             moment = _local(record.get("time"))
             if when is not None and (moment is None or moment < when):
@@ -195,7 +251,7 @@ def build(records: Iterable[dict], game: str, *, install: str, since: datetime |
         first_seen[item[0]][0] or datetime.max, first_seen[item[0]][1]))
     items = []
     for offer_id, record in members:
-        item = _offer(record, picks.get(offer_id), feedbacks.get(offer_id))
+        item = _offer(record, picks.get(offer_id), feedbacks.get(offer_id), sources.get(offer_id))
         if item is not None:
             items.append(item)
     if not items:
@@ -203,6 +259,9 @@ def build(records: Iterable[dict], game: str, *, install: str, since: datetime |
     if len(items) > MAX_OFFERS:
         _cut("offers")
         items = items[:MAX_OFFERS]
+    if len(unadvised) > MAX_UNADVISED:
+        _cut("unadvised")
+        unadvised = unadvised[:MAX_UNADVISED]
     last_order = {offer_id: seen[-1][0] for offer_id, seen in offers.items()}
     last = chosen[max(chosen, key=last_order.get)]
     latest_offer = max((moment for record in chosen.values()
@@ -221,16 +280,36 @@ def build(records: Iterable[dict], game: str, *, install: str, since: datetime |
         "offers": items,
         "end": end,
         "result": None if end is None else _result(ending),
+        "table": _table(table),
+        "unadvised": unadvised,
     }
     return report
 
 
-def _offer(record: dict, pick: dict | None, feedback: dict | None) -> dict | None:
-    """一次三选一在报告里的样子：局面、推荐照白名单挑；方案写成分享码；选择、反馈各取最后一条。"""
+def _offer(record: dict, pick: dict | None, feedback: dict | None, source_record: dict | None = None) -> dict | None:
+    """一次三选一在报告里的样子：局面、推荐照白名单挑；方案写成分享码；选择、反馈各取最后一条。
+
+    source_record 是那一次三选一补准了来源的 source 记录（没有时为 None）：两项都在白名单里时改掉报告里那次三选一的
+    来源和依据。"""
     state = _state(record.get("state"))
     advice = _advice(record.get("advice"))
     if state is None or advice is None:
         return None
+    # 地图来源记在 offer 记录的顶层（不在 state 里）：旧记录没有、值不认识时写 null。报告里这一项总是有
+    state["map_source"] = _map_source(record.get("map_source"))
+    # 难度依据同样记在 offer 记录的顶层：旧记录没有、值不认识时写 null
+    state["difficulty_source"] = _difficulty_source(record.get("difficulty_source"))
+    # 已有筹码的来路和面板记号同样在顶层，和清理过的 state["owned"] 一一对应；对不上时两样都写 null
+    raw_state = record.get("state") if isinstance(record.get("state"), dict) else {}
+    state["owned_sources"], state["owned_panel"] = _owned_lists(
+        raw_state.get("owned"), record.get("owned_sources"), record.get("owned_panel"), state.get("owned"))
+    # 来源是凭什么定的同样记在 offer 记录的顶层：旧记录没有、值不认识时写 null
+    state["source_by"] = _source_by(record.get("source_by"))
+    if isinstance(source_record, dict):
+        source, by = source_record.get("source"), source_record.get("by")
+        # 先看是不是文字：日志写坏了、值是列表这类时比 in 会出错，整局的报告就拼不出来
+        if isinstance(source, str) and isinstance(by, str) and source in logbook.SOURCES and by in logbook.SOURCE_BYS:
+            state["source"], state["source_by"] = source, by
     raw_advice = record.get("advice") if isinstance(record.get("advice"), dict) else {}
     via = pick.get("via") if isinstance(pick, dict) else None
     reason = feedback.get("reason") if isinstance(feedback, dict) else None
@@ -297,6 +376,42 @@ def _state(raw) -> dict | None:
         else:
             out[key] = _scalar(value)
     return out
+
+
+def _map_source(value) -> str | None:
+    """地图来源：只在 MAP_SOURCES 里时照写，别的（旧记录没有、值不对）写 null。"""
+    return value if isinstance(value, str) and value in MAP_SOURCES else None
+
+
+def _difficulty_source(value) -> str | None:
+    """难度依据：只在 DIFFICULTY_SOURCES 里时照写，别的（旧记录没有、值不对）写 null。"""
+    return value if isinstance(value, str) and value in DIFFICULTY_SOURCES else None
+
+
+def _owned_lists(raw_owned, raw_sources, raw_panel, cleaned_owned):
+    """已有筹码的来路和面板记号：和报告里清理过的 owned 一一对应。
+
+    owned 在 _state/_end 里经过 _text_list：丢掉不是文字的项、超过上限时截掉后面的。这里按同一批下标取
+    （照原列表的前 len(cleaned_owned) 个文字项），对不上（旧记录没有、长度不一样、某一项不是数组）时两样都写 null。
+    每一来路不是 OWNED_SOURCES 里的文字时写 null，面板记号不是布尔值时写 null。
+    """
+    if not (isinstance(raw_owned, list) and isinstance(raw_sources, list) and isinstance(raw_panel, list)):
+        return None, None
+    if not (len(raw_owned) == len(raw_sources) == len(raw_panel)) or cleaned_owned is None:
+        return None, None
+    keep = [i for i, name in enumerate(raw_owned) if isinstance(name, str)]
+    if len(keep) < len(cleaned_owned):
+        return None, None
+    keep = keep[:len(cleaned_owned)]
+    sources = [raw_sources[i] if isinstance(raw_sources[i], str) and raw_sources[i] in OWNED_SOURCES else None
+               for i in keep]
+    panel = [raw_panel[i] if isinstance(raw_panel[i], bool) else None for i in keep]
+    return sources, panel
+
+
+def _source_by(value) -> str | None:
+    """来源的依据：只在 logbook.SOURCE_BYS 里时照写，别的（旧记录没有、值不对）写 null。"""
+    return value if isinstance(value, str) and value in logbook.SOURCE_BYS else None
 
 
 def _teammates(raw) -> list:
@@ -426,6 +541,34 @@ def _tendency(raw) -> list | None:
     return [_text(values[0]) if values else None, _number_int(values[1]) if len(values) > 1 else None]
 
 
+def _unadvised_item(raw: dict) -> dict | None:
+    """推荐日志里的一条 unadvised → 报告里的一项：只带服务那边写了的六个键。
+
+    reasons 只留 UNADVISED_REASONS 里的那几种、不重复、最多三项，一项都不剩时这一项不要（返回 None）：服务那边
+    reasons 不合格会让整个 unadvised 存成 null，宁可少这一项。round、star 不是 0～10 亿的整数写 null；advised 不是
+    布尔值写 False；source 不在 SOURCES 里写 null；pick 不是文字写 null。
+    """
+    reasons: list[str] = []
+    values = raw.get("reasons")
+    for value in values if isinstance(values, list) else ():
+        if isinstance(value, str) and value in logbook.UNADVISED_REASONS and value not in reasons:
+            if len(reasons) >= MAX_UNADVISED_REASONS:
+                break
+            reasons.append(value)
+    if not reasons:
+        return None
+    source = raw.get("source")
+    advised = raw.get("advised")
+    return {
+        "round": _count(raw.get("round")),
+        "reasons": reasons,
+        "advised": advised if isinstance(advised, bool) else False,
+        "star": _count(raw.get("star")),
+        "source": source if isinstance(source, str) and source in logbook.SOURCES else None,
+        "pick": _text(raw.get("pick")),
+    }
+
+
 def _end_record(ends: list[dict], latest_offer: datetime | None) -> dict | None:
     """这一局的结束：紧跟在这份报告最后一次三选一后面（不早于它、不超过 GAME_GAP）的最后一条 gameover。
 
@@ -448,8 +591,30 @@ def _end(raw) -> dict | None:
     for key in END_FIELDS:
         if key not in raw:
             continue
-        out[key] = _text_list(raw.get(key), MAX_ARRAY) if key == "owned" else _scalar(raw.get(key))
+        if key == "owned":
+            out[key] = _text_list(raw.get(key), MAX_ARRAY)
+        elif key == "map_source":
+            # 只收 END_MAP_SOURCES 里的值（手动、结算画面、局里认的依据），别的写 null
+            out[key] = _end_map_source(raw.get(key))
+        elif key in ("owned_sources", "owned_panel"):
+            continue  # 和 owned 一起按同一批下标对齐，见下
+        elif key == "difficulty_source":
+            out[key] = _difficulty_source(raw.get(key))
+        elif key == "cap_rejected":
+            out[key] = _count(raw.get(key))
+        else:
+            out[key] = _scalar(raw.get(key))
+    # 这几项每份报告里都有：旧记录没有的写 null。两样数组和清理过的 end.owned 对齐
+    out["difficulty_source"] = _difficulty_source(raw.get("difficulty_source"))
+    out["owned_sources"], out["owned_panel"] = _owned_lists(
+        raw.get("owned"), raw.get("owned_sources"), raw.get("owned_panel"), out.get("owned"))
+    out["cap_rejected"] = _count(raw.get("cap_rejected"))
     return out
+
+
+def _end_map_source(value) -> str | None:
+    """结束记录的地图来源：只在 END_MAP_SOURCES 里时照写，别的（旧记录、值不对）写 null。"""
+    return value if isinstance(value, str) and value in END_MAP_SOURCES else None
 
 
 def _result(raw: dict) -> dict:
@@ -458,6 +623,111 @@ def _result(raw: dict) -> dict:
     outcome, how = raw.get("outcome"), raw.get("how")
     return {"outcome": outcome if isinstance(outcome, str) and outcome in OUTCOMES else None,
             "how": how if isinstance(how, str) and how in HOWS else None}
+
+
+# ---------------------------------------------------------------- 结束时的数据表
+
+
+def _table(raw) -> dict | None:
+    """结束时的数据表：只带格式里写了的几项，拿不准的写 null。
+
+    players 不是数组、是空数组、多于 4 项、某一项不是对象、座位不是 1～4 的整数或座位重复时，整张表写 null：
+    这些是结构不对，收数据的服务会把整块丢掉，不如这里先写 null。表里别的项不合格只把那一项写 null。
+    """
+    if not isinstance(raw, dict):
+        return None
+    players = _table_players(raw.get("players"))
+    if players is None:
+        return None
+    return {
+        "map": _text(raw.get("map")),
+        "difficulty": _text(raw.get("difficulty")),
+        "rounds": _count(raw.get("rounds")),
+        "players": players,
+    }
+
+
+def _table_players(raw) -> list | None:
+    """数据表的四栏：结构不对时整张表写 null；两项以上 self 为 true 时所有玩家的 self 都写 null（服务也这么存）。"""
+    if not isinstance(raw, list) or not 1 <= len(raw) <= MAX_TABLE_PLAYERS:
+        return None
+    players = []
+    seats = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            return None
+        seat = item.get("seat")
+        if isinstance(seat, bool) or not isinstance(seat, int) or not 1 <= seat <= MAX_TABLE_PLAYERS:
+            return None
+        if seat in seats:
+            return None
+        seats.add(seat)
+        players.append(_table_player(item, seat))
+    if sum(1 for player in players if player["self"] is True) > 1:
+        for player in players:
+            player["self"] = None
+    return players
+
+
+def _table_player(item: dict, seat: int) -> dict:
+    """数据表的一栏：只带格式里写了的字段，名字、等级这些多出来的键都不带。"""
+    return {
+        "seat": seat,
+        "self": item.get("self") if isinstance(item.get("self"), bool) else None,
+        "bot": item.get("bot") if isinstance(item.get("bot"), bool) else None,
+        "hero": _text(item.get("hero")),
+        "kills": _count(item.get("kills")),
+        "downs": _count(item.get("downs")),
+        "damage_dealt": _count(item.get("damage_dealt")),
+        "damage_taken": _count(item.get("damage_taken")),
+        "heal": _count(item.get("heal")),
+        "best": _table_best(item.get("best")),
+        "coins_all": _count(item.get("coins_all")),
+        "coins_transferred": _count(item.get("coins_transferred")),
+        "chips": _table_chips(item.get("chips")),
+        "chips_unknown": _count(item.get("chips_unknown")),
+        "badges": _table_badges(item.get("badges")),
+    }
+
+
+def _table_best(raw) -> list | None:
+    """BEST 标了哪几项：只留五项数字里的，去重、保持原来的先后，最多 5 项。不是数组时写 null。"""
+    if not isinstance(raw, list):
+        return None
+    out = []
+    for item in raw:
+        if isinstance(item, str) and item in TABLE_STATS and item not in out:
+            if len(out) >= MAX_TABLE_BEST:
+                break
+            out.append(item)
+    return out
+
+
+def _table_chips(raw) -> list | None:
+    """表上的筹码：只留文字项，最多 40 项（多出的截掉）。不是数组时写 null。"""
+    if not isinstance(raw, list):
+        return None
+    if len(raw) > MAX_TABLE_CHIPS:
+        _cut("table_chips")
+        raw = raw[:MAX_TABLE_CHIPS]
+    return [text for text in (_text(item) for item in raw) if text is not None]
+
+
+def _table_badges(raw) -> list | None:
+    """称号：最多 8 项，每项只带 kind、value；不是对象的项丢掉，认不出的称号写 null。不是数组时写 null。"""
+    if not isinstance(raw, list):
+        return None
+    if len(raw) > MAX_TABLE_BADGES:
+        _cut("table_badges")
+        raw = raw[:MAX_TABLE_BADGES]
+    out = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        kind = item.get("kind")
+        out.append({"kind": kind if isinstance(kind, str) and kind in TABLE_BADGES else None,
+                    "value": _count(item.get("value"))})
+    return out
 
 
 # ---------------------------------------------------------------- 各类值的清理（保证过得了格式检查）
@@ -519,6 +789,13 @@ def _whole(value) -> int | None:
     if isinstance(value, bool) or not isinstance(value, int) or not _finite(value):
         return None
     return value
+
+
+def _count(value) -> int | None:
+    """数据表上的整数：0～1 000 000 000（含两端）；布尔值、浮点数（连 3.0 这样的）、负数、超出上限的都写 null。"""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value if 0 <= value <= MAX_TABLE_INTEGER else None
 
 
 def _text_list(value, limit: int) -> list | None:

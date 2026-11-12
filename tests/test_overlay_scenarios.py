@@ -603,12 +603,13 @@ class RealGameFlowTest(ScenarioBase):
         self.assertTrue(w.map_row.isHidden())
 
     def test_levelup_advice_pick_and_record(self):
-        """升星三选一：一行显示时自动出现「推荐」卡片，标题栏写来源和刷新次数；选中后关闭，记录并收回一行。"""
+        """升星三选一：一行显示时自动出现「推荐」卡片，标题栏写来源（出现之前星数从 0 涨到 1：升星）和刷新次数；选中后关闭，
+        记录并收回一行。"""
         play(self.game, "升星三选一")
         w = self.w
         ev = self.game.advice[-1]
-        self.assertEqual((ev.state.source, ev.state.star, ev.state.rerolls), ("levelup", 1, 3))
-        self.assertEqual(w.status.summary_plain, "来源 升星或筹码商店 · 刷新 ×3")
+        self.assertEqual((ev.state.source, ev.state.star, ev.state.rerolls, ev.source_by), ("levelup", 1, 3, "stars"))
+        self.assertEqual(w.status.summary_plain, "来源 升星 · 刷新 ×3")
         self.assertTrue(w.card_open("advice"))
         names = [b.text() for b in visible_buttons(w, w.body)]
         self.assertEqual(sorted(n.removeprefix("★ ") for n in names), sorted(REAL["212245"]["offer"]))
@@ -970,7 +971,7 @@ class KeyTextTest(ScenarioBase):
         play(g, "选中金色飞星后关闭", each=grab)
         for text in (PANEL_PROMPT, OPEN_TASKS, "已识别地图：异变图书馆，可以关闭任务栏", "已识别已有筹码 2 个，可以关闭「查看筹码」面板",
                      "已记录选择：“8面”骰子。等待下一次筹码三选一", MISSED, "已补录：紫色飞星。等待下一次筹码三选一",
-                     "来源 升星或筹码商店", "来源 任务（2 级）", "刷新 ×3"):
+                     "来源 升星", "来源 任务（2 级）", "刷新 ×3"):  # 剧本里升星前都读到了星数涨 1：写「升星」
             with self.subTest(text=text):
                 self.assertIn(text, seen)  # 剧本里确实出现过
         # 对局中途误判、撤销：状态行写明误判时的识别记录存在哪
@@ -1430,7 +1431,7 @@ class WatcherReviewRecordTest(unittest.TestCase):
 
         watch = {**self.db.rules.get("watch", {}), "manual_follow": False, "active_ms": 10, "idle_ms": 10}
         db = SimpleNamespace(rules={**self.db.rules, "watch": watch})
-        session = SimpleNamespace(holding=False)
+        session = SimpleNamespace(holding=False, wants_table=False)  # 取帧线程在锁里读的两项（watcher）
 
         class Plain:
             chip_select_visible = True

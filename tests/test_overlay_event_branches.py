@@ -40,16 +40,18 @@ class PickedBranchTest(BehaviorBase):
         self.assertIn(OFFER[1], "\n".join(self.texts("owned")))
 
     def test_pick_without_advice_asks_nothing(self):
-        """候选筹码没认全（没给出推荐）时选了一个：写「已选」，不写「（首推）」也不问原因；推荐日志里没有这一次。"""
+        """候选筹码没认全（没给出推荐）时选了一个：写「已选」，不写「（首推）」也不问原因；推荐日志里没有推荐记录，
+        只记一条没给推荐（unadvised）。"""
         self.enter()
         names = [OFFER[0], None, OFFER[2]]
         seen = dict(names=names, raw=[OFFER[0], "高效", OFFER[2]], rerolls=3, probabilities=None, rarity=[],
                     team=False, problems=["第 2 个候选筹码无法识别（识别文字：「高效」）"])
         self.assertEqual(self.kinds(self.unreadable(SimpleNamespace(**seen, selected=None))), ["unreadable"])
         self.feed(self.session.on_frame, SimpleNamespace(**seen, selected=0))
-        self.assertEqual(self.kinds(self.close()), ["picked"])
+        self.assertEqual(self.kinds(self.close()), ["picked", "unadvised"])
         self.assertEqual(self.logbook.offers, [])
         self.assertEqual(self.logbook.picks, [])
+        self.assertEqual([item["reasons"] for item in self.logbook.unadvised], [["name"]])
         for mode in self.modes():
             with self.subTest(mode=mode):
                 self.assertTrue(self.w.status.summary_plain.startswith(f"已记录选择：{OFFER[0]}"), self.w.status.summary_plain)
@@ -57,6 +59,21 @@ class PickedBranchTest(BehaviorBase):
         advice = self.w.advice.texts()
         self.assertIn(f"{PICKED_LABEL}{OFFER[0]}", advice)
         self.assertFalse(any("（首推）" in t or t.startswith(FEEDBACK_QUESTION.split("「")[0]) for t in advice), advice)
+
+
+class UnadvisedBranchTest(BehaviorBase):
+    def test_logged_and_not_shown(self):
+        """认出了三选一、没给推荐就关掉：交给推荐日志记一条，悬浮窗上不多出什么（关掉以后照旧是一行显示等下一次）。"""
+        self.enter()
+        names = [OFFER[0], None, OFFER[2]]
+        seen = SimpleNamespace(names=names, raw=[OFFER[0], "高效", OFFER[2]], rerolls=3, probabilities=None,
+                               rarity=[], team=False, problems=["第 2 个候选筹码无法识别（识别文字：「高效」）"],
+                               selected=None)
+        self.assertEqual(self.kinds(self.unreadable(seen)), ["unreadable"])
+        self.assertEqual(self.kinds(self.close()), ["missed_pick", "unadvised"])
+        item = self.logbook.unadvised[0]
+        self.assertEqual((item["select_no"], item["reasons"], item["advised"], item["pick"]),
+                         (1, ["name"], False, None))
 
 
 class PickRevertedBranchTest(BehaviorBase):

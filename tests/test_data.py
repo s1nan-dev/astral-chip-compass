@@ -57,7 +57,7 @@ class DataTest(unittest.TestCase):
 
         c = chips["拳击手套-高级"]
         self.assertEqual((c.rarity, c.base, c.class_points), ("金", 60, {"攻击": 30}))
-        self.assertEqual(len(c.fit), 16)
+        self.assertEqual(len(c.fit), 17)
         self.assertIn("邦妮", c.fit)
         self.assertIn("远野汉娜", c.fit)
 
@@ -80,7 +80,7 @@ class DataTest(unittest.TestCase):
         self.assertEqual(set(chips["缓冲盾牌"].pools), {"生存", "辅助"})
 
     def test_class_pools_only_from_table(self):
-        """最左格职业筹码池只用 data/chips.json 的 pools 字段，不按标签补全（wiki 池表收的地图专属筹码只到前几张图，
+        """资料里的池表只用 data/chips.json 的 pools 字段，不按标签补全（wiki 池表收的地图专属筹码只到前几张图，
         之后几张图带职业标签的几枚按标签补进了池表；通用筹码仍然不进）。"""
         chips = self.db.chips
         self.assertEqual(chips["手持风扇-大"].pools, ("卡牌",))
@@ -197,7 +197,7 @@ class DataTest(unittest.TestCase):
         """data/meta.json 只写一个资料同步日期 data_date（合法日期），关于窗口显示的日期取它。"""
         meta = _data("meta.json")
         self.assertEqual(list(meta), ["data_date"])
-        self.assertEqual(meta["data_date"], "2026-10-17")
+        self.assertEqual(meta["data_date"], "2026-11-12")
         from datetime import date
         date.fromisoformat(meta["data_date"])
         self.assertEqual(self.db.meta, meta)
@@ -345,6 +345,42 @@ class DataTest(unittest.TestCase):
                     db = load_db(str(self.copy_data(edited)))
                 hs = db.hero_synergy["南希露"]
                 self.assertEqual((hs.keep_schools, hs.keep_schools_penalty), (keep, penalty))
+                self.assertEqual(db.warnings, warnings)
+
+    def test_school_skip(self):
+        """[[hero]] 的 school_skip（推荐流派里这几张筹码不加「推荐流派」这一笔分）：要写成筹码名的列表，名单里的筹码
+        要在推荐流派里，重复的只算一次。写成别的值时按没写处理；不是筹码名、不属于任何流派、流派不在推荐流派里的
+        记警告、去掉。没写的角色为空。"""
+        self.assertEqual(self.db.hero_synergy["邦妮"].school_skip, ())
+        text = (paths.data_dir() / "synergy.toml").read_text(encoding="utf-8")
+        start = text.index('[[hero]]\nname = "南希露"')
+        # 南希露在资料里已有一行 school_skip：先去掉，再换成下面各种写法
+        own = text.index("\nschool_skip = ", start)
+        self.assertLess(own, text.index("\n[[", start + 1))
+        text = text[:own] + text[text.index("\n", own + 1):]
+        at = text.index("\nkeep_schools = true\n", start)
+        line = "\nkeep_schools = true\n"
+        cases = (  # （school_skip 的写法, 整理后的名单, 警告）
+            ('school_skip = ["标记喷罐", "魔法箭袋"]', ("标记喷罐", "魔法箭袋"), []),
+            ('school_skip = ["标记喷罐", "标记喷罐"]', ("标记喷罐",), []),
+            ('school_skip = ["标记喷罐", "星币锤"]', ("标记喷罐",),
+             ["角色 南希露：school_skip 里的筹码「星币锤」的流派「星光」不在 schools（推荐流派）里，已忽略"]),
+            ('school_skip = "标记喷罐"', (), ["角色 南希露：school_skip 应为筹码名的列表，已忽略"]),
+            ("school_skip = [1]", (), ["角色 南希露：school_skip 应为筹码名的列表，已忽略"]),
+            ('school_skip = ["不存在的筹码"]', (),
+             ["角色 南希露：school_skip 里的筹码「不存在的筹码」不存在，已忽略"]),
+            ('school_skip = ["拳击手套-高级"]', (),
+             ["角色 南希露：school_skip 里的筹码「拳击手套-高级」不属于任何流派，已忽略"]),
+        )
+        for written, skip, warnings in cases:
+            with self.subTest(written=written):
+                edited = text[:at] + "\n" + written + "\n" + text[at + len(line):]
+                if warnings:
+                    with self.assertLogs("advisor.data", level="WARNING"):
+                        db = load_db(str(self.copy_data(edited)))
+                else:
+                    db = load_db(str(self.copy_data(edited)))
+                self.assertEqual(db.hero_synergy["南希露"].school_skip, skip)
                 self.assertEqual(db.warnings, warnings)
 
     def test_name_matching(self):

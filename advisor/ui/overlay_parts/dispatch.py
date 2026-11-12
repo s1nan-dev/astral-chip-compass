@@ -1,4 +1,4 @@
-"""识别事件的先后和分派：事件的序号（认出晚到的旧事件），以及按种类交给 EventRouter 的处理（EventHandlers，16 种事件各自的
+"""识别事件的先后和分派：事件的序号（认出晚到的旧事件），以及按种类交给 EventRouter 的处理（EventHandlers，19 种事件各自的
 处理函数）。事件种类的名字在 state.py。
 
 这里是编排：处理函数写三选一显示期间的状态（state.LiveState）、一次性提示（state.Message）、提示行的状态（NoticeModel），调用
@@ -31,7 +31,10 @@ from .state import (
     EV_PICK_REVERTED,
     EV_PICKED,
     EV_REFRESHING,
+    EV_SOURCE_SETTLED,
     EV_STATUS,
+    EV_TABLE,
+    EV_UNADVISED,
     EV_UNREADABLE,
     EV_UNRECORDED_GAIN,
     EVENT_KINDS,
@@ -55,10 +58,10 @@ def _seq(ev) -> int:
 
 
 class EventHandlers:
-    """16 种识别事件各自的处理函数（on_ 加事件种类）；EventRouter 按种类调用。"""
+    """19 种识别事件各自的处理函数（on_ 加事件种类）；EventRouter 按种类调用。"""
 
     def __init__(self, *, db, session, lock, live, message, notice_model, advice, owned, offers, eggs, notices,
-                 flash, waiting_text, newgame_notice, refresh, report_game=None):
+                 flash, waiting_text, newgame_notice, refresh, report_game=None, report_table=None):
         # 服务：资料库、Session 和它的锁
         self.db, self.session, self.lock = db, session, lock
         # 写的显示状态：三选一显示期间的状态、一次性提示、提示行的状态
@@ -69,6 +72,7 @@ class EventHandlers:
         # （report_game(局号, 胜负定了没有)：定了马上在后台拼，没定的先等，见 reporting.Reporting.game_over）
         self.flash, self.waiting_text, self.newgame_notice, self.refresh = flash, waiting_text, newgame_notice, refresh
         self.report_game = report_game
+        self.report_table = report_table  # 记下数据表以后叫报告重拼（report_table(局号)）
         self.report_waiting: str | None = None  # 结束了、胜负还没定的那一局（推荐日志的局号）：定了或下一局开始时拼
 
     def on_advice(self, ev, was_live: bool, was_kind: str):
@@ -78,7 +82,9 @@ class EventHandlers:
         if not was_live or self.offers.offer_id != before:
             self.live.seq += 1
         self.live.on, self.live.kind, self.live.hero_needed = True, EV_ADVICE, False
-        self.live.bits = self.advice.bits(ev.state, ev.advice)
+        # 这次推荐不知道全部已有筹码、只按记下的几个算：「推荐」卡片最上面提示（读到面板时收起，之后的推荐不带）
+        self.live.owned_unknown = bool(getattr(ev, "owned_unknown", False))
+        self.live.bits = self.advice.bits(ev.state, ev.advice, getattr(ev, "source_by", None))
         self.message.say("", "advice")
         self.advice.last_ev = ev
         self.advice.shown_ev = ev
@@ -95,6 +101,7 @@ class EventHandlers:
         if not was_live:
             self.live.seq += 1
         self.live.on, self.live.kind, self.live.hero_needed = True, EV_UNREADABLE, False
+        self.live.owned_unknown = False  # 没有推荐，不提示
         # 三选一显示期间的几项（LiveState.bits）直接放进状态胶囊和摘要：建的时候就按界面语言写
         self.live.bits = {"candidates": Bit(
             lang.t(f"第 {'、'.join(str(i + 1) for i in slots)} 个无法识别"), lang.t("候选筹码"), "warn", "candidates",
@@ -114,6 +121,7 @@ class EventHandlers:
         if not was_live:
             self.live.seq += 1
         self.live.on, self.live.kind, self.live.hero_needed = True, EV_HERO_NEEDED, True
+        self.live.owned_unknown = False  # 推荐暂停，不提示
         self.live.bits = {
             "hero": Bit(lang.t("待识别"), lang.t("角色"), "warn", "hero"),
             "paused_advice": Bit(lang.t("推荐已暂停"), tone="warn", key="paused_advice"),
@@ -238,6 +246,9 @@ class EventHandlers:
     def on_panel_read(self, ev, was_live: bool, was_kind: str):
         self.notice_model.panel_prompt = False
         self.notice_model.panel_tab = None
+        # 已有筹码按面板知道了：「推荐」卡片上「还不知道已有筹码」那行提醒收起。面板改了已有筹码时 Session 随后另发按面板
+        # 重算的推荐；没改（例如面板上确实一个都没有）时推荐不变、不重发
+        self.live.owned_unknown = False
         owned = getattr(ev, "owned", None)
         if owned is None:
             owned = self.session.settings.owned
@@ -262,6 +273,25 @@ class EventHandlers:
         name = getattr(ev, "map", None) or self.session.settings.map
         if name:
             self.flash(lang.t(MAP_READ.format(map=names.map_in(self.db, name))), "recog")
+
+    def on_source_settled(self, ev, was_live: bool, was_kind: str):
+        """三选一关掉以后补准了来源：交给推荐日志，记在那一次三选一用过的编号上（不显示，见 OfferLog.on_source_settled）。"""
+        self.offers.on_source_settled(ev)
+
+    def on_unadvised(self, ev, was_live: bool, was_kind: str):
+        """一次三选一认出来了、程序放弃等待、没给推荐就关掉了：交给推荐日志记一条（见 OfferLog.on_unadvised）。
+        悬浮窗上不显示。"""
+        self.offers.on_unadvised(ev)
+
+    def on_table(self, ev, was_live: bool, was_kind: str):
+        """认出并记下了结算页上的数据表：交给推荐日志记一条，拿到局号以后叫这一局的报告重拼（已经拼过的覆盖同一份，
+        还在等胜负的不动）。悬浮窗上不显示。"""
+        record = getattr(ev, "record", None)
+        if not isinstance(record, dict):
+            return
+        game = self.offers.log_table(record)
+        if callable(self.report_table) and game:
+            self.report_table(game)
 
     def apply_pick_fixes(self, fixes) -> list[tuple[str, str]]:
         """「查看筹码」面板改正了三选一的选择记录：推荐日志里那一次三选一改记成面板上的筹码（OfferLog），
@@ -289,8 +319,10 @@ class EventHandlers:
             games = s.games
             settled = bool(s.result_settled) if info else False
             if info:
+                owned, owned_sources, owned_panel = s.owned_snapshot()
                 info = {**info, "star": s.settings.star if s.settings.star_read else None,
-                        "progress": s.game.progress, "owned": list(s.settings.owned)}
+                        "progress": s.game.progress, "owned": owned,
+                        "owned_sources": owned_sources, "owned_panel": owned_panel}
         logged = self.offers.game_over(info, games)
         if not callable(self.report_game):
             return
@@ -314,6 +346,7 @@ class EventHandlers:
         self.live.on = False
         self.live.kind = ""
         self.live.hero_needed = False
+        self.live.owned_unknown = False
         self.live.bits = {}
         if not self.advice.fix_row.isHidden() or self.advice.fix_slot is not None:
             self.advice.fix_close(fit=False)
@@ -381,7 +414,7 @@ class EventRouter:
     """
 
     def __init__(self, *, db, session, lock, live, message, notice_model, advice, owned, offers, eggs, notices,
-                 flash, waiting_text, newgame_notice, refresh, receive, batch, report_game=None):
+                 flash, waiting_text, newgame_notice, refresh, receive, batch, report_game=None, report_table=None):
         self.session, self.lock, self.live, self.advice = session, lock, live, advice
         self.refresh = refresh
         # 一次性的操作结果提示（改正栏随候选变化而关闭）：显示 FLASH_MS 后自动收起
@@ -394,7 +427,7 @@ class EventRouter:
         handlers = self.handlers = EventHandlers(
             db=db, session=session, lock=lock, live=live, message=message, notice_model=notice_model, advice=advice,
             owned=owned, offers=offers, eggs=eggs, notices=notices, flash=flash, waiting_text=waiting_text,
-            newgame_notice=newgame_notice, refresh=refresh, report_game=report_game)
+            newgame_notice=newgame_notice, refresh=refresh, report_game=report_game, report_table=report_table)
         self.map = {
             EV_ADVICE: handlers.on_advice,
             EV_UNREADABLE: handlers.on_unreadable,
@@ -412,6 +445,9 @@ class EventRouter:
             EV_PANEL_READ: handlers.on_panel_read,
             EV_PANEL_TAB: handlers.on_panel_tab,
             EV_MAP_READ: handlers.on_map_read,
+            EV_SOURCE_SETTLED: handlers.on_source_settled,
+            EV_TABLE: handlers.on_table,
+            EV_UNADVISED: handlers.on_unadvised,
         }
 
     @contextmanager

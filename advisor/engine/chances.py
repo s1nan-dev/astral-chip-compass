@@ -75,8 +75,9 @@ def knife_school_bonus(sc: Scorer, name: str) -> float:
     保全部或其中几个都算），默认推荐里美工刀属于要保的流派时为推荐流派的加分（[synergy] school），其余为 0。
     这类角色把治愈流派列为要保的流派，靠的是美工刀配治愈来源：还没有治愈来源时，美工刀的攻击力加成难以生效，
     进入治愈流派这一点同样要等治愈来源才有用，美工刀要先有治愈来源才推荐。只保一部分推荐流派、没列出治愈时，
-    治愈的筹码照常加推荐流派的分（和不保的角色一样），这一项不折算。"""
-    if sc.plan is not None or not sc.kept_schools:
+    治愈的筹码照常加推荐流派的分（和不保的角色一样），这一项不折算。
+    角色把美工刀列进 school_skip 时它没有推荐流派的加分（parts._build_parts），也就没有这一笔可折算，为 0。"""
+    if sc.plan is not None or not sc.kept_schools or name in sc.school_skip:
         return 0.0
     school = sc.db.chips[name].school
     return float(sc.db.rules["synergy"]["school"]) if school and school in sc.kept_schools else 0.0

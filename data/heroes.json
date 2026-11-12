@@ -562,5 +562,21 @@
   "def": 1,
   "hp": 10,
   "potential": false
+ },
+ {
+  "id": 130,
+  "name": "苍鲤",
+  "en": "Souri",
+  "hant": "蒼鯉",
+  "weights": {"攻击": 100, "卡牌": 15, "辅助": 15, "生存": 15},
+  "full_name": "苍鲤",
+  "title": "金鳞御使",
+  "hant_title": "金鱗禦使",
+  "aliases": ["苍鲤", "金鳞御使", "Souri"],
+  "group": "辅C",
+  "atk": 1,
+  "def": 1,
+  "hp": 9,
+  "potential": false
  }
 ]

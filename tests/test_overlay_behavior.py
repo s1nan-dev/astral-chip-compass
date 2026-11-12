@@ -49,8 +49,13 @@ class FakeLogbook:
     game = "g1"
 
     def __init__(self):
-        self.offers, self.picks, self.feedback, self.game_overs = [], [], [], []
+        self.offers, self.picks, self.feedback, self.game_overs, self.tables = [], [], [], [], []
+        self.unadvised = []
         self.games_log = []
+
+    def record_table(self, **record):
+        self.tables.append(record)
+        return self.game
 
     def current_game(self):
         return self.game
@@ -64,11 +69,15 @@ class FakeLogbook:
         self.games_log.append(("undo", previous))
         self.game = previous
 
-    def record_offer(self, state, advice, offer_id, client=None):
+    def record_offer(self, state, advice, offer_id, client=None, map_source=None, source_by=None,
+                     difficulty_source=None, owned_sources=None, owned_panel=None):
         self.offers.append((offer_id, tuple(e.chip.name for e in advice.evals), advice.best))
 
     def record_pick(self, offer_id, chosen, via=None):
         self.picks.append((offer_id, chosen))
+
+    def record_unadvised(self, select_no, **item):
+        self.unadvised.append({"select_no": select_no, **item})
 
     def record_feedback(self, offer_id, reason, note):
         self.feedback.append((offer_id, reason, note))
@@ -285,7 +294,7 @@ class IdleEventTest(BehaviorBase):
         seen = SimpleNamespace(names=[None, None, None], raw=["高效", "2", "优雅"], rerolls=3, probabilities=None,
                                rarity=[], team=False, selected=None, problems=[])
         self.assertEqual(self.kinds(self.unreadable(seen)), ["unreadable"])
-        self.assertEqual(self.kinds(self.close()), ["idle"])
+        self.assertEqual(self.kinds(self.close()), ["idle", "unadvised"])
         for mode in self.modes():
             with self.subTest(mode=mode):
                 self.assertIn(WAITING, self.w.status.status_text())

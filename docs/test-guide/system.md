@@ -165,12 +165,30 @@
   - `PauseTest` 失败 → 下载期间暂停识别的界线或接线改了（`background.py` 的 `start_download`、`DOWNLOAD_PAUSE_OVER`、`_set_blocked`）。
   - `FailedNoticeTest` / `NoticeModelTest` 失败 → 下载失败那一行的分法、写法、按钮或悬停说明改了（`background.py` 的 `failure_kind`、`crop_only`、`gone_later`、`dismiss_failed`、`log_failures`，`notices.py` 的 `rows`、`tips`、`few_failed_text`，`overlay.py` 的 `actions`），或点「重试」时去记号的接线改了（`background.py` 的 `start_download`）；有意改了提示的写法时，断言和使用说明里照抄的那几处一起改。
 
+## test_assets_mirror.py：wiki 上没有、或和游戏里不一样，放在备用地址上的识别图片（清单里的 mirror 项）
+
+- **测试观点**：
+  - `MirrorDownloadTest`：备用地址上的图片下到了、校验值对上，照常存下，不写 wiki 上更新过的记录、不留 `.part`；备用地址回 404、内容对不上（大小、SHA-1）时只算这一张失败，不问 wiki 的接口，不记成 wiki 上已删除；回网页只算这一张失败，不按站点防护拦截算（不冷却）；回 403、429 不算进 wiki 的被拒（`_Gate.rejected` 不调），同一轮里 wiki 的图片照常下完、不冷却；403、404 只请求一次；503、没得到回话按 `BACKOFF` 等过再试，试满 `RETRIES` 次算失败，不算进 wiki 的被拒和试探；个别下载失败照常记下今天，当天 `missing` 不算、点「重试」（`retry_failed`）照常重下，最后报成限流的不记；覆盖清单里这一项以前从 wiki 下载时的记录（更新过的地址、已删除）不用，照清单从备用地址下，存好以后清掉。
+  - `MirrorProbeTest`：wiki 被拦以后的冷却期间再下载（只试一个请求）：备用地址上的那张下到了，wiki 上的试探请求仍被拒时照试探被拒算、冷却记录一字不改；备用地址上的那张没得到回话，不按试探没得到回话算，wiki 上的试探照常通了、下好。
+  - `LoadManifestTest`：官方仓库的版本（`update.USE_MIRROR` 为真）读进来带 `mirror` 的为 True、不带的为 False，`missing` 照常算它；复刻的改版（`USE_MIRROR` 为假）读清单时去掉 `mirror` 项，`missing`、`retry_items` 都没有它，wiki 上的照常；带 `fallback` 的（`test_fork_uses_fallback`）官方的版本照旧从备用地址下、不管 fallback，复刻的改版换成 fallback 里的下法（从卡面现裁、或 wiki 上那张，本地文件不变），fallback 里写了 `mirror` 也不认；旧版本从卡面现裁、这一版改放备用地址的角色照（`test_upgrade_from_cropped`），覆盖清单里记着现裁记录的，复刻的改版照 fallback 认它、不重下，官方的版本按大小对不上只从备用地址下这一张（不下卡面、不问 wiki 的接口），存好以后清掉现裁的记录、再启动不再算缺。
+  - `MakeManifestMirrorTest`：`tools/make_assets_manifest.py` 把 `MIRRORED` 里的图片写成 mirror 项（没有 `title`，地址是 `MIRROR_BASE` 加 `assets/<dir>/<SHA-1>/<file>`，大小、SHA-1 照本地文件算），算进 `counts`、`download_bytes`；本地少一张、Q 版头像识别不会读（编号不是 `data/heroes.json` 里的角色）时打印出来、退出码 1、不写清单；wiki 上已经有了、和备用地址上一样时打印一行提醒，照样写成备用地址上的，fallback 是 wiki 上那张；wiki 上的和游戏里不一样时不提醒，只写进 fallback；`card_crops.json` 里有裁法的角色照（`test_crop_fallback`）一起问卡面，fallback 是卡面加裁法，不另列一项现裁的，卡面在 wiki 上找不到时报出来、退出码 1、不写清单；`MIRRORED` 里的健全版角色照列在 `sfw_skip.json` 里的（`test_sfw_skip_not_listed`）和别的不用下载的健全版一样不进清单、不问它的文件页；开发目录里另有照 wiki 列的图片时，两边的文件页在同一次里问，备用地址上的那几张只列成备用地址上的一项。
+- **检证对象**：`advisor/assets.py` 的 `AssetItem.mirror`、`load_manifest`（看 `update.USE_MIRROR`）、`_get_mirror_image`、`effective`、`_recently_gone`、`_keep`、`missing`、`retry_items`；`tools/make_assets_manifest.py` 的 `MIRRORED`、`main`。
+- **什么时候要跑**：改 `advisor/assets.py` 里备用地址上的图片那几处（下载、出错怎么算、读清单）；改 `advisor/update.py` 的 `USE_MIRROR`、`MIRROR_BASE`；改 `tools/make_assets_manifest.py` 的 `MIRRORED` 或写 mirror 项的那一段；改了 `data/assets_manifest.json` 里的 mirror 项（另跑 test_release、test_project_consistency）。
+- **怎么单独跑**：`python -B tools/run_tests.py --only test_assets_mirror`。
+- **需要什么**：不联网：下载换成假的 opener，wiki 接口换成假的函数，识别图片的文件夹、清单所在的文件夹指到测试沙箱的临时文件夹；冷却那两条用假的钟。
+- **输出怎么看**：同总则。
+- **出错时一般是哪里不对**：
+  - `MirrorDownloadTest` 失败 → 备用地址上的图片出错时的算法改了（`_get_mirror_image` 哪些重试、哪些只算这一张失败，`effective`、`_recently_gone` 不用 wiki 的记录，`_keep` 清记录），或备用地址的回话算进了 wiki 的 `_Gate`。
+  - `MirrorProbeTest` 失败 → 冷却期间的试探把备用地址上的请求当成了试探（`_Gate` 的 `probing`、`answered`、`unanswered`）。
+  - `LoadManifestTest` 失败 → 读清单时 `mirror` 字段没读进来，或复刻的改版没去掉 mirror 项、没换成 fallback（`load_manifest` 要在每次读时看 `update.USE_MIRROR`）。
+  - `MakeManifestMirrorTest` 失败 → 生成清单时 mirror 项和 fallback 的写法、本地少图或识别不会读时的拦法、备用地址上的健全版照不照 `sfw_skip.json` 挑掉改了（`make_assets_manifest.py` 的 `main`）。
+
 ## test_card_crop.py：从卡面原画现裁角色照（裁图、下载、推算裁法的工具）
 
 - **测试观点**：
   - `CropImageTest`：裁法套到造出来的卡面上，记号落在矩阵算出的位置（摆正的、转了 17° 的，差不过 0.3 像素；卡面放大一倍、裁法不变，记号照样落在原处）；颜色按透明度乘进去（全透明处存的白色变成黑的，半透明的按比例变暗），角色照落在卡面外面的部分全透明；不带透明度的、灰度的卡面也裁得出；卡面解不开（不是图片、空的、截断的）、裁法不对（少一个数、不是数、无穷大、缩成一点、数大得离谱以致算不出角色照落在哪里）、角色照整个落在卡面外面、裁出来整张透明时报 `CropError`；`CropError` 是 `ValueError`（下载模块按它认），核对数据用的角色照大小同裁图。
   - `RealCardTest`（要卡面样本）：真的卡面按 `data/card_crops.json` 的裁法裁，和英文 wiki 上同款的游戏角色照（四周各少 8、18 像素）比，角色本身那部分相关度 0.97 以上；裁法的横竖弄反（第一、二列除错了宽高）、左右翻了时 0.8 以下。
-  - `TurnedCardTest`（要派德曼「酷暑难耐」的卡面样本）：卡面就是识别图片清单里那一项的卡面（大小、SHA-1、裁法都对得上），裁法转了约 -42.25°、`photo_tilt.json` 里写 -42.3；裁出来的角色照按这个角度转回去（认角色建模板时的转法），脸部那一块和卡面上同一块（只缩放、不转）相关度 0.95 以上，反着转 0.5 以下；样本里另有英文 wiki 上同款的游戏角色照时，和它比整张、脸部那一块都在 0.97 以上（没有时这一条跳过）。
+  - `TurnedCardTest`（要派德曼「酷暑难耐」的卡面样本）：卡面就是识别图片清单里那一项的卡面（大小、SHA-1、裁法都对得上；这张放在备用地址上，看的是复刻的版本照着现裁的 fallback），裁法转了约 -42.25°、`photo_tilt.json` 里写 -42.3；裁出来的角色照按这个角度转回去（认角色建模板时的转法），脸部那一块和卡面上同一块（只缩放、不转）相关度 0.95 以上，反着转 0.5 以下；样本里另有英文 wiki 上同款的游戏角色照时，和它比整张、脸部那一块都在 0.97 以上（没有时这一条跳过）。
   - `CropDownloadTest`：下到卡面、核过校验值以后裁成角色照写盘，和直接裁的一样，卡面不落盘、不留 `.part`；覆盖清单记下卡面的 SHA-1、裁法和角色照的大小，之后算「在」、不再下载；记录对不上的（卡面换了、裁法改了、大小不同、没有记录、旧的覆盖清单没有这一节、读不出来）都不算在；以前下过的 wiki 角色照（同名、没有记录）重下、整份换掉，旧图是硬链接时链接到的那一份不动；裁不出时只请求一次、不问接口、不写图、不记录（原因以「卡面裁不出角色照」开头）；下到的卡面核不过大小、校验值（接口给的也还是清单里那张）时这一张失败，裁图的函数一次都不调；没接上裁图时这一张失败、卡面不下（不会把卡面当角色照存下来），接上了不给 `cropper` 也按它裁；写不进时原因以「写不进文件」开头、不记录；卡面被拦（567）时同别的图片暂停、冷却记录记下是这一张；卡面在 wiki 上换过时问接口收下、按新卡面裁、记新的校验值；清单在照原样下载和从卡面现裁之间改过时（`test_stale_update_from_other_kind_ignored`），以前另一张文件（旧角色照、卡面）的更新记录不用，照清单下、存好以后清掉；已删除的记录也一样（`test_gone_record_from_other_kind_ignored`）：记着的文件页不是现在要问的那一页、以前只有日期的写法对现裁的项，都不用，照常下载，下载时查到删了记下日期和问的那一页；清单项没写卡面的校验值时这一张失败（`NO_CARD_SHA1`），卡面不下、不交去解码；还缺的图片按普通角色照、现裁的角色照、Q 版头像、筹码图标排；清单项的 `crop` 读成元组、没有的为 `None`、写坏了的照样当成要现裁的；覆盖清单里类型不对的现裁记录丢掉；`note_crop` 记的和下载时一样；悬浮窗导入下载模块时只登记导入裁图模块的函数，这一轮有要现裁的图片时才导入、只导入一次，导入出错记进错误记录、按没接上算（卡面不下）；另起一个进程核对导入下载模块不带进裁图模块、识别的包和 OpenCV。
   - `DeriveTest`：参考图带透明度的按透明度比，截图按四周的底色认出背景，`--pad` 那一圈、`--mask none` 的写法；造的卡面上按已知的裁法（转 12°）裁出参考图，粗找时只试 10.5°、13.5°，细调以后差不过 0.5 像素、转角 12°；命令行打印可以贴进 `card_crops.json` 的一项和 `photo_tilt.json` 的提示；要卡面样本的两条：英文 wiki 上的游戏角色照当参考（`--pad 8,18`）、截图样的参考图（垫底色、缩小、存成 JPEG，转了约 17° 的那一套）推算，和照游戏内核对的裁法差不过 1 个像素。
 - **检证对象**：`advisor/vision/cardcrop.py` 的 `crop_image`、`crop_png`、`pixel_matrix`、`as_bgra`、`premultiplied`、`CropError`、`PHOTO_SIZE`；`advisor/assets.py` 的 `download`（`cropper`）、`_get_image`、`_keep`、`is_present`、`effective`、`_same_kind`、`_same_crop`、`load_local`、`_usable_crop`、`_update_local`、`note_crop`、`use_cropper`、`_current_cropper`、`_recently_gone`、`load_manifest`、`_crop_field`、`_order`、`missing`、`CROP_FAILED`、`NO_CROPPER`、`NO_CARD_SHA1`；`advisor/ui/services.py` 的 `_assets`、`_crop_png_loader`；`tools/derive_card_crop.py` 的 `derive`、`reference_frame`、`max_offset`、`main`；`tools/check_data.py` 的 `card_of`、`crop_rotation`；`data/card_crops.json`。

@@ -275,7 +275,8 @@ class FakeLaneLogbookLine:
         self.offers, self.picks, self.feedback = [], [], []
         self.game = None
 
-    def record_offer(self, state, advice, offer_id, client=None):
+    def record_offer(self, state, advice, offer_id, client=None, map_source=None, source_by=None,
+                     difficulty_source=None, owned_sources=None, owned_panel=None):
         self.offers.append((offer_id, tuple(e.chip.name for e in advice.evals)))
         return self.game
 
@@ -317,7 +318,8 @@ class FakeLaneLogbook:
             line = self._lanes[name] = FakeLaneLogbookLine(name)
         return line
 
-    def record_offer(self, state, advice, offer_id, client=None):
+    def record_offer(self, state, advice, offer_id, client=None, map_source=None, source_by=None,
+                     difficulty_source=None, owned_sources=None, owned_panel=None):
         self.offers.append((offer_id, tuple(e.chip.name for e in advice.evals)))
 
     def record_pick(self, offer_id, chosen, via=None):

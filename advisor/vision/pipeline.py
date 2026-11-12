@@ -1,7 +1,7 @@
 """把一帧游戏画面交给各个识别模块，再交给 Session 记账。悬浮窗和回放工具共用这一套。
 
 三选一画面出来要尽快给推荐（见 FrameProcessor.process）：手上的轮次、进度条够新时先给推荐、下一帧再读一次
-核对，推荐给出以后只盯绿框（刚出现时读得可疑的补认一次、读左上角没成功时隔一会儿再读几次，见 FrameProcessor._select_reads）；
+核对，推荐给出以后只盯绿框（刚出现时读得可疑的补认、刷新次数读成 0 而账上不该是 0 时多补认几回、读左上角没成功时隔一会儿再读几次，见 FrameProcessor._select_reads）；
 刚出现时读得不完整、还没给过推荐的，先完整重读三张卡，读左上角排到重读之后（见 FrameProcessor._read_select）。
 不在三选一时一帧最多做一项读数，其余到期的排到接下来的几帧，每一帧开头先看是不是三选一。
 左上角的轮次数字被玩家列表第一行的头像挡住（读轮次时在数字那一行看见了轮次标记、数字却读不出）时，当作还在对局里：不判断
@@ -64,7 +64,7 @@ from .hud import (Hud, is_select_screen, mutator_catalog, progress_look, read_hu
 from .pick_watch import PickWatch
 from .screens import MAIN_MENU
 from .stars import MissingTemplates, name_key, read_own_stars, read_own_stars_by_name, read_players
-from . import victory
+from . import result_table, source_cues, victory
 
 try:  # 「查看筹码」面板识别（另一个模块，缺了不影响其余识别）
     from .chip_panel import read_chip_panel
@@ -85,12 +85,19 @@ COINS_MS = 5000
 # 推荐能早出来）；给过推荐以后照旧先读左上角，再认挪到下一帧，和补认一样。两样都不在同一帧做（见 FrameProcessor._read_select、
 # _top_due）
 SELECT_RETRY_S = 0.5
-# 补认（见 FrameProcessor._suspicious）：三选一刚出现时读得可疑（刷新次数读成 0、概率行不是概率表里的行；这两样
-# 不算读得不完整，不会按 SELECT_RETRY_S 再认）时，隔这么久再完整识别一次三张卡（[watch] select_reread_ms 可改，低配模式乘倍数）。
-# 刷新按钮被表情气泡挡住时多半半秒内就露出来。刚出现那一帧读全了就按它判，没读全（出场动画里概率行还读不到等）时按这次三选一
-# 第一次读全的那一次判；每次三选一只判这一次、最多补认一次，读得正常的不多认。到点的那一帧还要读左上角（核对等）时挪到下一帧，
-# 一帧里不做两样大的识别（见 FrameProcessor._top_due）
+# 补认（见 FrameProcessor._suspicious、FrameProcessor._select_reads）：三选一刚出现时读得可疑（刷新次数读成 0、概率行不是
+# 概率表里的行；这两样不算读得不完整，不会按 SELECT_RETRY_S 再认）时，隔这么久再完整识别一次三张卡（[watch] select_reread_ms
+# 可改，低配模式乘倍数）。刷新按钮被表情气泡挡住时多半半秒内就露出来。刚出现那一帧读全了就按它判，没读全（出场动画里概率行
+# 还读不到等）时按这次三选一第一次读全的那一次判；这一次三选一里刷新次数读成 0、账上又不该是 0 时，还会隔这么久接着补认
+# （见 SELECT_ZERO_REREADS）。任何一次完整识别都清掉排着的补认（接着补认的那几回里像是被临时盖住、没有采用的那一次除外，
+# 照样再排）。到点的那一帧还要读左上角（核对等）时挪到下一帧，一帧里不做两样大的识别（见 FrameProcessor._top_due）
 SELECT_REREAD_MS = 500
+# 刷新次数读成 0、账上又不该是 0（这一局上一次读到还有剩，或同一次三选一里刷新前读到 2 次以上，见 FrameProcessor._select_reads）
+# 时，三选一开着期间隔 SELECT_REREAD_MS 再完整识别，最多这么多回，读到不是 0 的数就停。刷新按钮被表情气泡挡住一阵子、刷新以后
+# 按钮还在动画里时都会读成 0，多认几次多半能读到（真用完了的照样是 0）。每次完整识别要 0.3～0.9 秒，这期间看不到选中的绿框，
+# 所以只在账上不该是 0 时多认；没有可对的账时照旧只补认一次（见 FrameProcessor._suspicious）。3 回约 1.5 秒（慢的电脑上每次完整识别
+# 本身就要将近 1 秒，前后约 3 秒），气泡一般挡不了这么久
+SELECT_ZERO_REREADS = 3
 # 三选一开着时读左上角（轮次连同进度条：先读完再给推荐、核对、补读跳变的轮次、确认变小的轮次）出错、读不出轮次时，隔这么久再读
 # 一次（见 FrameProcessor._select_hud；[watch] hud_retry_ms 可改，低配模式乘倍数），每次三选一最多再读
 # HUD_RETRIES 次：左上角只是被挡了一下的，三选一开着时就能核对、确认新的一局；一直出错也只多读这几次，不会每一帧都读
@@ -654,10 +661,20 @@ class FrameProcessor:
         # 晚一帧改过来
         self._hero_next = False
         # 补认：这次三选一刚出现时读得可疑（_suspicious），到这个时刻再完整识别一次三张卡（_read_select）；None 为不用。
-        # _suspect_due：这次三选一还没判过可不可疑（刚出现那一帧没读全时，等第一次读全的那一次判）。每次三选一只判一次，
-        # 最多补认一次
+        # _suspect_due：这次三选一还没判过可不可疑（刚出现那一帧没读全时，等第一次读全的那一次判）。每次三选一只判一次
         self._reread_at: float | None = None
         self._suspect_due = False
+        # 刷新次数读成 0、账上又不该是 0 时多补认几次（见 SELECT_ZERO_REREADS、_select_reads）：
+        # _offer_rerolls：这一次三选一里最近一次可信的刷新次数；_offer_names：那一次的三个筹码名（判断这一帧是不是刷新出的
+        # 新一组）；_game_rerolls：这一局最近一次可信的刷新次数，为（判过几次新的一局, 次数），跨着几次三选一记，换了局
+        # （games 变了）就不算；_zero_rereads：这一次三选一从最近一次可信读数起，因为「不该是 0 的 0」已经补认了几回（含刚出现时
+        # _suspicious 排的那一次；补认期间刷新出的新一组接着数）；_zero_expected：这一组算出来的「至少该有几次」（识别记录用）。
+        # 可信：新读的、读全了、刷新次数不是 None，而且不是「不该是 0 的 0」，也不是同一组读到过次数以后又读成的 0
+        self._offer_rerolls: int | None = None
+        self._offer_names: tuple | None = None
+        self._game_rerolls: tuple[int, int] | None = None
+        self._zero_rereads = 0
+        self._zero_expected: int | None = None
         self._manual = False  # 手动模式（悬浮窗的识别线程经 set_manual 告诉它）：平时不看画面，三选一出现时先读完再给推荐
         self._stale = False  # 刚从暂停恢复（resumed）、之后还没读到过轮次：三选一出现时先读完再给推荐
         # 刚从暂停恢复、还没认过一帧三选一：暂停前显示着的三选一，恢复后的第一帧也当作刚出现（见 resumed）
@@ -765,6 +782,8 @@ class FrameProcessor:
         # （select_fresh，见 _read_select）用它，不为它多进一次锁。界面线程在这之间给出的推荐（改正候选、选了角色）要到下一帧
         # 才看得到，最多先多重读一次三张卡
         self._last_hints: WatchHints | None = None
+        # 读结算数据表出错时那一段等表属于第几局（WatchHints.games）：同一段等表里只报一次（_read_table）
+        self._table_failed: int | None = None
         self._seen = None  # 这一帧的三选一读数（WatchHints.another_select 按它算；不是三选一时为 None）
         # 这一帧认三选一时，这次三选一刚出现、读得不完整，读左上角排到完整重读三张卡之后；或者这一帧要完整识别（筹码名那一条
         # 变了等）、读左上角挪到下一帧（_read_select 定，_select_reads 这一帧不读左上角）；每帧开头清掉
@@ -809,10 +828,13 @@ class FrameProcessor:
         补认、再读左上角和已经再读的次数一并清掉（_clear_select_retries），恢复后从头算。
         暂停期间没看画面：连着多久看不到对局里的读数从恢复后的第一帧接着算（_count_quiet），暂停的时间不算进去。
         暂停前停在主菜单空转的，不再空转（_menu_leave）：暂停期间画面可能早就离开过主菜单，恢复后的第一帧照常认（先看一眼
-        下方区域），还是主菜单再接着空转；防来回进出的记录（只拿底栏判断等）也作废，从头数（_menu_stay_over）。"""
+        下方区域），还是主菜单再接着空转；防来回进出的记录（只拿底栏判断等）也作废，从头数（_menu_stay_over）。
+        升星横幅、购买窗的两段画面（_check_source_cues）也从头算：暂停期间可能已经换成了另一个横幅、另一个购买窗，不能把暂停前
+        认出来的名次、价格接着交给 Session。"""
         self._stale = True
         self._after_pause = True
         self._quiet_at = None
+        self._banner_run = self._shop_run = None
         self._clear_select_retries()
         self._menu_stay_over()
         self._menu_leave("resumed")
@@ -831,10 +853,14 @@ class FrameProcessor:
             self.board.note(self, False, 0.0)
 
     def _clear_select_retries(self) -> None:
-        """清掉这次三选一的补认和再读左上角：排着的时刻、还没判的可疑、已经再读的次数、确认变小的轮次读过没有、再读时要不要
-        连同进度条、推荐以后要不要认角色。新出现一次三选一、三选一关掉、从暂停恢复、手动模式开关变了时调用，不带到下一次三选一。"""
+        """清掉这次三选一的补认和再读左上角：排着的时刻、还没判的可疑、刷新次数读成 0 时多补认的次数和账上该有的次数、
+        已经再读的次数、确认变小的轮次读过没有、再读时要不要连同进度条、推荐以后要不要认角色。新出现一次三选一、三选一
+        关掉、从暂停恢复、手动模式开关变了时调用，不带到下一次三选一。这一局最近一次可信的刷新次数（_game_rerolls）不清：
+        跨着几次三选一记，用来看下一次三选一刚出现时该不该是 0。"""
         self._reread_at = self._hud_retry_at = None
         self._suspect_due = False
+        self._offer_rerolls = self._offer_names = self._zero_expected = None
+        self._zero_rereads = 0
         self._hud_retries = 0
         self._retry_owner = None
         self._drop_checking = False
@@ -902,6 +928,32 @@ class FrameProcessor:
         except Exception:  # noqa: BLE001  见上
             self.hints = None
 
+    def _read_table(self, frame: Frame, now: float, events: list[Event]) -> None:
+        """等表的一段（WatchHints.wants_table）里看一眼这一帧是不是结算数据表：像的才读，读到就交给记账（on_result_table）。
+
+        表常常只露两三秒，每帧先做省的一眼（looks_like_table，不做文字识别），像的那一帧马上读。识别记录只记这一步花了
+        多久、像不像、读没读到、consistent，不记名字。
+        读表出错时这一帧的这一步作废、其余照常（同 _safe），下一帧照样再看；同一段等表（同一局）里只报第一次：等表时按
+        三选一的间隔取帧，每帧都报的话错误记录、识别记录会一直刷。
+        """
+        hints = self._hint()
+        if not hints.wants_table:
+            return
+        started = time.monotonic()
+        try:
+            looks = result_table.looks_like_table(frame.image)
+            reading = result_table.read_table(frame.image, self.db) if looks else None
+            if looks:
+                self._trace("table", ms=round((time.monotonic() - started) * 1000),
+                            read=reading is not None,
+                            consistent=None if reading is None else bool(reading.consistent))
+            if reading is not None:
+                self._call(events, self.session.on_result_table, reading)
+        except Exception as e:  # noqa: BLE001  见上
+            if self._table_failed != hints.games:
+                self._table_failed = hints.games
+                self._failed("table", e)
+
     def _trace(self, kind: str, **data) -> None:
         with self.lock:
             self.session.trace(kind, **data)
@@ -947,7 +999,8 @@ class FrameProcessor:
         读得不完整的再认，和读左上角同一帧到点时照旧挪到下一帧。还没给过推荐就没有要核对的推荐，先把三张卡读对推荐能早出来；
         等记账提示了无法识别（最多等 session.selection.HOLD_MAX_S）、或给了推荐，就不再算刚出现，读左上角不会一直排在后面。
         任何一次完整识别都算补认过了（筹码名变了等别的原因先认了也算），排着的清掉；这一次出错也不再补：认三张卡出错不在下一帧
-        接着认。
+        接着认。例外是刷新次数读成 0、账上又不该是 0 时接着补认的那几回里（_zero_expected，见 _select_reads），这一次像是被
+        临时盖住、没有采用（见下）：隔 reread_s 再排一次，不算一回。
         完整识别读到的像是被临时盖住了一部分（_covered：给过推荐以后、同一次三选一里，有一两张的名字变了、至少一张没变，变了的
         都读不准而且稀有度读不出）时这一帧不采用：缓存照旧用之前读全的那一组，选中项按之前的位置重新判断（_covered_frame）。
         过了预筛却不是三选一的画面（转场等）也不每帧都识别：画面和上次认定「不是」时一样，就沿用（见 _Unchanged）。没过预筛时
@@ -996,6 +1049,11 @@ class FrameProcessor:
         changed = None if seen is None else self._covered(cache, seen, img.shape[:2])
         if changed is not None:
             seen = self._covered_frame(img, cache, seen, changed)
+            if self._zero_expected is not None:
+                # 刷新次数读成 0、账上又不该是 0 时接着补认的那几回里（见 SELECT_ZERO_REREADS），这一次像是被临时盖住、没有
+                # 采用（交给记账的是沿用的那一份，_select_reads 不对账）：不算一回，隔 reread_s 再认。上面已清掉排着的补认，
+                # 不再排的话画面一静下来（只查绿框对得上）就不再补认了
+                self._reread_at = now + self.reread_s
         else:
             self._select_cache = None if seen is None else (
                 seen, name_strip(img, seen), img.shape[:2], now, SELECT_RETRY_S if _incomplete(seen) else float("inf"),
@@ -1310,6 +1368,8 @@ class FrameProcessor:
             self._deliver_watch(events, before)
             if seen is not None:
                 self._hidden_unseen = False  # 三选一回来了（或又出来一次）：照常认，不再单独看那行字
+                # 三选一出现：来源的两段画面都结束，下一段重新认字（不然前一段认出来的名次、价格会带到下一次）
+                self._banner_run = self._shop_run = None
                 # 「是不是紧接着出现的另一次三选一」（WatchHints.another_select）要按这一帧的读数算：认三选一时取的那一份
                 # 不算（_covered 按这一帧的读数取的照用），下一次读时重取
                 if self._seen is not seen:
@@ -1336,6 +1396,7 @@ class FrameProcessor:
             if seen is not None:
                 self._deliver_watch(events, self._watch_later())
             if seen is None:
+                self._safe("table", self._read_table, frame, now, events)
                 if self._safe("menu", self._menu_idle, frame, now, force):
                     # 主菜单空转的一帧（_menu_idle）：「查看筹码」面板、任务栏只在对局里有，不看（这一帧也不是面板）；没做完的
                     # 这一轮作废，读数一项都不排。连着多久看不到对局里的读数照常算（这一帧没有对局读数）
@@ -1356,6 +1417,7 @@ class FrameProcessor:
                     self._safe("menu", self._menu_leave, "select")  # 三选一显示着：在对局里，不再空转
             if seen is None:
                 self._safe("victory", self._check_victory, frame, now, events)  # 通关画面：先看颜色，像了再认字
+                self._safe("source", self._check_source_cues, frame, now, events)  # 三选一的来源：升星横幅、购买窗
         finally:
             self._safe("note", self._finish, events)
         return events
@@ -1374,14 +1436,21 @@ class FrameProcessor:
         不另外核对；那一帧正好要读左上角的，挪到下一帧（_read_select 定 _top_waits）。
         只盯绿框的两个例外：刚出现时读得可疑（_suspicious；刚出现那一帧没读全时按第一次读全的那一次判）时排一次
         补认，reread_s 后完整识别一次三张卡（_read_select；到点的那一帧要读左上角时挪到下一帧），认出的交给 Session 照常处理：
-        和原来不同就按新的重算推荐（同一次三选一，推荐日志以后一条为准），相同不重发；读左上角（先读完、核对、补读、确认）出错
+        和原来不同就按新的重算推荐（同一次三选一，推荐日志以后一条为准），相同不重发；这一次三选一里刷新次数读成 0、账上
+        又不该是 0（这一局上一次读到还有剩，或刷新前读到 2 次以上）时，还隔 reread_s 接着补认，最多 SELECT_ZERO_REREADS 回，
+        读到不是 0 的数就停（见下）。读左上角（先读完、核对、补读、确认）出错
         或读不出轮次时隔 retry_s 再读，每次三选一最多再读 HUD_RETRIES 次（_select_hud）；轮次被挡住时（_occluded）读左上角
         只在标记左边那一小块认字，再读按 occluded_s 的间隔，只因为读不出轮次而再读时不重读进度条。三选一开着时开了新的一局、
         换了角色，再读的次数重新数。
         刚出现那一帧读得不完整、还没给过推荐（记账先不提示无法识别）：核对、补读、确认、再读都排到完整重读三张卡之后
         （_read_select 定 _top_waits），重读以后的下一帧照常读。
         角色待识别时不给推荐（hero_needed）：照旧一出现就认一次角色，之后按 hud_ms 再试。星数照旧读前几帧（读到为止），只走
-        快的那一路（_read_stars 的 in_select）。"""
+        快的那一路（_read_stars 的 in_select）。
+
+        刷新次数读成 0 时还要对账（SELECT_ZERO_REREADS）：新读的、读全了的那一帧里，这一组「至少该有几次」——同一次三选一里
+        刷新出的新一组是刷新前可信的次数减 1，同一组沿用先前算出的值，这一次三选一还没有可信次数时用这一局上一次可信的次数
+        （换了局不算）——不小于 1 却读成 0 时，隔 reread_s 再完整识别，最多 SELECT_ZERO_REREADS 回（刚出现时 _suspicious 排的
+        那一次也算在内），读到不是 0 的数就停、按新的重算推荐。补认到上限还是 0 就当真是 0，记成可信次数，不再补。"""
         # 不在三选一时没做完的这一轮读数作废：三选一有自己的读法，关掉以后各项照各自的间隔再读
         self._hud_rest = None
         self._safe("begin_offer", self._begin_offer, events)
@@ -1436,6 +1505,46 @@ class FrameProcessor:
             self._suspect_due = False
             if self._suspicious(seen):
                 self._reread_at = now + self.reread_s
+        # 刷新次数读成 0、账上又不该是 0（见 SELECT_ZERO_REREADS）：只判新读的、读全了的那一帧（reread 副本、没读全的不判，
+        # 状态不动）。账上该有几次按这一次三选一里最近一次可信的次数和筹码名算：刷新出的新一组比那个次数少 1；同一组的补认、
+        # 再认沿用这一组先前算出的值；这一次三选一还没有可信次数时用这一局上一次读到的（换了局不算）。
+        # 同一组候选读到过不是 0 的可信次数、之后又读成 0 的不判：同一组的次数变不了（刷新会换一组），多半是按钮一时被挡住。
+        # 不算可信、不补认，账不动（记账那边同一组也沿用原来的次数）；记成 0 的话，之后刷新出的新一组读成 0 就对不上账了。
+        same_zero = (getattr(seen, "rerolls", None) == 0 and bool(self._offer_rerolls)
+                     and tuple(getattr(seen, "names", ()) or ()) == self._offer_names and self._zero_expected is None)
+        if (not getattr(seen, "reread", False) and not _incomplete(seen) and getattr(seen, "rerolls", None) is not None
+                and not same_zero):
+            names = tuple(seen.names)
+            r = seen.rerolls
+            if self._offer_rerolls is not None:
+                expected = self._offer_rerolls - 1 if names != self._offer_names else self._zero_expected
+            else:
+                games = self._hint().games
+                expected = self._game_rerolls[1] if self._game_rerolls and self._game_rerolls[0] == games else None
+            if r == 0 and expected is not None and expected >= 1:
+                self._offer_names, self._zero_expected = names, expected
+                if self._zero_rereads >= SELECT_ZERO_REREADS:
+                    # 补认到上限还是 0：当真是 0（刷新次数用完了），这一次三选一、这一局都记成 0，不再补认
+                    self._offer_rerolls = 0
+                    self._game_rerolls = (self._hint().games, 0)
+                    self._zero_expected = None
+                else:
+                    # 刚出现时 _suspicious 排过的那一次也算在这几回里：排着的不再排，只把它数进来
+                    self._zero_rereads += 1
+                    if self._reread_at is None:
+                        self._reread_at = now + self.reread_s
+                    self._trace(
+                        "select_zero", names=list(seen.names), raw=list(getattr(seen, "raw", None) or ()), rerolls=r,
+                        expected=expected, attempt=self._zero_rereads,
+                        reason=f"刷新次数读成 0，账上至少该有 {expected} 次：隔 {self.reread_s:.2f} 秒再完整识别"
+                               f"（第 {self._zero_rereads} 回）",
+                    )
+            else:
+                # 读到不是 0 的次数、或账上本来就该是 0：记成可信次数，这一组的补认从头算
+                self._offer_rerolls, self._offer_names = r, names
+                self._game_rerolls = (self._hint().games, r)
+                self._zero_rereads = 0
+                self._zero_expected = None
         # 角色待识别时不给推荐（hero_needed）：三选一一出现就立即认一次角色，之后按 hud_ms 再试
         pending = self._hint().hero_pending
         if pending and now - self._select_hero_at >= self.hud_s:
@@ -1453,7 +1562,8 @@ class FrameProcessor:
         表情气泡挡住；刷新次数用完时按钮本来就不在，也读成 0，分不出来，照样补认一次），或者概率行三项加起来是 100（识别模块
         已挡掉加起来不是 100 的）、却不是概率表里的任何一行（pool.difficulty_of，Session 认是不是同一次三选一也按它）。
         读不到概率行、筹码名没读全这类读得不完整的，照旧按 SELECT_RETRY_S 再认（_incomplete），不在这里算：判的是这次三选一
-        第一次读全的那一次（刚出现那一帧读全了就是那一帧，见 _select_reads）。"""
+        第一次读全的那一次（刚出现那一帧读全了就是那一帧，见 _select_reads）。这一次三选一里刷新次数读成 0、账上又不该是 0 时
+        接着补认的那几次另算（见 SELECT_ZERO_REREADS、_select_reads）。"""
         probs = getattr(seen, "probabilities", None)
         return getattr(seen, "rerolls", None) == 0 or (bool(probs) and difficulty_of(self.db, probs) is None)
 
@@ -2052,6 +2162,8 @@ class FrameProcessor:
         self._round_memo = None
         self._progress_seen = None
         self._finish_pending = None  # 待转正的那一帧：这一局不会接着打下去，不必留
+        self._banner_run = None  # 升星横幅、购买窗的两段画面：离开了对局，不必留着
+        self._shop_run = None
 
     def _note_in_game(self, now: float) -> None:
         """这一帧有对局里的读数（读到轮次或看见轮次标记、三选一显示着或被玩家隐藏着、读到玩家列表上的星数、「查看筹码」
@@ -2562,6 +2674,13 @@ class FrameProcessor:
     # 上一次看通关画面是在哪一帧（process 的 now）：settle 拿同一幅画面接着处理时（now 相同）不再看、不再认字，也不再
     # 要下一帧（画面一模一样，看了也是同样的结果）
     _victory_looked: float | None = None
+    # 三选一来源的两样画面（升星横幅、筹码商店购买窗）各自的那一段：{"since": 这一段从哪一帧起, "tries": 认过几次字,
+    # "found": 认出来没有, "value": 名次或价格, "noted": cue_unread 记过没有}。glance 说不像、三选一出现、离开对局、
+    # 从暂停恢复时清掉，见 _check_source_cues
+    _banner_run: dict | None = None
+    _shop_run: dict | None = None
+    # 上一次看这两样画面是在哪一帧（process 的 now）：settle 拿同一幅画面接着处理时（now 相同）不再看
+    _source_looked: float | None = None
     # 现在这一片底色是哪种（"coral" 通关的红底、"banner" 打输的蓝带）和它从哪一帧起连着出现：别的画面大面积是这两种颜色时
     # （蓝色的过场、切换画面），不能一直紧接着取帧、每帧都认一次字，连着超过 victory.RUN_S 秒就不再算这两段画面
     _finish_kind: str | None = None
@@ -2639,3 +2758,89 @@ class FrameProcessor:
             self._call(events, self.session.on_game_over_banner)
             return
         self.pending = True
+
+    # ------------------------------------------------------------ 三选一的来源：升星横幅、筹码商店购买窗
+
+    @staticmethod
+    def _source_segment(run: dict | None, like: bool, now: float) -> dict | None:
+        """这一帧过后，一样三选一来源画面的那一段（_check_source_cues 用）：glance 说不像（like 为假）时这一段结束，为 None；
+        说像时接着上一帧的那一段（run），刚开始的一段从这一帧（now）起。离这一段上一次说像的那一帧（run 的 last）隔了
+        SEGMENT_GAP_S 以上的，也从这一帧重新起一段（见 source_cues.SEGMENT_GAP_S）。"""
+        if not like:
+            return None
+        if run is None or now - run["last"] > source_cues.SEGMENT_GAP_S:
+            run = {"since": now, "last": now, "tries": 0, "found": False, "value": None, "noted": False}
+        run["last"] = now
+        return run
+
+    def _source_run(self, run: dict, now: float, yielding: bool, tries: int, read, deliver, cue: str) -> None:
+        """一段三选一来源画面里的这一帧（_check_source_cues 用）：照这一段的状态 run 认字或交给 Session，原地改 run。
+
+        read 认一次字，返回（认出来没有, 值）；deliver 把认出来的值交给 Session；cue 是识别记录用的名字（banner、shop），
+        认不出来时记在 cue_unread 里。
+        连着几帧说像算同一段：认字最多 tries 次、这一段持续不到 RUN_S 秒，认出来以后不再认字、每一帧都把结果交给 Session。
+        次数在认字之前就记上：认字出错时（_safe 接住，这一帧这一项作废）也算认过一次，一直出错的画面一段里同样最多认 tries 次，
+        不会每帧都认、每帧都报错。
+        两开时另一路的三选一显示着（yielding）时这一帧不认字、不算次数；已经认出来的照样交。
+        """
+        if not run["found"]:
+            if not yielding and run["tries"] < tries and now - run["since"] <= source_cues.RUN_S:
+                run["tries"] += 1
+                found, value = read()
+                if found:
+                    run["found"], run["value"] = True, value
+            if not run["found"] and run["tries"] >= tries and not run["noted"]:
+                # 一段里试满次数还没认出来：事后查得出是哪种画面让 glance 白白说像。一段只记这一次
+                run["noted"] = True
+                self._trace("cue_unread", cue=cue, tries=run["tries"])
+        if run["found"]:
+            deliver(run["value"])
+
+    def _check_source_cues(self, frame: Frame, now: float, events: list[Event]) -> None:
+        """不是三选一的帧上看一眼是不是升星横幅、筹码商店的购买窗（vision/source_cues.py），只在这一局还在进行时看。
+
+        先 glance（一帧不到 1 毫秒）：像横幅、像购买窗时各按一段处理，互不影响；不像的那一样这一段结束，状态清掉。一段里
+        认字最多 BANNER_TRIES / SHOP_TRIES 次、持续不到 RUN_S 秒：认不出来时先不放弃，隔一帧画面会有点不一样（横幅刚滑进来
+        字还在动、鼠标指着的钮变色）；超过 RUN_S 多半是别的画面被颜色预筛误认，不再认字。认字出错也算认过一次（_source_run）。
+        相邻两帧隔了 SEGMENT_GAP_S 以上（手动模式两次按热键之间、电脑卡住的时候）时，前后都说像也从后一帧重新起一段、重新
+        认字：中间没看画面，看到的可能已经是另一个横幅、另一个购买窗，接着交前一次认出的值会把来源认错。
+        一段里试满次数还没认出来时记一条识别记录 cue_unread，一段只记一次；认出来时不用另记，Session 那边自己记。
+        认出来以后这一段不再认字，每一帧都把结果交给 Session：Session 只记最后一次看到的时刻，三选一出现时只收
+        SOURCE_CUE_S 以内的。玩家在购买窗上常常停十几秒才点「购买！」，只交第一次的话，时刻离三选一太远，就收不下了；
+        横幅同理，交到最后一帧，时刻离它后面的三选一最近。交给 Session 不认字、很便宜，所以不受 RUN_S 和两开让路的限制，
+        只要 glance 还说像就交。
+        不设 pending：横幅停 1.9～2.8 秒，平时的取帧间隔（idle_ms，平时 0.5 秒）就能看到四五帧；购买窗一直开到玩家点按钮。
+        紧接着取帧只会多花处理器，而横幅刚滑进来的那几帧字还在动，紧接着连试几次反而容易一下子把次数用完。
+        两开时另一路的三选一显示着（_yielding）时这一帧不认字、不算次数；glance 照看，已经认出来的照样交给 Session。
+        三选一出现时 process 把两样的状态都清掉：不然「升星横幅 → 三选一 → 关掉 → 马上又一次升星横幅」时，前一段认出来的
+        结果还留着，后一段会被当成同一段、不再认字，交给 Session 的也是上一个名次。从暂停恢复时也清掉（resumed）：暂停期间
+        没看画面，恢复后看到的可能已经是另一个横幅、另一个购买窗。
+        同一幅画面（settle 接着处理，时刻相同）只看一次。
+        """
+        hints = self._hint()
+        if not hints.has_game_state or hints.game_over:
+            self._banner_run = self._shop_run = None
+            return
+        if now == self._source_looked:
+            return
+        self._source_looked = now
+        seen = source_cues.glance(frame)
+        yielding = self._yielding(now)
+
+        def read_banner() -> tuple[bool, int | None]:
+            rank = _timed("levelup", source_cues.read_rank, frame)
+            return rank is not None, rank
+
+        def read_shop() -> tuple[bool, int | None]:
+            bought = _timed("purchase", source_cues.read_purchase, frame)
+            return bought is not None, bought.price if bought is not None else None
+
+        # 两样各自的这一段先按 glance 定好、存下，再认字：认字出错时（_safe 接住）这一段和认过的次数照样留着，下一帧接着算
+        self._banner_run = self._source_segment(self._banner_run, seen.banner, now)
+        self._shop_run = self._source_segment(self._shop_run, seen.shop, now)
+        if self._banner_run is not None:
+            self._source_run(self._banner_run, now, yielding, source_cues.BANNER_TRIES, read_banner,
+                             lambda rank: self._call(events, self.session.on_levelup_banner, rank), "banner")
+        if self._shop_run is not None:
+            self._source_run(self._shop_run, now, yielding, source_cues.SHOP_TRIES, read_shop,
+                             lambda price: self._call(events, self.session.on_shop_window, price), "shop")

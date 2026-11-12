@@ -218,7 +218,7 @@ def _parse_record(result: S.ParseResult) -> dict:
 def _share_record(scheme: S.Scheme, cat: S.Catalog) -> dict:
     text = S.to_text(scheme)
     short = S.to_short(scheme, cat)
-    payload = S.decode_payload(short.split("CA2-", 1)[1])
+    payload = S.decode_payload(short.split("】", 1)[1].split("-", 1)[1])
     return _scrub({
         "hero": scheme.hero, "name": scheme.name, "note": scheme.note, "author": scheme.author,
         "tiers": [list(t) for t in scheme.tiers.items()], "text": text, "short": short,

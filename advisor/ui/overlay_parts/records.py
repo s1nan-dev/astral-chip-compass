@@ -15,13 +15,17 @@ from ...engine import REROLL
 from .. import lang, log_error, theme
 from .wording import EGGS_ERROR, UNLOCKED_CONDITIONS, UNLOCKED_NOTICE
 
+# 只留最近几次三选一用过的推荐日志编号（见 OfferLog.select_offers）：补准来源只补最近这几次，更早的不会再来
+SELECT_OFFERS_KEEP = 8
+
 
 class OfferLog:
     """推荐日志怎么记。每次给出推荐记一条（on_advice）：同一个三选一界面上的更新（改正候选、读到星数）沿用同一个编号，
     记录以后一条为准；刷新后是新的一组候选，先把上一组记为「刷新」。是不是同一次三选一以记账的结论为准（推荐事件上的
     select_no）。选了哪个记在那一次上（on_picked）；同一组候选关闭后又出现时撤销刚记的选择、这一组沿用原来的编号
     （on_reverted）；「查看筹码」面板改正选择记录时改记在当时那一次三选一上（apply_pick_fixes）。判定新一局时告诉推荐日志
-    （new_game），撤销时接回原来那一局（undo）。"""
+    （new_game），撤销时接回原来那一局（undo）。三选一关掉以后补准了来源时（on_source_settled），按记账里的第几次三选一
+    找出它用过的编号（刷新过就有好几个），每个都记一条 source 记录。"""
 
     def __init__(self, services, client=None):
         self._services = services  # 返回悬浮窗现在的 services（测试会中途换）
@@ -40,6 +44,10 @@ class OfferLog:
         self.game_before = None  # 判定新的一局之前推荐日志里的局编号（撤销时接回去）
         # 推荐日志最近记过的对局结束（session.games, 胜负, 依据）：同一局同样的结束只记一次
         self.game_over_logged = None
+        # 记账里的第几次三选一（推荐事件的 select_no）→ 这次三选一用过的推荐日志编号，按用的先后。同一次三选一里刷新过
+        # 会换新编号，补准来源时这几个都要记（以后一条为准）。只留最近 SELECT_OFFERS_KEEP 次；select_no 是这次运行里一直
+        # 往上数的，不会跟别的局撞号，判新一局时不用清
+        self.select_offers: dict[int, list[str]] = {}
 
     def new_id(self) -> str:
         return f"{datetime.now():%Y%m%d-%H%M%S}-{next(self._seq)}"
@@ -59,12 +67,37 @@ class OfferLog:
             return {}
         return {"client": client} if client in ("cn", "int", "taptap") else {}
 
+    def _map_kwargs(self, ev) -> dict:
+        """记三选一时的地图来源（map_source）：只有事件带着时才传，测试里假的推荐日志不一定认这个参数。"""
+        value = getattr(ev, "map_source", None)
+        return {"map_source": value} if value else {}
+
+    def _source_kwargs(self, ev) -> dict:
+        """记三选一时的来源依据（source_by）：只有事件带着时才传，测试里假的推荐日志不一定认这个参数。"""
+        value = getattr(ev, "source_by", None)
+        return {"source_by": value} if value else {}
+
+    def _difficulty_kwargs(self, ev) -> dict:
+        """记三选一时本局难度的依据（difficulty_source）：同地图来源。"""
+        value = getattr(ev, "difficulty_source", None)
+        return {"difficulty_source": value} if value else {}
+
+    def _owned_kwargs(self, ev) -> dict:
+        """记三选一时的已有筹码来路和面板记号（owned_sources、owned_panel）：和 state.owned 一一对应，
+        两样都有时一起传（事件是记账建的，三样总是一起取）。测试里假的推荐日志不一定认这两个参数。"""
+        sources = getattr(ev, "owned_sources", None)
+        panel = getattr(ev, "owned_panel", None)
+        if not (isinstance(sources, (list, tuple)) and isinstance(panel, (list, tuple))):
+            return {}
+        return {"owned_sources": list(sources), "owned_panel": list(panel)}
+
     def on_advice(self, ev, was_live: bool, eggs) -> None:
         """给出了推荐（ev 是 advice 事件，was_live 为这之前三选一就显示着）：记一条。上一组已经记下了选择时，这是新的一次
         三选一，不论界面是否还算「显示着」（中间可能夹着一帧无法识别的画面）。记账认作另一次三选一的（select_no 和上一条的
         不同，例如紧接着出现、概率行一样的两次）同样换新编号，不再按刷新次数另判，上一次的结算没交过来（关掉时
         没有可记的）、界面仍算显示着时也一样。同一次三选一里刷新过（剩余次数变少、候选换了）时先把上一组记为「刷新」，交给
-        皮肤解锁的计数（照首推选了没有），再换新编号。没有 select_no 的事件（Session 以外建的）照旧只看上面几项。"""
+        皮肤解锁的计数（照首推选了没有），再换新编号。没有 select_no 的事件（Session 以外建的）照旧只看上面几项。
+        事件带着地图的识别依据（map_source）时一并记进 offer 记录的顶层。"""
         st, adv = ev.state, ev.advice
         names = tuple(e.chip.name for e in adv.evals)
         rerolls = getattr(st, "rerolls", None)
@@ -85,7 +118,16 @@ class OfferLog:
             self.offer_id = self.reuse_offer_id or self.new_id()
         self.reuse_offer_id = None
         self.offer_names, self.offer_rerolls, self.offer_select = names, rerolls, select_no
-        self._services().call("logbook", "record_offer", st, adv, self.offer_id, **self._client_kwargs())
+        if select_no is not None and self.offer_id is not None:
+            # 同一次三选一里刷新过会换新编号，补准来源时这几个都要记；只留最近几次
+            used = self.select_offers.setdefault(select_no, [])
+            if self.offer_id not in used:
+                used.append(self.offer_id)
+            while len(self.select_offers) > SELECT_OFFERS_KEEP:
+                del self.select_offers[next(iter(self.select_offers))]
+        self._services().call("logbook", "record_offer", st, adv, self.offer_id,
+                              **self._client_kwargs(), **self._map_kwargs(ev), **self._source_kwargs(ev),
+                              **self._difficulty_kwargs(ev), **self._owned_kwargs(ev))
 
     def on_picked(self, chip: str) -> str | None:
         """三选一关闭、记下了选择 chip：记在这一次三选一上，返回这一次的编号（没有时为 None）。"""
@@ -108,9 +150,24 @@ class OfferLog:
         if live and target is not None and self.offer_id != target and last_ev is not None:
             self.offer_id = target
             self._services().call("logbook", "record_offer", last_ev.state, last_ev.advice, target,
-                                  **self._client_kwargs())
+                                  **self._client_kwargs(), **self._map_kwargs(last_ev),
+                                  **self._source_kwargs(last_ev), **self._difficulty_kwargs(last_ev),
+                                  **self._owned_kwargs(last_ev))
         elif not live:
             self.reuse_offer_id = target
+
+    def on_source_settled(self, ev) -> None:
+        """三选一关掉以后补准了来源（source_settled）：按记账里的第几次三选一（ev.select_no）找出这次三选一用过的推荐日志
+        编号（刷新过就有好几个），每个都记一条 source（以后一条为准）。找不到时什么都不做。"""
+        for offer_id in self.select_offers.get(getattr(ev, "select_no", 0), ()):
+            self._services().call("logbook", "record_source", offer_id, ev.source, ev.source_by)
+
+    def on_unadvised(self, ev) -> None:
+        """一次三选一认出来了、程序放弃等待、没给推荐就关掉了（记账发的 unadvised 事件）：交给推荐日志记一条。"""
+        item = getattr(ev, "unadvised", None)
+        if not isinstance(item, dict):
+            return
+        self._services().call("logbook", "record_unadvised", select_no=getattr(ev, "select_no", 0), **item)
 
     def supplement(self, chip: str, offer_id: str | None) -> None:
         """补录了漏掉的那次三选一（offer_id 是那一次的编号）：照选择记下，via 为 supplement（和正常选的、
@@ -151,13 +208,24 @@ class OfferLog:
         self._services().call("logbook", "undo_new_game", self.game_before)
         self.pick_offer_ids = {**self.pick_offer_ids_before, **self.pick_offer_ids}
 
+    def log_table(self, record: dict) -> str | None:
+        """记下结算页上的数据表（记账的 table 事件）：交给推荐日志记一条，返回现在的局号（没有时为 None）。
+        数据表在局结束以后才读到，局号不变；同一局读到几次时推荐日志里后一条为准。"""
+        if not isinstance(record, dict):
+            return None
+        game = self.game_id()
+        self._services().call("logbook", "record_table", **record)
+        return game
+
     def game_over(self, info: dict | None, games) -> bool:
-        """记下对局结束（logbook.record_game_over）。按局数 games 和胜负（info 的 outcome、how）去重：同一局的结束（结算画面
-        读到好几次等）只记一次；胜负是结束以后才定的（读到奖励画面），定了再记一条，别的项照旧，推荐日志里同一局以后一条
-        为准。返回这一次有没有记（没记时 false：没有结束的内容，或者这一局这样的结束已经记过）。"""
+        """记下对局结束（logbook.record_game_over）。按局数 games、胜负（info 的 outcome、how）和地图（map、map_source）
+        去重：同一局的结束（结算画面读到好几次等）只记一次；胜负是结束以后才定的（读到奖励画面），定了再记一条；房间等画面
+        先结束了这一局、随后又读到结算画面，地图改按结算画面的（Session 改了结束的内容），也再记一条。别的项（依据的写法、
+        轮次等）变了不另记，推荐日志里同一局以后一条为准。返回这一次有没有记（没记时 false：没有结束的内容，或者这一局这样的
+        结束已经记过）。"""
         if not info:
             return False
-        key = (games, info.get("outcome"), info.get("how"))
+        key = (games, info.get("outcome"), info.get("how"), info.get("map"), info.get("map_source"))
         if key == self.game_over_logged:
             return False
         self.game_over_logged = key

@@ -9,7 +9,8 @@ tests/data/coins/ 里的星币数截图与 labels.json，tests/data/hero/ 里认
   ACC_COIN_SAMPLES_DIR  设了就用它，否则是 tests/data/coins；
   ACC_HERO_SAMPLES_DIR  设了就用它，否则是 tests/data/hero；
   ACC_CARD_SAMPLES_DIR  设了就用它，否则是 tests/data/cards（BWIKI 上的卡面原图 UT_Hero_Card_*.png，从卡面现裁角色照、
-                        推算裁法的测试用；同样不随仓库发布）。
+                        推算裁法的测试用；同样不随仓库发布）；
+  ACC_TABLE_SAMPLES_DIR 结算数据表的截图和 answers.json（含玩家昵称，不随仓库发布）；不设时读表的测试整个跳过。
 
 缺样本时用 require_samples / require_coins 跳过（抛 unittest.SkipTest：在 setUpClass 里调用整个类都跳过，
 在用例里调用只跳过这一条）；跳过原因写明缺的是哪个文件或哪份标注。@unittest.skipUnless 用 samples_ok /
@@ -24,11 +25,13 @@ SAMPLES_DIR = Path(os.environ.get("ACC_SAMPLES_DIR") or ROOT / "samples")
 COIN_SAMPLES_DIR = Path(os.environ.get("ACC_COIN_SAMPLES_DIR") or ROOT / "tests" / "data" / "coins")
 HERO_SAMPLES_DIR = Path(os.environ.get("ACC_HERO_SAMPLES_DIR") or ROOT / "tests" / "data" / "hero")
 CARD_SAMPLES_DIR = Path(os.environ.get("ACC_CARD_SAMPLES_DIR") or ROOT / "tests" / "data" / "cards")
+TABLE_SAMPLES_DIR = Path(os.environ["ACC_TABLE_SAMPLES_DIR"]) if os.environ.get("ACC_TABLE_SAMPLES_DIR") else None
 GUIDE = "docs/测试指南.md「准备识别样本」"
 SAMPLES_LABEL = "samples"
 COINS_LABEL = "tests\\data\\coins"
 HERO_LABEL = "tests\\data\\hero"
 CARD_LABEL = "tests\\data\\cards"
+TABLE_LABEL = "ACC_TABLE_SAMPLES_DIR"
 
 
 def missing(folder: Path, *names: str) -> list[str]:
@@ -86,3 +89,19 @@ def require_coins(*names: str) -> None:
     gone = missing(COIN_SAMPLES_DIR, *names)
     if gone:
         raise unittest.SkipTest(_reason(COINS_LABEL, gone))
+
+
+def table_ok(*names: str) -> bool:
+    return TABLE_SAMPLES_DIR is not None and not missing(TABLE_SAMPLES_DIR, *names)
+
+
+def table_reason(*names: str) -> str:
+    if TABLE_SAMPLES_DIR is None:
+        return f"没有设置 {TABLE_LABEL}（结算数据表的截图和 answers.json 不随仓库发布，准备方法见 {GUIDE}）"
+    return _reason(TABLE_LABEL, missing(TABLE_SAMPLES_DIR, *names))
+
+
+def require_table(*names: str) -> None:
+    gone = () if TABLE_SAMPLES_DIR is None else missing(TABLE_SAMPLES_DIR, *names)
+    if TABLE_SAMPLES_DIR is None or gone:
+        raise unittest.SkipTest(table_reason(*gone))

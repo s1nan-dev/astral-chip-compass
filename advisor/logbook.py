@@ -4,7 +4,13 @@
 用来校准那些估计出来的参数。按月分文件：logs/YYYY-MM.jsonl，一行一条记录：
 
   {"t": "offer",    "time": ..., "offer_id": ..., "game": ..., "v": 版本, "data_date": ..., "state": {...}, "advice": {...}}
-                    这一局是在哪个客户端打的另带 "client"（cn、int、taptap；认不出时没有这一项）
+                    这一局是在哪个客户端打的另带 "client"（cn、int、taptap；认不出时没有这一项）；
+                    算这次推荐时地图的识别依据另有 "map_source"（MAP_SOURCES 里的一项；地图未知时没有这一项）；
+                    本局难度的依据另有 "difficulty_source"（DIFFICULTY_SOURCES 里的一项；档位不知道时没有这一项）；
+                    已有筹码的来路另有 "owned_sources"（数组，和 state.owned 一一对应，每项是 OWNED_SOURCES 里的一项或 null），
+                    在「查看筹码」面板上看到过没有另有 "owned_panel"（数组，和 state.owned 一一对应，每项是布尔值）；
+                    这两样长度对不上、某一项不合格时不写；
+                    这次三选一的来源是凭什么定的另有 "source_by"（SOURCE_BYS 里的一项；Session 以外记的没有这一项）
                     按筹码方案推荐的另带 "scheme"（当时用的方案：id、name、hero、tiers（按方案的先后，同一档的先后就是
                     顺位），以及计算时由档位推出来的目标流派 schools，见 engine.Plan.record）和 "default_best"（同一局面按
                     默认推荐的首推），"advice" 里的 ranking 是按方案排的先后、位次、拿不到的提醒和刷新那一行（默认推荐时为
@@ -13,8 +19,29 @@
                     同一个 offer_id 有多条时以后一条为准；按「查看筹码」面板改正的另带 "via": "panel"
                     （例如思考时间用完、游戏自动拿了最左边的筹码：不是用户自己选的）；补录的另带 "via": "supplement"
   {"t": "feedback", "time": ..., "offer_id": ..., "reason": "照顾队友" / "地图因素" / "推荐有误" / "想试别的玩法", "note": "..."}
+  {"t": "source",   "time": ..., "offer_id": ..., "source": "levelup" / "shop" / "task", "by": ...}
+                    三选一关掉以后补准了来源时记一条，同一个 offer_id 以后一条为准；读的时候拿它改掉那次三选一的来源
+                    （对局报告就这样用）
+  {"t": "unadvised", "time": ..., "game": ..., "select_no": 第几次三选一, "round", "reasons": [...], "advised",
+   "star", "source", "pick"}
+                    程序认出了三选一、却放弃等待、没给推荐的那一次（同一次三选一里刷新过也算一次）：
+                    reasons 是没给推荐的原因（name 有候选筹码的名字没读出来、unknown 读出来的筹码名资料里没有、
+                    hero 角色还没认出来），按头一次出现的先后，1～3 项、不重复；advised 是这一次后来给出了推荐没有；
+                    star、source 是后来给了推荐时头一个推荐里的星数和来源，一直没给时按开这一项那一刻的概率行估（来源只在是任务时
+                    写 task）；pick 是最后看到选中的那张（看到了绿框），没看到为 null。不影响重启后接哪一局
+                    （_LAST_KINDS 里没有它）。这次运行还没定局号时先挂着（最多 MAX_HELD_UNADVISED 条）：头一次
+                    record_offer 定了局号以后按原来的时刻写进那一局；之前先来了新一局、撤销新一局、对局结束或数据表的，
+                    不知道属于哪一局，game 写 null；退出时还挂着的不写
   {"t": "newgame",  "time": ..., "game": ...}
+  {"t": "table",    "time": ..., "game": ..., "map", "difficulty", "rounds", "players": [...]}
+                     结算页上的数据表（每人一栏的五项数字、BEST、两个星币数、筹码、称号）。没有名字、没有等级；
+                     同一局读到几次时以最后一条为准（读错的那个数发出去收不回，拿不准的写 null）。
+                     不影响重启后接哪一局（_LAST_KINDS 里没有它）
   {"t": "gameover", "time": ..., "game": ..., 结束的依据等（why、map 等，由调用方给出）}
+                    地图另带 "map_source"（这张地图是怎么来的：手动、结算画面、还是局里认的依据）和 "map_in_game"
+                    （局里认的是哪张，不管最后用了哪张）；本局难度的依据另带 "difficulty_source"，
+                    没采用的进度上限有几个另带 "cap_rejected"（整数）；已有筹码的来路和面板记号另带 "owned_sources"、
+                    "owned_panel"（数组，和 "owned" 一一对应，形状同 offer 记录）。
                     识别到对局结束（结算页等）时记一条，同一局一般只记一次（由调用方去重）；那次结束是误认的（房间等画面
                     结束的局，之后开的新一局被撤销）时，这一局真正结束时再记一条，同一局以后一条为准；不计入局数和三选一次数。
                     另带通关还是失败："outcome"（"win"、"loss"，不知道为 null）和依据 "how"（"victory" 结算页前的通关画面，
@@ -59,6 +86,26 @@ GAME_GAP = timedelta(hours=2)  # 两次三选一隔这么久，算新的一局
 # 不到这么久时这样放宽（中途重启一般几分钟内就回到对局里；隔久了的照常比已有筹码）
 RESTART_LOOSE = timedelta(minutes=15)
 FEEDBACK_REASONS = ("照顾队友", "地图因素", "推荐有误", "想试别的玩法")
+# 局里认的地图是怎么来的（和 session.core 的 MAP_SOURCE_LABEL 的键一致，tests 核对）：自动识别的几种依据，加玩家手动指定。
+# 三选一记录的顶层、对局结束记录的地图来源只收这几项（对局结束还多一项 result：以结算画面为准，见 game_report）
+MAP_SOURCES = frozenset({"loading", "match", "room", "tasks", "chips", "manual"})
+# 三选一的来源（State.source、source 记录里的 source），和 session.selection.SOURCE_LABEL 的键一致（tests 核对）：升星、
+# 筹码商店、任务
+SOURCES = frozenset({"levelup", "shop", "task"})
+# 本局难度的依据（offer 记录顶层 difficulty_source、结束记录的同名项），和 session.difficulty.DIFFICULTY_SOURCE_LABEL 的
+# 键一致（tests 核对）
+DIFFICULTY_SOURCES = frozenset({"result", "match_found", "team_room", "create_room", "custom_room", "cap", "rows"})
+# 已有筹码的来路（offer 记录顶层 owned_sources 的每一项、结束记录的同名项），和 session.core.CHIP_SOURCE_LABEL 的键一致
+# （tests 核对）：三选一选的、漏记补录、补录、补录时标了不经三选一、玩家手改、面板头一次读到、启动参数给的
+OWNED_SOURCES = frozenset({"pick", "missed", "added", "direct", "manual", "panel", "given"})
+# 这次三选一的来源是怎么定的（offer 记录的顶层 source_by、source 记录里的 by），和 selection.SOURCE_BY 的键一致（tests
+# 核对）：自己的升星横幅、星数、购买窗、概率行认出是任务、拿不准
+SOURCE_BYS = frozenset({"banner", "stars", "shop_window", "rows", "guess"})
+# 认出了三选一、没给推荐的原因（unadvised 记录的 reasons），和对局报告、收数据的服务那一组一致（tests 核对）：
+# 有候选筹码的名字没读出来、读出来的筹码名资料里没有、角色还没认出来
+UNADVISED_REASONS = frozenset({"name", "unknown", "hero"})
+# 这次运行还没定局号时最多挂这么多条 unadvised（对局报告一份最多也只带这么多），多的丢掉
+MAX_HELD_UNADVISED = 50
 # 推荐没有问题、这一次只是想换个玩法：校准时不把它算进「推荐与实际选择一致」
 FEEDBACK_TRY = "想试别的玩法"
 PICK_REROLL = "刷新"
@@ -70,6 +117,37 @@ def _get(state: Any, name: str):
     if isinstance(state, dict):
         return state.get(name)
     return getattr(state, name, None)
+
+
+def _is_source(value) -> bool:
+    return value is None or (isinstance(value, str) and value in OWNED_SOURCES)
+
+
+def _is_bool(value) -> bool:
+    return isinstance(value, bool)
+
+
+def _nonneg(value) -> int | None:
+    """非负整数（布尔值不算整数），别的写 None。"""
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
+def _unadvised_reasons(values) -> list[str]:
+    """只留 UNADVISED_REASONS 里的那几种、不重复、保持原来的先后（最多三项）。"""
+    out: list[str] = []
+    for value in values if isinstance(values, (list, tuple)) else ():
+        if isinstance(value, str) and value in UNADVISED_REASONS and value not in out:
+            if len(out) >= 3:
+                break
+            out.append(value)
+    return out
+
+
+def _own_list(values, owned, check) -> bool:
+    """和已有筹码一一对应的列表能不能写进记录：长度一样，每一项都合格。"""
+    if not isinstance(values, (list, tuple)) or not isinstance(owned, (list, tuple)):
+        return False
+    return len(values) == len(owned) and all(check(value) for value in values)
 
 
 class Lane:
@@ -96,6 +174,15 @@ class Lane:
         # 三选一比过、记了对局结束、开了新的一局以后清掉
         self.restart: datetime | None = None
         self.resumed = False  # 这次运行已经定过局号（接过日志、记过三选一、开过新的一局）
+        # 这次运行定局号以前记的 unadvised（记录, 时刻）：日志里接得上的可能是上次运行没打完的另一局，等 record_offer
+        # 判过是不是新的一局再写（见 record_unadvised、_flush_unadvised）
+        self.held: list[tuple[dict, datetime]] = []
+
+    def _flush_unadvised(self, game: str | None) -> None:
+        """写出挂着的 unadvised，按记的时候的时刻：game 是它们所属的那一局，不知道时为 None（不进任何一局的报告）。"""
+        held, self.held = self.held, []
+        for record, when in held:
+            _write(self._with_lane({**record, "game": game}), when)
 
     def _with_lane(self, record: dict) -> dict:
         """默认的那条线原样返回；别的线把 "lane" 放在 "time" 后面（_write 把 "t" 提到最前、"time" 插在第二）。"""
@@ -110,6 +197,7 @@ class Lane:
 
     def new_game(self, game_id: str | None = None) -> str:
         """告知新的一局开始了，返回这一局的编号。"""
+        self._flush_unadvised(None)  # 定局号以前挂着的：不知道是不是这一局的
         self.resumed = True
         self.game = game_id or _new_game_id(_now())
         self.last = self.restart = None
@@ -119,6 +207,7 @@ class Lane:
     def undo_new_game(self, previous_game: str | None) -> None:
         """撤销「新一局」（悬浮窗的撤销按钮）：后面的记录仍算在原来那一局。"""
         if previous_game:
+            self._flush_unadvised(None)
             self.game, self.resumed = previous_game, True
             _write(self._with_lane({"t": "newgame", "game": previous_game, "undo": True}))
 
@@ -191,11 +280,18 @@ class Lane:
             self.restart = _as_datetime(latest) or when
 
     def record_offer(self, state: Any, advice: Any, offer_id: str, game_id: str | None = None,
-                     client: str | None = None) -> str:
+                     client: str | None = None, map_source: str | None = None,
+                     source_by: str | None = None, difficulty_source: str | None = None,
+                     owned_sources: list | None = None, owned_panel: list | None = None) -> str:
         """记一次三选一：对局状态（pool.State 或字典）和推荐全文（engine.Advice 或字典）。返回这一局的编号。
 
         按筹码方案推荐的（Advice.scheme 不为空）另记当时用的方案和同一局面按默认推荐的首推（见模块说明）。
-        client 是这一局在哪个客户端打的（cn、int、taptap）：给了才写进记录，认不出时不写。"""
+        client 是这一局在哪个客户端打的（cn、int、taptap）：给了才写进记录，认不出时不写。
+        map_source 是算这次推荐时地图的识别依据（MAP_SOURCES 里的一项，见模块说明）：给了才写，地图未知、值不认识时不写。
+        source_by 是这次三选一的来源是怎么定的（SOURCE_BYS 里的一项）：给了才写进记录顶层，值不认识时不写。
+        difficulty_source 是算这次推荐时本局难度的依据（DIFFICULTY_SOURCES 里的一项）：给了才写。
+        owned_sources、owned_panel 和 state.owned 一一对应（各自进已有筹码时的来路、在「查看筹码」面板上看到过没有）：
+        长度和 state.owned 一样、每一项都在 OWNED_SOURCES 里（或 None）/是布尔值时，才写进记录顶层。"""
         if not self.resumed:
             self._resume_from_log()
         when = _now()
@@ -206,8 +302,22 @@ class Lane:
         self.last = {"hero": _get(state, "hero"), "round": _get(state, "round"),
                      "owned": set(_get(state, "owned") or ()), "time": when}
         self.restart = None  # 重启后第一次三选一已经比过：之后照常比已有筹码
+        self._flush_unadvised(self.game)  # 定局号以前挂着的：这一次判过是不是新的一局，写进判出来的这一局
         body, scheme = _split_scheme(advice)
-        extra = {"client": client} if isinstance(client, str) and client in ("cn", "int", "taptap") else {}
+        extra = {}
+        if isinstance(client, str) and client in ("cn", "int", "taptap"):
+            extra["client"] = client
+        if isinstance(map_source, str) and map_source in MAP_SOURCES:
+            extra["map_source"] = map_source
+        if isinstance(source_by, str) and source_by in SOURCE_BYS:
+            extra["source_by"] = source_by
+        if isinstance(difficulty_source, str) and difficulty_source in DIFFICULTY_SOURCES:
+            extra["difficulty_source"] = difficulty_source
+        owned = _get(state, "owned")
+        if _own_list(owned_sources, owned, _is_source):
+            extra["owned_sources"] = list(owned_sources)
+        if _own_list(owned_panel, owned, _is_bool):
+            extra["owned_panel"] = list(owned_panel)
         _write(self._with_lane({"t": "offer", "offer_id": self._offer_id(offer_id), "game": self.game,
                                 "v": VERSION, "data_date": data_date(), "state": state, "advice": body,
                                 **extra, **scheme}))
@@ -228,6 +338,54 @@ class Lane:
         _write(self._with_lane({"t": "feedback", "offer_id": self._offer_id(offer_id), "reason": reason,
                                 "note": (note or "").strip()}))
 
+    def record_source(self, offer_id: str, source: str, by: str) -> None:
+        """三选一关掉以后补准了它的来源：记一条 {"t": "source", "offer_id", "source", "by"}，同一个 offer_id 以后一条
+        为准。source 不在 SOURCES、by 不在 SOURCE_BYS 时不记。不影响重启后接哪一局（_LAST_KINDS 里没有它）。"""
+        if not (isinstance(source, str) and isinstance(by, str) and source in SOURCES and by in SOURCE_BYS):
+            return
+        _write(self._with_lane({"t": "source", "offer_id": self._offer_id(offer_id), "source": source, "by": by}))
+
+    def record_unadvised(self, select_no: int, round: int | None = None, reasons=None, advised: bool = False,
+                         star: int | None = None, source: str | None = None, pick: str | None = None) -> None:
+        """记一次认出了三选一、程序放弃等待、没给推荐的那一次（见模块说明里的 unadvised 记录）。
+
+        写之前清理：reasons 只留 UNADVISED_REASONS 里的那三种、不重复、最多三项，一项都不剩时不记；round、star 不是非负
+        整数（布尔值不算整数）写 None；advised 不是布尔值写 False；source 不在 SOURCES 里写 None；pick 不是文字写 None。
+        不影响重启后接哪一局（_LAST_KINDS 里没有它）。
+        这次运行还没定局号时不写，连同此刻挂着（最多 MAX_HELD_UNADVISED 条，多的丢掉）：日志里接得上的那一局可能是上次
+        运行没打完的另一局，这一项没有角色、已有筹码可比，判不出是不是新的一局。头一次 record_offer 判过以后写进那一局；
+        之前先来了 new_game、undo_new_game、record_game_over、record_table 时 game 写 None。"""
+        cleaned = _unadvised_reasons(reasons)
+        if not cleaned:
+            return
+        record = {
+            "t": "unadvised", "game": self.game, "select_no": select_no,
+            "round": _nonneg(round), "reasons": cleaned,
+            "advised": advised if isinstance(advised, bool) else False,
+            "star": _nonneg(star),
+            "source": source if isinstance(source, str) and source in SOURCES else None,
+            "pick": pick if isinstance(pick, str) else None,
+        }
+        if not self.resumed:
+            if len(self.held) < MAX_HELD_UNADVISED:
+                self.held.append((record, _now()))
+            return
+        _write(self._with_lane(record))
+
+    def record_table(self, **record) -> str | None:
+        """记下结算页上的数据表（识别到、认定了以后调用；同一局读到几次时后一条为准）。返回这一局的编号；还没有局号时为 None。
+
+        record 是记账整理好的内容（map、difficulty、rounds、players，不含名字和等级），原样写进记录；
+        "t"、"time"、"game"、"lane" 不采用（lane 只由这条线自己写）。不改变当前局号，也不影响重启后接哪一局。
+        """
+        if not self.resumed:
+            self._resume_from_log()
+        self.restart = None
+        self._flush_unadvised(None)  # 定局号以前挂着的：不知道是不是这一局的
+        body = {k: v for k, v in record.items() if k not in ("t", "time", "game", "lane")}
+        _write(self._with_lane({"t": "table", "game": self.game, **body}))
+        return self.game
+
     def record_game_over(self, **info) -> str | None:
         """记下对局结束（识别到结算页等时调用；同一局一般只调一次，由调用方去重）。那次结束是误认的（房间等画面结束的局，
         之后开的新一局被撤销）时，这一局真正结束时再调一次；胜负在结束以后才定的，定了再调一次：同一局以后一条为准（重启时
@@ -241,6 +399,7 @@ class Lane:
         if not self.resumed:
             self._resume_from_log()
         self.restart = None
+        self._flush_unadvised(None)  # 定局号以前挂着的：不知道是不是这一局的
         body = {k: v for k, v in info.items() if k not in ("t", "time", "game", "lane")}
         _write(self._with_lane({"t": "gameover", "game": self.game, **body}))
         return self.game
@@ -308,12 +467,12 @@ def _monotonic() -> float:
     return time.monotonic()
 
 
-def _write(record: dict) -> None:
+def _write(record: dict, when: datetime | None = None) -> None:
     """记一条。写不进时：这一回第一次写不进照常报错（调用方经 services.call 记进错误记录，只记这一次），之后
     WRITE_RETRY_S 秒内的记录直接丢掉、不再去写；到时再试一次，还写不进时不再报错，再等 WRITE_RETRY_S 秒；写进了，
-    这一回就结束（下次再写不进时重新报一次）。"""
+    这一回就结束（下次再写不进时重新报一次）。when：记录的时刻，不给时取现在（挂着的 unadvised 后补写时照记的时候的）。"""
     global _write_error, _write_retry_at
-    when = _now()
+    when = when or _now()
     record = {"t": record.pop("t"), "time": when.isoformat(timespec="seconds"), **record}
     line = json.dumps(_jsonable(record), ensure_ascii=False)
     with _lock:
@@ -488,13 +647,19 @@ def _split_scheme(advice: Any) -> tuple[Any, dict]:
 
 
 def record_offer(state: Any, advice: Any, offer_id: str, game_id: str | None = None,
-                 client: str | None = None) -> str:
+                 client: str | None = None, map_source: str | None = None,
+                 source_by: str | None = None, difficulty_source: str | None = None,
+                 owned_sources: list | None = None, owned_panel: list | None = None) -> str:
     """记一次三选一：对局状态（pool.State 或字典）和推荐全文（engine.Advice 或字典）。返回这一局的编号。
 
     按筹码方案推荐的（Advice.scheme 不为空）另记当时用的方案和同一局面按默认推荐的首推（见模块说明）。
-    client 是这一局在哪个客户端打的（cn、int、taptap）：给了才写进记录，认不出时不写。模块级函数，转给默认的那条线，
-    见 Lane.record_offer。"""
-    return _PRIMARY.record_offer(state, advice, offer_id, game_id, client)
+    client 是这一局在哪个客户端打的（cn、int、taptap）：给了才写进记录，认不出时不写。
+    map_source 是算这次推荐时地图的识别依据（MAP_SOURCES 里的一项）：给了才写。
+    source_by 是这次三选一的来源是怎么定的（SOURCE_BYS 里的一项）：给了才写进记录顶层。
+    difficulty_source、owned_sources、owned_panel 见 Lane.record_offer。
+    模块级函数，转给默认的那条线，见 Lane.record_offer。"""
+    return _PRIMARY.record_offer(state, advice, offer_id, game_id, client, map_source, source_by,
+                                 difficulty_source, owned_sources, owned_panel)
 
 
 def by_scheme(record: dict) -> bool:
@@ -519,6 +684,23 @@ def record_feedback(offer_id: str, reason: str | None, note: str = "") -> None:
     """「不认同」的反馈：reason 是 FEEDBACK_REASONS 之一（也可以为空），note 是用户补充的一句话。模块级函数，转给默认的
     那条线，见 Lane.record_feedback。"""
     _PRIMARY.record_feedback(offer_id, reason, note)
+
+
+def record_source(offer_id: str, source: str, by: str) -> None:
+    """三选一关掉以后补准了来源：记一条 source 记录（同一个 offer_id 以后一条为准）。模块级函数，转给默认的那条线，
+    见 Lane.record_source。"""
+    _PRIMARY.record_source(offer_id, source, by)
+
+
+def record_unadvised(select_no: int, round: int | None = None, reasons=None, advised: bool = False,
+                     star: int | None = None, source: str | None = None, pick: str | None = None) -> None:
+    """记一次认出了三选一、程序放弃等待、没给推荐的那一次（见 Lane.record_unadvised）。模块级函数，转给默认的那条线。"""
+    _PRIMARY.record_unadvised(select_no, round, reasons, advised, star, source, pick)
+
+
+def record_table(**record) -> str | None:
+    """记下结算页上的数据表（记录内容见 Lane.record_table）。模块级函数，转给默认的那条线。"""
+    return _PRIMARY.record_table(**record)
 
 
 def record_game_over(**info) -> str | None:
@@ -636,6 +818,7 @@ def stats() -> dict:
 def _reset_for_tests() -> None:
     global _write_error, _write_retry_at
     _PRIMARY.game, _PRIMARY.last, _PRIMARY.restart, _PRIMARY.resumed = None, None, None, False
+    _PRIMARY.held = []
     _lanes.clear()
     _write_error, _write_retry_at = None, 0.0
     _issued.clear()

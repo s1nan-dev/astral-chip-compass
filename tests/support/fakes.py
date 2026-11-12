@@ -9,6 +9,11 @@ class FakeLogbook:
         self.records: list[dict] = []  # records_between 返回其中时刻不早于 start 的（诊断包带的推荐日志）
         self.between: list = []  # records_between 收到的 start
         self.game_overs: list[dict] = []  # record_game_over 收到的内容（对局结束）
+        self.tables: list[dict] = []  # record_table 收到的内容（结算数据表）
+
+    def record_table(self, **record):
+        self.tables.append(record)
+        return self.game
 
     def record_game_over(self, **info):
         self.game_overs.append(info)
@@ -18,7 +23,8 @@ class FakeLogbook:
         self.between.append(start)
         return [r for r in self.records if str(r.get("time", "")) >= str(start)[:19]]
 
-    def record_offer(self, state, advice, offer_id, client=None):
+    def record_offer(self, state, advice, offer_id, client=None, map_source=None, source_by=None,
+                     difficulty_source=None, owned_sources=None, owned_panel=None):
         item = (offer_id, tuple(e.chip.name for e in advice.evals))
         self.offers.append(item if client is None else (*item, client))
 

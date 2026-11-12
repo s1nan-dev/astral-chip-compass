@@ -705,6 +705,138 @@ class RoundSanityTest(unittest.TestCase):
         s.on_hud(hud(round=3))  # 正常往前走照常采用
         self.assertEqual(s.settings.round, 3)
 
+    def round_jump_session(self):
+        """第 9 轮、进度条第 10 格采用，进度读到第 11 格。返回记账和时钟。"""
+        s = ready(load_db())
+        t = [0.0]
+        s._clock = lambda: t[0]
+        s.on_progress(10), s.on_progress(10)
+        s.on_hud(hud(round=9)), s.on_hud(hud(round=9))
+        self.assertEqual((s.settings.round, s.game.progress), (9, 10))
+        self.assertEqual(s.game._round_at_progress, (9, 10))
+        s.on_progress(11), s.on_progress(11)
+        self.assertEqual(s.game.progress, 11)
+        return s, t
+
+    def jumps(self, s):
+        return [e for e in s.recent_events(600) if e["kind"] == "read:round_jump_implausible"]
+
+    def test_round_jump_far_ahead_of_progress_is_ignored(self):
+        """轮次涨得比进度条走的多出 2 格以上时按读错处理；进度跟上来以后照常采用。"""
+        s, _ = self.round_jump_session()
+        for _ in range(2):
+            s.on_hud(hud(round=13))
+        self.assertEqual(s.settings.round, 9)
+        self.assertTrue(self.jumps(s))
+        s.on_progress(12), s.on_progress(12)
+        self.assertEqual(s.game.progress, 12)
+        for _ in range(2):
+            s.on_hud(hud(round=13))
+        self.assertEqual(s.settings.round, 13)  # 跳 4、进度走 2：多出 2，不超过
+        s.on_hud(hud(round=14))  # 往前走一步照常直接采用
+        self.assertEqual(s.settings.round, 14)
+
+    def test_round_jump_unchecked_at_progress_end(self):
+        """进度条到了红叉前一格（再走一格就判负，进度不会再跟着轮次往前走）：轮次再往前跳也不比，照原样采用。"""
+        s = ready(load_db())
+        s.on_progress(16, 17), s.on_progress(16, 17)
+        s.on_hud(hud(round=14)), s.on_hud(hud(round=14))
+        for _ in range(2):
+            s.on_hud(hud(round=18))
+        self.assertEqual(s.settings.round, 18)
+        self.assertFalse(self.jumps(s))
+
+    def test_round_jump_unchecked_when_progress_stale(self):
+        """进度条超过 NEWGAME_VETO_S 秒没读到：进度是旧的，不比，照原样采用。"""
+        from advisor.session import NEWGAME_VETO_S
+
+        s, t = self.round_jump_session()
+        t[0] += NEWGAME_VETO_S + 1
+        for _ in range(2):
+            s.on_hud(hud(round=13))
+        self.assertEqual(s.settings.round, 13)
+        self.assertFalse(self.jumps(s))
+
+    def test_round_jump_unchecked_when_round_changed(self):
+        """记下的轮次后来被别的路径改过（_round_at_progress 对不上）时不比，照原样采用。"""
+        s, _ = self.round_jump_session()
+        s.settings.round = 10
+        for _ in range(2):
+            s.on_hud(hud(round=13))
+        self.assertEqual(s.settings.round, 13)
+        self.assertFalse(self.jumps(s))
+
+    def test_round_jump_unchecked_while_progress_catching_up(self):
+        """轮次和进度条一起往前跳（游戏切到后台好几轮、回来时）：进度条新读到的格数还没采用（连读两次才采用）时不比，
+        轮次照常连读两次采用。拿还没跟上的旧进度比的话，读对的轮次会被拦下（回放 21:9 那一局时第 9 轮的三选一记成了第 5 轮）。"""
+        from advisor.session import NEWGAME_VETO_S
+
+        s, t = self.round_jump_session()  # 第 9 轮，进度第 11 格
+        t[0] += NEWGAME_VETO_S + 1  # 切到后台好一阵：进度读数已经旧了
+        s.on_hud(hud(round=13))
+        s.on_progress(14)  # 同一帧里进度条也跳了，这一次还没采用
+        self.assertEqual(s.game.progress, 11)
+        s.on_hud(hud(round=13))
+        self.assertEqual(s.settings.round, 13)
+        self.assertFalse(self.jumps(s))
+        s.on_progress(14)
+        self.assertEqual(s.game.progress, 14)
+
+    def test_round_jump_after_round_newgame_not_checked_against_last_game(self):
+        """轮次变小判成新的一局时，上一局的进度条当前格不带进新的一局：新的一局里头一次往前跳照原样采用（拿上一局的
+        进度去比的话，这一局的进度一直比它小，轮次再也跳不上去）。"""
+        from advisor.session import NEWGAME_VETO_S
+
+        s, t = self.round_jump_session()  # 第 9 轮，进度第 11 格
+        t[0] += NEWGAME_VETO_S + 1  # 上一局的进度读数已经旧了：不否决新的一局
+        s.on_hud(hud(round=1)), s.on_hud(hud(round=1))
+        self.assertEqual((s.settings.round, s.game.progress), (1, None))  # 开了新的一局
+        self.assertIsNone(s.game._round_at_progress)
+        s.on_progress(4), s.on_progress(4)
+        for _ in range(2):
+            s.on_hud(hud(round=3))
+        self.assertEqual(s.settings.round, 3)
+        self.assertFalse(self.jumps(s))
+
+    def test_round_back_up_after_lower_misread_adopted(self):
+        """「14」连读成「11」、按改正读错采用了以后，读回 14 两次就改回来：采用的轮次比原来的小时不记进度，下一次往前跳
+        不比（读错的正是变小的那一次，进度没多走）。"""
+        s = ready(load_db())
+        t = [0.0]
+        s._clock = lambda: t[0]
+
+        def read(rnd, prog):
+            t[0] += 3
+            s.on_hud(hud(round=rnd))
+            s.on_progress(prog, 20)
+
+        for rnd in range(1, 15):  # 一步一步打到第 14 轮，第 15 格
+            for _ in range(3):
+                read(rnd, rnd + 1)
+        self.assertEqual((s.settings.round, s.game.progress), (14, 15))
+        read(11, 15), read(11, 15)
+        self.assertEqual(s.settings.round, 11)
+        self.assertIsNone(s.game._round_at_progress)
+        read(14, 15), read(14, 15)
+        self.assertEqual(s.settings.round, 14)
+        self.assertFalse(self.jumps(s))
+
+    def test_round_progress_comes_back_with_undo(self):
+        """撤销新的一局时，采用轮次时记下的进度跟着那一局回来，照旧拿它核对往前跳。"""
+        from advisor.session import NEWGAME_VETO_S
+
+        s, t = self.round_jump_session()  # 第 9 轮时第 10 格，进度第 11 格
+        t[0] += NEWGAME_VETO_S + 1
+        s.on_hud(hud(round=1)), s.on_hud(hud(round=1))
+        self.assertIsNone(s.game._round_at_progress)
+        self.assertTrue(s.undo_new_game())
+        self.assertEqual((s.settings.round, s.game._round_at_progress), (9, (9, 10)))
+        s.on_progress(11), s.on_progress(11)
+        for _ in range(2):
+            s.on_hud(hud(round=13))
+        self.assertEqual(s.settings.round, 9)
+        self.assertTrue(self.jumps(s))
+
 
 class NewGameVetoTest(unittest.TestCase):
     """对局中途的新一局判定要互相印证：另一项读数 20 秒内还说这一局在继续，就按读错处理（真人对局里的误判）。"""

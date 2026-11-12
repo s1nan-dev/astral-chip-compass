@@ -23,7 +23,7 @@ from PySide6.QtWidgets import QApplication, QComboBox, QLabel, QWidget  # noqa: 
 from advisor import clock, paths  # noqa: E402
 from advisor.data import CLASSES, SCHOOLS, TIERS, TIER_LABEL as PLAYER_TIER_LABEL, load_db  # noqa: E402
 from advisor.engine import SCHEME_TIER_WORD  # noqa: E402
-from advisor.pool import appear_prob, player_pool, slot_dists  # noqa: E402
+from advisor.pool import appear_prob, class_tags, player_pool, slot_dists  # noqa: E402
 from advisor.schemes import (  # noqa: E402
     TIER_LABEL,
     Scheme,
@@ -50,11 +50,13 @@ BLOCKS = (*TIERS, BLOCK_UNMARKED, BLOCK_OTHER)
 GROUPS = (*SCHOOLS, "通用", "地图专属")
 LISTED = ("core", "first", "second")
 
-# 「较难出现」的核对结果（米米 7 个、芬妮 9 个，都是不在自己职业池里的金色）
-MIMI_RARE = {"拳击手套-高级", "肾上腺素-高效", "鹰眼瞄具", "医疗箱-完备治疗", "摩托头盔-高级", "夹心饼干-美味", "美工刀-锋利"}
+# 「较难出现」的核对结果（米米 8 个、芬妮 10 个，都是不在自己职业池里的金色）。职业池按筹码的职业标签算：电磁炮（攻击）、
+# 金色飞星（辅助）不在池表里，也算在职业池里
+MIMI_RARE = {"拳击手套-高级", "肾上腺素-高效", "鹰眼瞄具", "医疗箱-完备治疗", "摩托头盔-高级", "夹心饼干-美味", "美工刀-锋利",
+             "电磁炮"}
 FENNY_RARE = MIMI_RARE | {"忍术飞镖", "探天卫星"}
 RIN_RARE = set(MIMI_RARE)  # 凛：卡牌 80、辅助 30
-KOMACHI_RARE = MIMI_RARE | {"银行卡-用不完", "星币锤", "大碗炖肉"}  # 小町：只有卡牌 100
+KOMACHI_RARE = MIMI_RARE | {"银行卡-用不完", "星币锤", "大碗炖肉", "金色飞星"}  # 小町：只有卡牌 100
 
 
 def settle() -> None:
@@ -353,7 +355,7 @@ class LayoutTest(_DataCase):
         self.assertEqual({g: list(n) for g, n in lay.unmarked}, self.by_group)
         self.assertEqual(lay.other, ())
         # 地图专属不含只由别的筹码发放的（电击枪、原初意识由畸变组件发放，标不了档位）
-        self.assertEqual(dict(lay.totals), {"星光": 9, "治愈": 9, "标记": 8, "充能": 8, "通用": 24, "地图专属": 25})
+        self.assertEqual(dict(lay.totals), {"星光": 9, "治愈": 9, "标记": 8, "充能": 8, "通用": 24, "地图专属": 28})
         self.assert_each_once(lay)
 
     def test_blocks_follow_ranks(self):
@@ -364,7 +366,7 @@ class LayoutTest(_DataCase):
         unmarked = dict(lay.unmarked)
         self.assertNotIn("缓冲盾牌", unmarked["治愈"])
         self.assertNotIn("重生人偶", unmarked["地图专属"])
-        self.assertEqual(len(unmarked["地图专属"]), 24)
+        self.assertEqual(len(unmarked["地图专属"]), 27)
         self.assert_each_once(lay)
 
     def test_two_schools_lock_the_rest(self):
@@ -795,12 +797,12 @@ class BlocksAndGroupsTest(_EditorCase):
         content = self.content(ed)
         self.assertEqual(list(content), [BLOCK_UNMARKED])
         block = content[BLOCK_UNMARKED]
-        self.assertEqual(block.title, "未标记 · 83 个（按流派分组）")
+        self.assertEqual(block.title, "未标记 · 86 个（按流派分组）")
         self.assertEqual([g.key for g in block.groups], list(GROUPS))
         self.assertEqual([g.title for g in block.groups],
                          ["星光 · 未标记 9 个（共 9 个）", "治愈 · 未标记 9 个（共 9 个）", "标记 · 未标记 8 个（共 8 个）",
                           "充能 · 未标记 8 个（共 8 个）", "通用 · 未标记 24 个（共 24 个）",
-                          "地图专属 · 未标记 25 个（共 25 个）"])
+                          "地图专属 · 未标记 28 个（共 28 个）"])
         for g in GROUPS:
             self.assertEqual(self.rows(ed, BLOCK_UNMARKED, g), self.by_group[g], g)
         granted = {n for n, c in self.db.chips.items() if c.granted}
@@ -848,7 +850,7 @@ class BlocksAndGroupsTest(_EditorCase):
         self.assertEqual(ed.chip_list.row_spec("缓冲盾牌").tip, "")
         self.assertEqual(self.group_titles(ed, BLOCK_UNMARKED)["治愈"], "治愈 · 未标记 7 个（共 9 个）")
         self.assertEqual(self.group_titles(ed, BLOCK_UNMARKED)["标记"], "标记 · 未标记 7 个（共 8 个）")
-        self.assertEqual(content[BLOCK_UNMARKED].title, "未标记 · 78 个（按流派分组）")
+        self.assertEqual(content[BLOCK_UNMARKED].title, "未标记 · 81 个（按流派分组）")
         # 改档位：排到新的一块最后
         self.click(ed, "可口糖果", "core")
         self.assertEqual(self.rows(ed, "core"), ["重生人偶", "可口糖果"])
@@ -2183,7 +2185,7 @@ class ExtremeTest(_EditorCase):
         self.mine(ed, {n: "core" for n in self.markable})
         content = self.content(ed)
         self.assertEqual(list(content), ["core"])
-        self.assertEqual(content["core"].title, "必选 · 83 个（拖动调整顺位）")
+        self.assertEqual(content["core"].title, "必选 · 86 个（拖动调整顺位）")
         self.assertEqual(self.rows(ed, "core"), self.markable)
         self.assertFalse(ed.lock_label.isVisible())
         self.assertEqual(ed.hints_label.text().split("\n"), [
@@ -2212,7 +2214,7 @@ class ExtremeTest(_EditorCase):
         self.assertEqual(ed.targets.schools(), ())
         self.assertEqual([ed.chip_list.row_spec(n).school for n in ("额外电池", "重生人偶")], ["通用", "地图专属"])
         self.assertFalse(ed.lock_label.isVisible())
-        self.assertEqual(self.group_titles(ed, BLOCK_UNMARKED)["地图专属"], "地图专属 · 未标记 23 个（共 25 个）")
+        self.assertEqual(self.group_titles(ed, BLOCK_UNMARKED)["地图专属"], "地图专属 · 未标记 26 个（共 28 个）")
 
     def test_marks_then_all_removed(self):
         ed = self.editor()
@@ -2237,9 +2239,9 @@ class ScrollTest(_EditorCase):
         for name in ("缓冲盾牌", "可口糖果", "友情徽章", "维生素药丸"):  # 必选较多：列表下面有一行规则提示
             self.click(ed, name, "core")
         self.assertTrue(ed.hints_label.isVisible())
-        ed.chip_list.set_group_open("地图专属", True)  # 83 个全部展开
+        ed.chip_list.set_group_open("地图专属", True)  # 86 个全部展开
         settle()
-        self.assertEqual(len(self.visible_rows(ed)), 83)
+        self.assertEqual(len(self.visible_rows(ed)), 86)
         tall = self.positions(ed)
         tall_view = ed.chip_list.viewport().height()
         ed.fit_to_screen(QRect(0, 0, 1280, 600))
@@ -2315,8 +2317,8 @@ class PoolNotesTest(unittest.TestCase):
                          "「运动手环」只出现在地图「海选赛运动场」「淘汰赛运动场」「决赛大赛场」的筹码三选一中，其他地图不会出现。")
 
     def test_rule_against_pool_functions(self):
-        """较难出现 = 在职业池里、不在自己的池里（初始职业分值高于 15）、一局见到的机会低于 38%；悬停里的机会和用
-        pool.py 现有函数另算的一致；不在任何职业池的、自己池里的一律不标；地图专属的都标「仅限地图」。"""
+        """较难出现 = 在职业池里（按筹码的职业标签）、不在自己的池里（初始职业分值高于 15）、一局见到的机会低于 38%；悬停里的
+        机会和用 pool.py 现有函数另算的一致；不在任何职业池的、自己池里的一律不标；地图专属的都标「仅限地图」。"""
         db = self.db
         markable = get_catalog(db).markable
         for hero, notes in self.notes.items():
@@ -2329,7 +2331,8 @@ class PoolNotesTest(unittest.TestCase):
                     self.assertEqual(note.kind, E.NOTE_MAP, name)
                     self.assertTrue(all(f"「{m}」" in note.tip for m in chip.maps))
                     continue
-                if not chip.pools or own & set(chip.pools):
+                tags = class_tags(chip)
+                if not tags or own & set(tags):
                     self.assertIsNone(note, (hero, name))
                     continue
                 chance = chances[name]

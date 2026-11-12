@@ -34,7 +34,7 @@ from unittest import mock
 import cv2
 import numpy as np
 
-from advisor import assets, clock, fileio, paths
+from advisor import assets, clock, fileio, paths, update
 from advisor.vision import cardcrop
 from tests.support import samples, sandbox
 from tools import check_data, derive_card_crop
@@ -247,7 +247,8 @@ def face_box() -> tuple[int, int, int, int]:
 @unittest.skipUnless(samples.cards_ok(PADMAN_CARD), samples.cards_reason(PADMAN_CARD))
 class TurnedCardTest(unittest.TestCase):
     """派德曼「酷暑难耐」的卡面（卡面样本，不随仓库发布）按照游戏内核对的裁法裁：卡面就是识别图片清单里那一项的卡面（大小、
-    SHA-1 对得上），裁法转了约 -42.3°、和 photo_tilt.json 的角度一样；裁出来的角色照按这个角度转回去（认角色建模板时的转法），
+    SHA-1 对得上；这张放在备用地址上，看的是给不用官方备用地址的复刻版本的 fallback），裁法转了约 -42.3°、和 photo_tilt.json 的
+    角度一样；裁出来的角色照按这个角度转回去（认角色建模板时的转法），
     脸部那一块和卡面上同一块（只缩放、不转，对局里显示的就是这样的整张卡面）对得上，反着转就对不上；样本的 enwiki 文件夹里另有
     英文 wiki 上同款的游戏角色照（四周各少 8、18 像素）时，和它比相关度 0.97 以上，脸部那一块也一样。"""
 
@@ -258,7 +259,8 @@ class TurnedCardTest(unittest.TestCase):
         self.photo = cardcrop.crop_image(self.card, self.affine)
 
     def test_card_is_listed(self):
-        item = next(i for i in assets.load_manifest().items if i.name == f"heroes/{PADMAN}")
+        with mock.patch.object(update, "USE_MIRROR", False):  # 复刻的版本：备用地址上的项换成 fallback，照它现裁
+            item = next(i for i in assets.load_manifest().items if i.name == f"heroes/{PADMAN}")
         self.assertEqual((len(self.data), sha1(self.data)), (item.size, item.sha1))
         self.assertEqual(list(item.crop), self.affine)
         tilts = json.loads((paths.data_dir() / check_data.PHOTO_TILT).read_text(encoding="utf-8"))["photos"]

@@ -1,10 +1,16 @@
 """生成 data/assets_manifest.json：发行版首次运行时要从吉星派对 WIKI（BWIKI）下载的识别图片清单。
 
-按开发目录 assets/ 下现有的图片列清单（heroes 角色照、profiles Q 版头像、chips 筹码图标），
+按开发目录 assets/ 下现有的图片列清单（heroes 角色照、profiles Q 版头像、chips 筹码图标、achieve 结算数据表上的称号图标），
 每张向 BWIKI 的 imageinfo 接口要真实下载地址、大小和 SHA-1，并和本地文件核对。
 本地文件名就是 BWIKI 上的文件名（下划线等同空格）。
 assets/<目录>/user/ 下是用户自己存的模板（手动指定角色时保存的立绘），不进清单。
 BUNDLED 里的图片 wiki 上没有，标成 bundled，随发行版附带，不下载。
+MIRRORED 里的图片 wiki 上没有、或和游戏里不一样，照游戏内的图放在备用地址上，标成 mirror：url 是备用地址（地址里带
+内容的 SHA-1，图换了地址也跟着换），不带 title。复刻的改版不用官方的备用地址（advisor/assets.py），这几项另带 fallback，写它
+不用备用地址时怎么下（字段同普通的项）：data/card_crops.json 里有裁法的角色照照旧从卡面现裁（fallback 是卡面的 title、url、size、
+sha1 加 crop），wiki 上有这张（和游戏里不一样）的照 wiki 上那张；两样都没有的不带，复刻的改版缺这一张。wiki 上有了、和备用地址上
+那张一样以后，把这些文件名从 MIRRORED 去掉，重新生成清单，就改回从 wiki 下。MIRRORED 里的健全版角色照列在 data/sfw_skip.json
+里的，和别的不用下载的健全版一样不进清单（见下）。
 
 识别用不到、或有别的图顶替得了的不进清单（首次运行少下几十兆、少发一百多个请求），开发目录里照留：
 - Q 版头像只收识别会读的：文件名按 advisor/vision/stars.py 的 profile_photo_hero（认头像时用的同一个判断）认出角色编号、
@@ -18,7 +24,8 @@ BWIKI 上只有卡面原画、没有角色照的皮肤，和 BWIKI 的角色照�
 crop 字段（裁法的 6 个数，照抄 card_crops.json），首次运行时下载卡面、在本机裁出角色照（advisor/assets.py）。这些角色照
 不和卡面比校验值，改核对开发目录里那张是不是按 wiki 上现在这张卡面、这份裁法裁的（assets/manifest-local.json 里
 tools/fetch_assets.py --crop 记下的那笔，和首次运行时判断在不在是同一个办法，见 assets.is_present）：不是的、本地没有的，
-同「本地文件和 wiki 上的不一致」处理。card_crops.json、sfw_skip.json、heroes.json 读不出来、写得不对时不写清单（先运行
+同「本地文件和 wiki 上的不一致」处理。也在 MIRRORED 里的角色照照备用地址上的列（开发目录里那张是游戏内的图，不是裁的），裁法
+只写进它的 fallback。card_crops.json、sfw_skip.json、heroes.json 读不出来、写得不对时不写清单（先运行
 tools/check_data.py 看哪里不对）。
 
 用法：.venv\\Scripts\\python tools\\make_assets_manifest.py [--force]
@@ -45,11 +52,27 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from advisor import paths  # noqa: E402
 from advisor.assets import (API, API_INTERVAL, MANIFEST, WIKI_HOME, AssetItem, DownloadError, _Fetcher,  # noqa: E402
                             is_present, load_local, query_imageinfo, refusal_note)
+from advisor.update import MIRROR_BASE  # noqa: E402
 from advisor.vision.stars import profile_photo_hero  # noqa: E402
 from tools import json_layout  # noqa: E402
 
-KINDS = ("heroes", "profiles", "chips")
+KINDS = ("heroes", "profiles", "chips", "achieve")
 BUNDLED = (("stars", "star_bar.png"),)  # 取自对局截图的星数横条模板，wiki 上没有
+# BWIKI 上没有、或和游戏里不一样的识别图片（照游戏内核对查出来的），照游戏内的图放在备用地址上；wiki 上有了、和这里的一样
+# 以后从这里去掉，改回从 wiki 下。角色照里的这几张 BWIKI 上没有角色照，原来从卡面现裁（裁法照留在 card_crops.json，复刻的改版用）。
+# 其中列在 sfw_skip.json 里的健全版不下载、不放备用地址，开发目录里照样放游戏内的图：算名单（tools/check_sfw_cover.py）拿游戏里
+# 显示的那张比，取图工具现裁时也不换掉它
+MIRRORED = (*(("profiles", f"UT_Hero_ProfilePhoto_{skin}.png")
+              for skin in ("104_03", "113_04", "114_04", "117_04", "119_03", "123_03", "124_03", "130", "130_Max")),
+            *(("heroes", f"UT_Hero_RolePhoto_{skin}.png")
+              for skin in ("104_03", "105_01", "106_02", "106_02_sfw", "107_03_sfw", "108", "108_02_sfw", "108_sfw",
+                           "112_02_sfw", "112_03", "113_04", "114_01_sfw", "114_sfw", "117_04", "117_04_sfw", "119_03",
+                           "121_01_sfw", "121_03", "121_03_sfw", "123_02", "123_03", "123_03_sfw", "123_sfw", "124_03",
+                           "128_Max_sfw", "130", "130_Max", "130_Max_sfw", "130_sfw")),
+            # 森秋幻境的三张专属筹码
+            *(("chips", f"UT_Relic_{icon}.png") for icon in ("50094", "50095", "50096")),
+            # 结算数据表上的 14 个称号图标：BWIKI 上的和游戏里的不一样（照游戏内核对），都照游戏内的图放备用地址
+            *(("achieve", f"UT_Achieve_{1000 + i}_Settlement.png") for i in range(14)))
 IMAGE_SUFFIXES = (".png",)
 CARD_CROPS = "card_crops.json"  # data/ 下：从卡面现裁的角色照和裁法（同 tools/check_data.py 的 CARD_CROPS）
 # data/ 下：不用下载的健全版角色照（同 tools/check_data.py 的 SFW_SKIP，tools/check_sfw_cover.py 算、写）
@@ -149,17 +172,45 @@ def main() -> int:
                                      "tools/check_data.py 也会报出来。")
         return 1
     files = {kind: local_files(kind) for kind in KINDS}
+    mirrored = set(MIRRORED)
+    # 备用地址上的角色照里列在 sfw_skip.json 的健全版同样不进清单（模块说明：名单里的不下载，tools/check_data.py 也这样核）
+    listed_mirror = [(kind, name) for kind, name in MIRRORED if not (kind == "heroes" and name in skip)]
+    # 备用地址上的图片本地必须有（照游戏内的图放进来）；Q 版头像照样过「识别会读的」那道筛
+    mirrored_bad = [f"{kind}/{name}" for kind, name in listed_mirror
+                    if kind == "profiles" and not read_by_recognition(name, heroes)]
+    mirrored_missing, mirrored_meta = [], {}
+    for kind, name in listed_mirror:
+        path = paths.assets_dir(kind) / name
+        if path.is_file() and path.stat().st_size > 0:
+            mirrored_meta[(kind, name)] = (path.stat().st_size, sha1_of(path))
+        else:
+            mirrored_missing.append(f"{kind}/{name}")
+    if mirrored_bad or mirrored_missing:
+        if mirrored_bad:
+            print("MIRRORED 里的 Q 版头像识别不会读（文件名认不出角色编号，或编号不是 data/heroes.json 里的角色）："
+                  + "、".join(mirrored_bad) + "。")
+        if mirrored_missing:
+            print("MIRRORED 里的图片本地没有（应放在 assets/<dir>/ 下，照游戏内的图）：" + "、".join(mirrored_missing) + "。")
+        print("没写清单。")
+        return 1
     # 识别用不到、或有别的图顶替得了的不列（模块说明）：开发目录里照留
     dropped_sfw = sorted(skip & ({local for local, _ in files["heroes"]} | set(crops)))
     dropped_profiles = [local for local, _ in files["profiles"] if not read_by_recognition(local, heroes)]
-    # 从卡面现裁的角色照问卡面（不论本地有没有），其余照本地文件列
+    # 从卡面现裁的角色照问卡面（不论本地有没有），其余照本地文件列；备用地址上的几张另按 MIRRORED 列
     wanted = [(kind, local, title) for kind in KINDS for local, title in files[kind]
-              if not (kind == "heroes" and (local in crops or local in skip))
+              if (kind, local) not in mirrored
+              and not (kind == "heroes" and (local in crops or local in skip))
               and not (kind == "profiles" and local in dropped_profiles)]
-    wanted += [("heroes", photo, card) for photo, (card, _) in sorted(crops.items()) if photo not in skip]
+    wanted += [("heroes", photo, card) for photo, (card, _) in sorted(crops.items())
+               if photo not in skip and ("heroes", photo) not in mirrored]
+    # 备用地址上的角色照里原来从卡面现裁的：复刻的改版照旧裁（fallback），也要问卡面
+    mirrored_cards = {name: crops[name] for kind, name in listed_mirror if kind == "heroes" and name in crops}
     fetcher = _Fetcher(interval=API_INTERVAL)
     try:
-        info = query_imageinfo(sorted({title for _, _, title in wanted}), fetcher.get, API)
+        # 备用地址上的几张也一起问（同一批请求）：wiki 上有了、和备用地址上一样的要提醒去掉，不一样的给复刻的改版照旧下 wiki 上那张
+        titles = ({title for _, _, title in wanted} | {name.replace("_", " ") for _, name in listed_mirror}
+                  | {card for card, _ in mirrored_cards.values()})
+        info = query_imageinfo(sorted(titles), fetcher.get, API)
     except DownloadError as e:
         note = refusal_note(e)
         if note is None:
@@ -189,6 +240,25 @@ def main() -> int:
         elif sha1_of(paths.assets_dir(kind) / local) != meta.get("sha1"):
             differs.append(f"{kind}/{local}")
         items.append(item)
+    for kind, name in listed_mirror:
+        size, digest = mirrored_meta[(kind, name)]
+        item = {"dir": kind, "file": name, "mirror": True,
+                "url": f"{MIRROR_BASE}assets/{kind}/{digest}/{name}", "size": size, "sha1": digest}
+        own = info.get(name.replace("_", " "))  # wiki 上的这张
+        if own and own.get("sha1") == digest:
+            print(f"wiki 上已经有了 {name}，和备用地址上的一样：可以从 MIRRORED 去掉，改从 wiki 下")
+        if name in mirrored_cards:  # 复刻的改版照旧从卡面现裁
+            card, affine = mirrored_cards[name]
+            meta = info.get(card)
+            if meta:
+                item["fallback"] = {"title": card, "url": meta["url"], "size": int(meta["size"]), "sha1": meta["sha1"],
+                                    "crop": affine}
+            else:
+                not_found.append(f"{kind}/{name}（复刻的改版现裁用的卡面 {card}）")
+        elif own:  # 复刻的改版照旧下 wiki 上那张
+            item["fallback"] = {"title": name.replace("_", " "), "url": own["url"], "size": int(own["size"]),
+                                "sha1": own["sha1"]}
+        items.append(item)
     for kind, local in BUNDLED:
         path = paths.assets_dir(kind) / local
         if path.exists():
@@ -200,8 +270,11 @@ def main() -> int:
     counts = {kind: sum(1 for i in items if i["dir"] == kind and not i.get("bundled")) for kind in KINDS}
     total_bytes = sum(i["size"] for i in items if not i.get("bundled"))
     cards = [i for i in items if "crop" in i]
+    on_mirror = [i for i in items if i.get("mirror")]
     print(f"清单 {len(items)} 项：" + "、".join(f"{k} {v}" for k, v in counts.items())
-          + f"（其中从卡面现裁 {len(cards)}），随附 {sum(1 for i in items if i.get('bundled'))}；"
+          + f"（其中从卡面现裁 {len(cards)}，备用地址上 {len(on_mirror)}：复刻的改版不用备用地址，其中 "
+          + f"{sum(1 for i in on_mirror if 'fallback' in i)} 张照旧从卡面现裁或下 wiki 上的，其余没有别的下法），"
+          + f"随附 {sum(1 for i in items if i.get('bundled'))}；"
           + f"需下载约 {total_bytes / MB:.1f} MB（其中卡面约 {sum(i['size'] for i in cards) / MB:.1f} MB）")
     print(f"识别用不到、或有别的图顶替得了，不进清单：健全版 {len(dropped_sfw)} 张（data/{SFW_SKIP} 里列的）、"
           f"Q 版头像 {len(dropped_profiles)} 张（不是 data/{HEROES} 里的角色的）")
@@ -221,10 +294,12 @@ def main() -> int:
         "generated": date.today().isoformat(),
         "source": WIKI_HOME,
         "api": API,
-        "note": "识别用图片：程序首次运行时下载到 assets/<dir>/<file>，都取自 source。"
+        "note": "识别用图片：程序首次运行时下载到 assets/<dir>/<file>，一般取自 source（mirror 项除外，见下）。"
                 "带 crop 字段的项下载的是对应的卡面原画（title、url、size、sha1 是卡面的），在本机按 crop 的裁法（照游戏内"
                 "核对）裁出角色照，卡面不留。"
-                "bundled 项随发行版附带，不下载。",
+                "bundled 项随发行版附带，不下载。"
+                "mirror 项是 WIKI 上没有、或和游戏里不一样的图片，从备用地址下载（url 里带内容的 SHA-1）；"
+                "不用官方备用地址的复刻版本改照 fallback 下（字段同普通的项），没有 fallback 的不下。",
         "counts": counts,
         "download_bytes": total_bytes,
         "items": sorted(items, key=lambda i: (i["dir"], i["file"])),

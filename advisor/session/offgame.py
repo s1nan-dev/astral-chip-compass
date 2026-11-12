@@ -125,6 +125,9 @@ def on_out_of_game(s, screen):
     rule = SCREEN_RULES.get(kind)
     if rule is None:
         return None
+    if kind != "result":
+        # 认出了结算页之后的别的画面（奖励、主菜单、房间、「匹配成功」画面）：数据表已经翻过去了，不再等
+        s.stop_table_wait()
     name = getattr(screen, "difficulty", None)
     name = name if name in DIFFICULTY_NAMES else None
     map_name = getattr(screen, "map", None)
@@ -197,7 +200,8 @@ def final_screen(s, kind: str, name: str | None, map_name: str | None, rounds: i
 
     房间等画面已经结束了这一局（_ended_by_screen），随后又读到结算画面：这一局确实打完了，之后开的新一局和结算画面
     结束的一样不能撤销，主菜单结束的也不再当成断线以后连回；「已结束」的依据和结束时的轮次、地图、难度（game_over_info）
-    改按结算画面，发一个 status。"""
+    改按结算画面，发一个 status。这一支也让这一局等结算页上的数据表：房间等画面结束的那一次之后才出来真的结算画面时，
+    数据表同样漏不得。_ended_by_screen 在这里清掉，之后停在结算画面上再读到时不再重新计时。"""
     settings = s.settings
     if not s.has_game_state:
         s.trace("result_without_game", difficulty=name, map=map_name, rounds=rounds)
@@ -213,11 +217,13 @@ def final_screen(s, kind: str, name: str | None, map_name: str | None, rounds: i
             g._ended_by_screen, g._end_cleared, g._end_screen = False, None, kind
             g._ended = end_info(s, why, rounds, map_name)
             s._push(s._event("status"))
+            s._start_table_wait()  # 开着对局报告时，接下来等结算页上的数据表（见 Session.wants_table）
         s._difficulty_changed()
         return None
     if map_name and settings.map and map_name != settings.map:
         s.trace("result_map_mismatch", map=settings.map, screen_map=map_name)
     ev = end_game(s, why, rounds=rounds, map_name=map_name, kind=kind)
+    s._start_table_wait()  # 开着对局报告时，接下来等结算页上的数据表（见 Session.wants_table）
     s._difficulty_changed()
     return ev
 
@@ -226,14 +232,26 @@ def final_screen(s, kind: str, name: str | None, map_name: str | None, rounds: i
 
 
 def end_info(s, why: str, rounds: int | None = None, map_name: str | None = None) -> dict:
-    """本局结束时的 {why, map, difficulty, level, rounds, cap, outcome, how}（见 Session.game_over_info）。rounds、map_name：
-    结算画面上读到的轮次和地图（这一局的地图没认出来时用它）。outcome、how 是这一局的胜负和依据（见 outcome），结束以后
-    读到奖励画面时会改（refresh_outcome）。"""
+    """本局结束时的 {why, map, difficulty, level, rounds, cap, difficulty_source, cap_rejected, outcome, how,
+    map_source, map_in_game}（见 Session.game_over_info）。rounds、map_name：结算画面上读到的轮次和地图。
+    difficulty_source 是难度胶囊这一档的依据（DIFFICULTY_SOURCE_LABEL 的键），cap_rejected 是这一局没采用的进度
+    上限有几个。outcome、how 是这一局的胜负和依据（见 outcome），结束以后读到奖励画面时会改（refresh_outcome）。
+
+    用哪张地图：玩家手动指定的照旧用手动的；否则结算画面上读到了就用它（结算画面写的才准，局里认的可能是另一张）；
+    都没有时用局里认的。map_source 是这张地图怎么来的（手动 manual、结算画面 result、局里认的依据，见
+    Session.map_source）；map_in_game 是局里认的地图，不管最后用了哪张都照写（没认出时 None）。"""
     settings, info = s.settings, s.difficulty_info
     result, how = outcome(s.game)
-    return {"why": why, "map": settings.map or map_name, "difficulty": info.label, "level": info.level,
+    if settings.map_source == "manual" and settings.map:
+        name, source = settings.map, "manual"
+    elif map_name:
+        name, source = map_name, "result"
+    else:
+        name, source = settings.map, s.map_source
+    return {"why": why, "map": name, "difficulty": info.label, "level": info.level,
             "rounds": rounds if rounds is not None else settings.round, "cap": s.game.progress_cap,
-            "outcome": result, "how": how}
+            "difficulty_source": info.source, "cap_rejected": len(s.game._cap_rejected),
+            "outcome": result, "how": how, "map_source": source, "map_in_game": settings.map}
 
 
 def outcome(g) -> tuple[str | None, str | None]:
@@ -303,7 +321,7 @@ def end_game(s, why: str, rounds: int | None = None, map_name: str | None = None
     撤销新一局、漏记补录、补录提示、「查看筹码」面板提示、离开后的核对都取消，还没确认的读数作废。
     对局外读到、留给下一局的难度和地图不清。记识别读数和识别记录的结束标记，返回 game_over 事件。
 
-    rounds、map_name：结算画面上读到的轮次和地图（这一局的地图没认出来时用它）。
+    rounds、map_name：结算画面上读到的轮次和地图（结算画面上读到了地图就以它为准，手动指定的除外，见 end_info）。
     by_screen：是房间、「匹配成功」画面、奖励画面或主菜单结束的（不是结算画面）：之后开的新一局可以撤销
       （Session._start_next_game），主菜单结束的还可能当成断线以后连回、撤回这次结束（round_after_game）。
       这时把下面清掉的漏记补录、待补录、「查看筹码」面板提示、刚关掉的那组候选，和待确认的那一次读到之前留给下一局的

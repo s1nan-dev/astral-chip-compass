@@ -484,7 +484,7 @@ class Overlay(QWidget):
             notice_model=self.notice_model, advice=self.advice, owned=self.owned, offers=self.offers,
             eggs=self.records, notices=self.notices, flash=self._flash, waiting_text=self._waiting_text,
             newgame_notice=self._schedule_newgame_notice, refresh=self.refresh, receive=lambda ev: self.handle(ev),
-            batch=self._batch, report_game=self.report_game_over)
+            batch=self._batch, report_game=self.report_game_over, report_table=self.report_table)
 
     def _attach_primary(self, primary) -> None:
         """第二张：设置、皮肤、编辑方案、导入/导出、关于、更新、预览图只有一份，都转给第一张。
@@ -829,6 +829,12 @@ class Overlay(QWidget):
         各的一局（局号不同），都交给第一张那一份设置拼。"""
         target = self.primary if self.primary is not None else self
         target.reporting.game_over(game, settled)
+
+    def report_table(self, game: str) -> None:
+        """这一局读到了结算数据表、推荐日志记下以后（reporting.Reporting.table_read）：报告已经拼过的重拼一次
+        （同一编号、覆盖原来那份），还在等胜负的不动。两开时第二张转给第一张那一份。"""
+        target = self.primary if self.primary is not None else self
+        target.reporting.table_read(game)
 
     def _waiting_text(self, over: bool | None = None) -> str:
         """等待筹码三选一时的提示（status.waiting_text）。over 为本局已结束；不给时按 Session 现在的（刷新时给这一轮快照里的）。

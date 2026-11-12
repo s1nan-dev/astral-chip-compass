@@ -152,6 +152,10 @@ class MakeManifestTest(unittest.TestCase):
         (self.assets / "stars" / "star_bar.png").write_bytes(b"STARS")
         (self.data / make_assets_manifest.HEROES).write_text(
             json.dumps([{"id": i, "name": f"角色{i}"} for i in self.HERO_IDS]), encoding="utf-8")
+        # 备用地址上的那几张（MIRRORED）另有测试（tests/test_assets_mirror.py）：这组测试只看照 wiki 本地文件列清单的老路子
+        patcher = mock.patch.object(make_assets_manifest, "MIRRORED", ())
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def manifest_path(self) -> Path:
         return self.data / make_assets_manifest.MANIFEST
@@ -627,6 +631,19 @@ class FetchCropTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("已是最新 2 张", out)
         self.assertEqual({p.name: p.stat().st_mtime_ns for p in (self.assets / "heroes").iterdir()}, stamps)
+
+    def test_mirrored_not_cut(self):
+        """放在备用地址上的角色照（MIRRORED）不裁：开发目录里那张（游戏内的图）一个字节不动，不记现裁的记录；另一张照常裁。"""
+        game = b"\x89PNG game photo"
+        (self.assets / "heroes" / self.PHOTOS[1]).write_bytes(game)
+        with mock.patch.object(make_assets_manifest, "MIRRORED", (("heroes", self.PHOTOS[1]),)):
+            code, out = self.run_main(FakeWiki({}), "--crop", "--cards", str(self.cards))
+        self.assertEqual(code, 0, out)
+        self.assertEqual((self.assets / "heroes" / self.PHOTOS[1]).read_bytes(), game)
+        self.assertEqual((self.assets / "heroes" / self.PHOTOS[0]).read_bytes(), self.expected(self.PHOTOS[0]))
+        self.assertNotIn(f"heroes/{self.PHOTOS[1]}", assets.load_local()["cropped"])
+        self.assertIn("放在备用地址上、不裁的 1 张", out)
+        self.assertIn("从卡面现裁角色照 1 张", out)
 
     def test_cards_checked(self):
         """卡面的 SHA-1 对不上（wiki 上可能换过这张）、文件夹里没有这张卡面：这张不裁，退出码 1，另一张照常裁；文件夹里没有

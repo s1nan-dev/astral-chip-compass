@@ -216,7 +216,7 @@ class LayoutTest(_ListCase):
         self.assertEqual(groups, [*SCHOOLS, GENERAL, MAP])
         self.assertEqual(lst.rows_in(L.BLOCK_UNMARKED, MAP), [])  # 地图专属默认收起
         # 只由别的筹码发放的（电击枪、原初意识）标不了档位，不列
-        self.assertEqual(len(lst.rows_in(L.BLOCK_UNMARKED, MAP, visible_only=False)), 25)
+        self.assertEqual(len(lst.rows_in(L.BLOCK_UNMARKED, MAP, visible_only=False)), 28)
         self.assertFalse(lst.group_open(MAP))
         self.assertEqual(lst.rows_in("core"), ["银行卡-余额多", "银行卡-用不完"])
         healing = [n for n in self.markable if self.group_of(n) == "治愈" and n not in self.TIERS]

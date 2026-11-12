@@ -45,10 +45,16 @@ class GameState:
     _round_floor: int = 0  # 这一局确实到过的轮次，变小到它以下才是新的一局（见 NewGameJudge.read_round）
     # 往前走一步之前、已确认的轮次：读回它算改正（静止画面上「05」连读成「06」时，floor 被一步抬上去）
     _round_before_step: int | None = None
+    # 采用当前轮次时的（轮次, 进度条当前格）：轮次往前跳时拿进度条这段时间走过的格数核对（见 Session.on_hud）
+    _round_at_progress: tuple[int, int] | None = None
     _star_pending: tuple[int, int, float] | None = None  # 同上，星数
     _star_seen: int = 0
     _star_jumped: bool = False
     _star_floor: int = 0
+    # 这一局一直没读到星数时，升星、筹码商店三选一（最左格的稀有度知道的）估过的最高星（见 Session.judge_source）：
+    # 估星数时不低于它。
+    # 和 _star_floor（这一局确实读到过的星数）不同，估出来的不算读到过
+    _star_guess_floor: int = 0
     # 这次三选一界面上读到的自己的星数。升星的三选一出现时列表上已经亮了新的星，
     # 所以读到了说明星数是最新的；没读到（自己那一行被标题带挡住）时记下的可能还是升星前的
     _select_star: int | None = None
@@ -87,6 +93,11 @@ class GameState:
     _panel_open: bool = False  # 上一次读对局画面时任务栏是不是开着
     # 已有筹码各是怎么记下的（见 CHIP_SOURCE_LABEL）
     chip_sources: dict[str, str] = field(default_factory=dict)
+    # 已有筹码次第进来的来路（见 CHIP_SOURCE_LABEL）：进「已有筹码」那一刻记下，面板读到、玩家改已有筹码时不变，
+    # 离开「已有筹码」时去掉。和 chip_sources 分开记：面板核对会把 chip_sources 都改成「查看筹码」面板
+    owned_sources: dict[str, str | None] = field(default_factory=dict)
+    # 这一局在「查看筹码」面板上看到过的筹码：读到面板的那一页以后仍在「已有筹码」里的记进来，离开时去掉
+    _panel_seen: set[str] = field(default_factory=set)
     # 补录时记为不经三选一获得的筹码（飞羽手环定期给的、本局有「神秘宝藏」时宝箱给的等）：剩余三选一次数不把这些
     # 算成拿过一次三选一。面板核对不改它，筹码移出已有筹码时跟着去掉；不靠 chip_sources 记：面板核对会把来源都改成
     # 「查看筹码」面板
@@ -102,6 +113,8 @@ class GameState:
     # 本局进度条上读到的进度上限（红叉所在的格）：连续两次读到同一个数才采用
     progress_cap: int | None = None
     _cap_pending: int | None = None
+    # 这一局没采用过的进度上限（和地图资料对不上，见 Session.on_progress_cap）：同一个数只记一次
+    _cap_rejected: set[int] = field(default_factory=set)
     # 进度条上当前所在的格（蓝色高亮）：连续两次读到同一个数才采用。剩余轮数按它算
     progress: int | None = None
     _progress_pending: int | None = None
@@ -168,6 +181,17 @@ class GameState:
     # 最近一次漏记的三选一（missed_offer）当时的（轮次, 来源, 是不是循环往复给的额外那次）：用户补录时按它记循环往复
     # （Session.resolve_missed）
     _missed_at: tuple | None = None
+    # 认三选一是升星还是筹码商店（规则见 Session._source_of）。画面上的两样迹象各记最后一次看到的（Session 的时钟, 读数）：
+    # 升星横幅上的名次（从 1 数，Session.on_levelup_banner）、筹码商店的购买窗上的价格（读不出为 None，on_shop_window）。
+    # 一次三选一出现时收进那一次的记录、清掉（Session._take_cues）：一个迹象只算给它之后的第一次三选一
+    _banner_cue: tuple[float, int] | None = None
+    _shop_cue: tuple[float, int | None] | None = None
+    # 最近一次出现的三选一（刷新不算新的一次）认来源要的几项（dict，各项见 Session._select_opened）：出现之前的星数、收下的
+    # 横幅和购买窗、定的来源和依据、关掉以后补准的来源等。同一组候选关了又出现时接着用（编号换成新的）
+    _select_rec: dict | None = None
+    # 上一次对账（Session._settle_sources：关掉以后在对局画面上读到星数时补准来源）以来出现的各次三选一的记录，先后照出现的
+    # 先后（和 _select_rec 是同一些 dict）
+    _source_books: list[dict] = field(default_factory=list)
 
     # ---- 撤销后的记忆、立绘模板
     _ignore_hero: str | None = None  # 撤销「角色换了」的新一局后，不再把这个角色当成新一局的迹象
@@ -189,7 +213,8 @@ class GameState:
     # 本局已结束（结算画面等，见 Session.on_out_of_game）：状态保留到新的一局，之后的读数不再记进这一局。只由新的一局
     # 清掉（撤销房间等结束以后开的新一局时一起撤回，见 Session.undo_new_game）
     game_over: bool = False
-    # 结束时的 {why, map, difficulty, level, rounds, cap, outcome, how}，见 Session.game_over_info
+    # 结束时的 {why, map, difficulty, level, rounds, cap, difficulty_source, cap_rejected, outcome, how, map_source,
+    # map_in_game}，见 Session.game_over_info
     _ended: dict | None = None
     # 胜负的依据（见 offgame.outcome）：读到通关画面「VICTORY」的时刻、读到打输横幅「GAME OVER」的时刻、结束的时刻（时钟秒），
     # 结束后读到过奖励画面没有、奖励画面上「星币」那一格的数（读不出为 None）
@@ -213,6 +238,18 @@ class GameState:
     # 对局外画面没有（确实离开了这一局；结束本局的两次里先认出的那一次是这些画面的也算，见 offgame.end_game），以及刚当成
     # 断线以后连回了这一局、还没再认出这一局的角色：见 offgame.round_after_game
     _end_screen: str | None = None
+    # 结算画面结束本局以后等识别数据表（Session.on_result_table）：只在开着对局报告时等（Session.wants_table），
+    # 认定了一份表（_table_done：读到 consistent 为真的，或记过一份以后又读稳了一份、数不比它多）、认出别的对局外画面、
+    # 开了新的一局或满 TABLE_WAIT_S 秒时结束。
+    # _table_pending 是 consistent 为假时上一次读到的各项（见 _table_signature），再读到完全一样的才算读到一份。
+    # _table_known 是这一局最近一次按 consistent 为假记下的表读到了几个数（见 _table_known_count）：淡入时先记下
+    # 不完整的，之后读到数更多的才再记一条；0 表示这一局还没按 consistent 为假记过表。consistent 为真记下的那一条
+    # 不更新它（_table_done 已经挡住之后的读数）
+    _table_wait: bool = False
+    _table_done: bool = False
+    _table_at: float | None = None
+    _table_pending: tuple | None = None
+    _table_known: int = 0
     _left: bool = False
     _rejoined: bool = False
     # 地图专属筹码推出的地图和加载画面等读到的冲突、还没改时：（推出的地图或几张地图, 那一次的专属筹码和所在的格子），
@@ -235,7 +272,8 @@ class GameState:
             _round_seen=CONFIRM if settings.round is not None else 0, _round_floor=settings.round or 0,
             _star_seen=CONFIRM if settings.star_read else 0, _star_floor=settings.star if settings.star_read else 0,
             map_candidates=[settings.map] if settings.map else [],
-            chip_sources={n: "given" for n in settings.owned}, panel_needed=not settings.owned,
+            chip_sources={n: "given" for n in settings.owned},
+            owned_sources={n: "given" for n in settings.owned}, panel_needed=not settings.owned,
         )
 
 

@@ -1,5 +1,5 @@
-"""提示行：新一局（撤销）、截取方式、不支持的情况、皮肤解锁、打开「查看筹码」面板、补录、移出筹码（撤销）、热键不可用、
-方案文件和个人目录、图片下载、校准、诊断包、性能自检（ocr_check_row）、软件内更新（update_rows）、第一次启动的「免费软件」
+"""提示行：新一局（撤销）、截取方式、不支持的情况、皮肤解锁、打开「查看筹码」面板、不知道已有筹码时的推荐、补录、
+移出筹码（撤销）、热键不可用、方案文件和个人目录、图片下载、校准、诊断包、性能自检（ocr_check_row）、软件内更新（update_rows）、第一次启动的「免费软件」
 声明，以及这次运行里一直留着的三条（识别已停止、DPI 设置被改过、程序文件夹写不进）。
 
 两层：NoticeModel 记着这些提示的状态（哪几条用户关掉了、要显示的几样），rows 按状态排出这一轮的各行
@@ -98,6 +98,7 @@ from .wording import (
     OCR_CHECK_TIP,
     OCR_CHECK_YES,
     OCR_CHECK_YES_TIP,
+    OWNED_UNKNOWN_ADVICE,
     PANEL_TAB,
     PROMPT_PANEL,
     PROMPT_PANEL_RESUME,
@@ -380,12 +381,13 @@ class NoticeModel:
 
     def rows(self, view, *, live: bool, reverted_chip: str, capture, unlocked, schemes: str, assets,
              calibrate_games: int, folder: str, images_personal: bool = False, hotkey: str = "",
-             update=(), chip_name=None, hant: bool = False, ocr_note=None) -> list[tuple]:
+             update=(), chip_name=None, hant: bool = False, ocr_note=None,
+             owned_unknown: bool = False) -> list[tuple]:
         """按当前状态排出提示行：（键, 文字, 级别, [(按钮文字, 强调色, 动作, 悬停说明)]）。级别 action 时边框变色。
 
         view 是这一轮的快照（本局已结束、不支持的情况、待补录的个数），live 为三选一显示着，reverted_chip 为同一组候选再次出现
-        时撤销的筹码，capture 为截取方式的提示（capture_notice），unlocked 为这次运行里解锁了、还没关掉的几套
-        [(编号, 文字, 键)]，schemes 为方案文件读取结果的提示（schemes_notice），assets 为图片下载的状态，calibrate_games
+        时撤销的筹码，owned_unknown 为显示着的这次推荐不知道全部已有筹码（推荐事件的 owned_unknown），
+        capture 为截取方式的提示（capture_notice），unlocked 为这次运行里解锁了、还没关掉的几套 [(编号, 文字, 键)]，schemes 为方案文件读取结果的提示（schemes_notice），assets 为图片下载的状态，calibrate_games
         为提示校准的局数，folder 为个人目录的文件夹名，images_personal 为下载的识别图片在个人目录里（发行版平时；开发版、
         个人目录用不了退回程序文件夹时为假），hotkey 为热键不可用的那一句（热键能用时为空），update 为软件内更新的几条
         （UpdateControl.notices：对局中为空，排法见 update_rows）。hant 为界面是简体、认出游戏是繁体中文、这一轮该显示那一条
@@ -394,8 +396,8 @@ class NoticeModel:
         没有时为 None；结果那一条对局进行中先不出，由调用的一方判断）：标题栏下方，排在诊断包位置后面、软件内更新前面。
 
         各行放进所属的一块（NOTICE_AREA）：新一局、不支持的情况在「识别」卡片；补录、打开「查看筹码」面板、刚移出的筹码
-        （带「撤销」）在「已有筹码」卡片；这一局按地图换用了方案（带「换回原来的」）在「筹码方案」卡片；同一组候选再次出现在
-        「推荐」卡片；这次运行里一直留着的三条、热键不可用、个人目录存不进、
+        （带「撤销」）在「已有筹码」卡片；这一局按地图换用了方案（带「换回原来的」）在「筹码方案」卡片；不知道已有筹码、推荐按
+        没有筹码算的那一句（排在最上面）和同一组候选再次出现在「推荐」卡片；这次运行里一直留着的三条、热键不可用、个人目录存不进、
         方案文件读取的结果、图片下载、校准、诊断包位置、第一次启动时的「免费软件」声明在标题栏下方。
         一直留着的三条排在全局提示的最前面，按要紧的先后：识别已停止 ＞ DPI 设置被改过 ＞ 程序文件夹写不进（理由见
         wording.RECOG_STOPPED 那一段），热键不可用（带「更换热键」）紧跟在它们后面。图片下载失败的全是写盘出错时（assets 的
@@ -441,6 +443,9 @@ class NoticeModel:
         elif self.panel_prompt and not over:
             text = PROMPT_PANEL_RESUME if self.panel_resume else PROMPT_PANEL
             rows.append(("panel", text, "action", [ignore_panel]))
+        if owned_unknown and live and not over:
+            # 对局中途才打开、还没读到「查看筹码」面板：推荐照常给，「推荐」卡片最上面提醒一句可能不准（⚠ 橙色，边框不变色）
+            rows.append(("owned_unknown", OWNED_UNKNOWN_ADVICE, "warn", []))
         if reverted_chip and live:
             rows.append(("reverted", REVERTED_NOTICE.format(chip=shown(reverted_chip)), "info", []))
         gain = 0 if over else max(int(view.unrecorded), 0)
@@ -682,7 +687,8 @@ class NoticeView:
                           assets=self.assets(), calibrate_games=self.calibrate_games,
                           folder=getattr(app_paths, "FOLDER_NAME", ""), images_personal=personal is not None,
                           hotkey=self.hotkey_problem() or "", update=tuple(self.update_notices(view) or ()),
-                          chip_name=self.chip_name, hant=hant, ocr_note=ocr_note)
+                          chip_name=self.chip_name, hant=hant, ocr_note=ocr_note,
+                          owned_unknown=self.live.owned_unknown)
         # 认出繁体游戏那一条在简体界面上显示：文字和按钮这时才转成繁体
         rows = [self._hant_row(row) if row[0] == "hant" else row for row in rows]
         logs = str(logs_dir()) if model.calibrate_n is not None else ""

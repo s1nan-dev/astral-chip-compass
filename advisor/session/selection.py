@@ -1,4 +1,5 @@
-"""筹码三选一：界面的状态机（SelectTracker）和这次三选一的来源判断（judge_source）。
+"""筹码三选一：界面的状态机（SelectTracker）和这次三选一的来源判断（judge_source；升星还是筹码商店概率行分不出，另按
+画面上的迹象分，见 Session._source_of 和这里的 SOURCE_BY）。
 
 SelectTracker 管界面这一侧：界面开着没有、关掉了没有（被玩家隐藏时当它还开着，见 hidden）、是不是紧接着换成了另一次、
 刚出现时和刷新后等候选读全（hold_frame）、同一个局面不重复给推荐，以及给推荐（engine.advise，按方案计算时另算默认推荐的
@@ -27,6 +28,20 @@ from ..pool import difficulty_of
 
 # 三选一的来源（State.source），给人看的叫法
 SOURCE_LABEL = {"levelup": "升星", "shop": "筹码商店", "task": "任务"}
+# 这次三选一的来源是怎么定的（Event.source_by，Session._source_of）。升星和筹码商店的概率行、最左格都一样，按画面上别的
+# 迹象分：
+SOURCE_BY = {
+    "banner": "自己的升星横幅",  # 出现之前不久读到的升星横幅，名次对得上自己在玩家列表上的那一行：升星
+    # 星数：出现之前玩家列表上的星数已经涨了、算到这一次头上，或三选一画面上读到自己的星数比之前多 1（升星）；出现之前已经
+    # 是 3 星、不是刚升到 3 星的那一次（只能是筹码商店）；关掉以后按星数补准的（source_settled）
+    "stars": "星数",
+    "shop_window": "购买窗",  # 出现之前不久看到了筹码商店的购买窗：筹码商店
+    "rows": "概率行",  # 概率行、最左格、全队同时三选一的标题认出是任务（judge_source）
+    "guess": "拿不准",  # 都没有：推荐照旧按升星算（悬浮窗上升星、筹码商店都写「升星或筹码商店」）
+}
+# 关掉以后按星数补准的几种（Session._settle_sources）：拿不准的，和按购买窗定的（星数涨了就是升星：升星为主）。
+# 横幅、星数定的不改
+SETTLE_BY = ("guess", "shop_window")
 
 GONE_FRAMES = 2  # 连续几帧看不到三选一，才算界面关掉了
 # 三选一界面上点了「隐藏」（画面上认出「您当前正处于隐藏UI状态」，识别流程只在正要按关掉处理的那一帧看）：当三选一还开着，
@@ -110,12 +125,13 @@ def _about_slot(problem: str, slot: int) -> bool:
 
 
 def judge_source(rows, fixed, probabilities, left: str | None, star: int, star_read: bool, source: str,
-                 select_star: int | None, team: bool = False) -> tuple[int, str, int | None]:
+                 select_star: int | None, team: bool = False, floor: int = 0) -> tuple[int, str, int | None]:
     """按概率行判断这次三选一的来源，返回（星数, 来源, 任务等级）。只做计算。
 
     rows：本局难度的概率表（行号 = 星数）；fixed：各星数的最左格固定稀有度；probabilities：这次三选一读到的概率行；
     left：最左格的稀有度（不知道时为 None，不按最左格判断）；star、star_read、source：记下的星数、星数是不是这一局读到的、
-    记下的来源；select_star：这次三选一界面上读到的自己的星数（没读到为 None）。
+    记下的来源；select_star：这次三选一界面上读到的自己的星数（没读到为 None）；floor：这一局还没读到星数时，升星、筹码商店
+    三选一估过的最高星数（只在 star_read 为假时起作用）。
 
     team=True：标题上方有「……正在选择强化筹码…」（全队同时三选一，合作任务完成时出现），一定是任务来源，
     等级按概率行；概率行读不到时等级按星数估。
@@ -126,14 +142,17 @@ def judge_source(rows, fixed, probabilities, left: str | None, star: int, star_r
       例外：刚升星时自己那一行如果被三选一的标题带挡住，记下的还是升星前的星数。概率行正好高一星、
       最左格又正好是那个星数的固定稀有度时，按升星算（只用于这一次推荐，星数等关掉后再读）。
     不知道星数时：按概率行估一个，只用于这一次推荐；最左格不是这一行对应星数的固定稀有度时按任务来源算。
+      一局之内星数只增不减，所以估出的星数不低于 floor：任务三选一的行号是任务等级、不是星数，估出的可能比升星、
+      筹码商店三选一估过的低。对得上的行里先只看不低于 floor 的，最左格对得上就照升星结算；全低于 floor 时只能是任务，
+      星数写 floor（升星、筹码商店不会让星数变少）。
     读不到概率、或概率不是表里的任何一行时：按记下的星数和来源算。
     【循环往复】的等级等于当前星数，概率行和最左格都对得上，分不出来，按升星算。
     """
     fits = [i for i, row in enumerate(rows) if probabilities and tuple(row) == tuple(probabilities)]
     if team:
-        return star, "task", (max(1, max(fits)) if fits else None)
+        return (star if star_read else max(star, floor)), "task", (max(1, max(fits)) if fits else None)
     if not fits:
-        return star, source, None
+        return (star if star_read else max(star, floor)), source, None
     tier = max(1, max(fits))
 
     def leftmost_fits(n: int) -> bool:
@@ -141,8 +160,14 @@ def judge_source(rows, fixed, probabilities, left: str | None, star: int, star_r
         return left is None or left == fixed[n]
 
     if not star_read:
-        guess = min(fits, key=lambda i: abs(i - star))
-        return (guess, source, None) if leftmost_fits(guess) else (guess, "task", tier)
+        ups = [i for i in fits if i >= floor]
+        if ups:
+            guess = min(ups, key=lambda i: abs(i - star))
+            if leftmost_fits(guess):
+                return guess, source, None
+        else:
+            guess = min(fits, key=lambda i: abs(i - star))
+        return max(guess, floor), "task", tier
     if star in fits and leftmost_fits(star):
         return star, source, None
     up = star + 1
@@ -190,7 +215,8 @@ class SelectTracker:
     FIELDS = ("_visible", "_gone", "_last_key", "_last_names", "_last_raw", "_selected", "_fresh_select_star",
               "_offer_rerolls", "_team_select", "_last_probs", "_shown", "_hold", "_select_up", "_star_check",
               "_selected_logged", "_offer_frame", "_plan_used", "_runs", "_memo", "_select_no", "_offer_most",
-              "_zero_unread", "_most_game", "_hidden", "_told", "_unread", "_noted")
+              "_zero_unread", "_most_game", "_hidden", "_told", "_unread", "_noted", "_fresh_prior", "_source_by",
+              "_unadvised")
     __slots__ = ("session", *FIELDS)
 
     def __init__(self, session):
@@ -205,6 +231,11 @@ class SelectTracker:
         self._selected: str | None = None
         # 这一帧（下一次 on_frame 之前）在三选一界面上读到的自己的星数（见 GameState._select_star、Session.on_frame）
         self._fresh_select_star: int | None = None
+        # 这一帧在三选一界面上读到的星数改了记下的星数时，改之前的（星数, 读到过没有）：这一帧出现的是新的一次三选一时，
+        # 它就是这一次出现之前的星数（Session._select_opened；识别流程先读星数、再交三选一的读数）。Session.on_frame 取走
+        self._fresh_prior: tuple[int, bool] | None = None
+        # 最近一次算局面时定的来源依据（SOURCE_BY 的键，见 Session._source_of）：frame 写进推荐事件（Event.source_by）
+        self._source_by: str | None = None
         # 这一组候选（筹码名没变）最近读到的刷新次数：刷新按钮被表情气泡等挡住时沿用
         self._offer_rerolls: int | None = None
         # 这一组候选画面上确实读到过的最多的刷新次数（沿用的不算）：紧接着换了一组候选时按它看刷新次数有没有减少（fresh_offer）
@@ -246,6 +277,9 @@ class SelectTracker:
         self._unread = False
         # 最近一次交来的三选一读数让绿框选中的变成了另一张、记下了这张筹码时为（第几个, 筹码名），见 noted：每次 frame 开头清掉
         self._noted: tuple | None = None
+        # 这一次三选一认出来了、程序放弃等待、没给推荐的那一项（对局报告里的 unadvised，见 _note_unadvised）：第一次
+        # 算进来时开一项，关掉时连同选中的筹码发 unadvised 事件，然后清掉
+        self._unadvised: dict | None = None
 
     # ------------------------------------------------------------ 对外（经 Session 调用）
 
@@ -313,11 +347,19 @@ class SelectTracker:
         self._last_key = None
 
     def recompute(self):
-        """按最近一次三选一的画面立即重算（见 Session.recompute）。界面没有显示、正在等候选读全时返回 None。"""
+        """按最近一次三选一的画面立即重算（见 Session.recompute）。界面没有显示、正在等候选读全时返回 None。
+
+        重算不算又看到了三选一：连着几帧看不到它（_gone）、正被隐藏着（_hidden）照旧。玩家把三选一收起来去点「查看筹码」、
+        读到面板重算以后，下一帧照常是正要按关掉处理的帧（closing），识别流程接着看那行字；那行字没了（隐藏着时间到了）
+        就在那一帧按关掉处理，不会多留一帧，让面板上已经拿到手的那一个被当成已有筹码再重算一次。"""
         seen = self._offer_frame
         if seen is None or not self._visible or self.holding:
             return None
-        return self.frame(seen)
+        gone, hidden = self._gone, self._hidden
+        ev = self.frame(seen)
+        if self._visible:
+            self._gone, self._hidden = gone, hidden
+        return ev
 
     def starts_another(self, seen) -> bool:
         """这一帧的三选一是不是紧接着出现的另一次（界面没关、候选换了；刷新不算）：概率行换成概率表里的另一行
@@ -331,12 +373,15 @@ class SelectTracker:
             return False
         return self.another_select(self.table_row(seen)) or self.fresh_offer(seen, names)
 
-    def first_star(self, seen, star: int, source: str, owned: tuple) -> str:
+    def first_star(self, seen, star: int, source: str, owned: tuple, by: str | None = None) -> str:
         """0 星时出现的升星类三选一：是不是升到 1 星的那一次。返回 up（按 1 星算）、same（按记下的星数算）或 unsure（拿不准），
         同时记成 _star_check（frame 按它决定两种星数都算不算）。Session.build_state 每次算局面时调用。
 
         0、1 星的概率行和最左格的固定稀有度都相同，judge_source 看不出升没升星（其余星数的概率行不同，在那里判断）。
         三选一界面上自己那一行常被标题带挡住，读不到新的星数，记下的还是升星前的 0 星（例如一局实战的第 1 次三选一）。
+        来源先按画面上的迹象定（source、by，见 Session._source_of）：定成升星、依据是自己的升星横幅（by 为 banner）时，
+        这一次就是升到 1 星的那一次（到了这里星数还没涨：三选一界面上没读到星数、记下的仍是 0 星），up；定成筹码商店的
+        一定不是升星，same。其余照下面靠刷新次数判断。
         靠刷新次数判断：每升一星刷新 +1（per_star_rerolls，按满级默认有这项加成），刷新次数在一个星数之内只减不增。
         这次三选一第一次读到的次数比升星前应有的多 per_star → up；相等 → same（筹码商店、任务，或刷新次数没有这项加成的
         账号，按记下的星数）；读不到、已推断出没有这项加成、或是别的数 → unsure，由 frame 两种都算
@@ -347,10 +392,10 @@ class SelectTracker:
         先换回这次三选一之前的再重新判，结果和第一次一样。
         不是这种情况（星数不是 0 星、三选一界面上读到了星数、全队任务、概率行判为任务等）时返回 same。
         """
-        self._star_check = check = self._first_star(seen, star, source, owned)
+        self._star_check = check = self._first_star(seen, star, source, owned, by)
         return check
 
-    def _first_star(self, seen, star: int, source: str, owned: tuple) -> str:
+    def _first_star(self, seen, star: int, source: str, owned: tuple, by: str | None) -> str:
         s = self.session
         settings, game = s.settings, s.game
         rows = s._rarity_table(tuple(seen.probabilities) if seen.probabilities else None)
@@ -360,6 +405,10 @@ class SelectTracker:
                 or source == "task" or getattr(seen, "team", False) or up >= len(rows) or up >= len(fixed)
                 or tuple(rows[star]) != tuple(rows[up]) or fixed[star] != fixed[up]):
             return "same"
+        if source == "shop":
+            return "same"  # 认出是筹码商店：不是升星
+        if by == "banner":
+            return "up"  # 自己的升星横幅之后出的：就是升到 1 星的那一次（星数还没在玩家列表上读到）
         if self._select_up is None:
             n = getattr(seen, "rerolls", None)
             if n is None:
@@ -382,9 +431,10 @@ class SelectTracker:
 
     # ------------------------------------------------------------ 一帧
 
-    def frame(self, seen, fresh_star: int | None = None):
+    def frame(self, seen, fresh_star: int | None = None, prior: tuple[int, bool] | None = None):
         """喂入一帧的三选一识别结果（不是三选一界面时传 None），有新情况时返回事件（见 Session.on_frame）。
-        fresh_star：这一帧在三选一界面上读到的星数。"""
+        fresh_star：这一帧在三选一界面上读到的星数；prior：这一帧的那次读数改了记下的星数时，改之前的（星数, 读到过没有）
+        （见 _fresh_prior；这一帧出现的是新的一次三选一时，交给 Session._select_opened 当作出现之前的星数）。"""
         s = self.session
         db = s.db
         self._runs += 1
@@ -416,7 +466,9 @@ class SelectTracker:
         if not self._visible:
             self._visible = True
             self._select_no += 1
-            s._select_opened(names)
+            s._select_opened(names, prior)
+        if fresh_star is not None:
+            s._select_star_seen()  # 这一帧在这一次三选一（紧接着换成的另一次也是这里之后的这一次）上读到了星数
         if probs is not None:
             self._last_probs = probs
         old_raw, self._last_raw = self._last_raw, list(seen.raw)
@@ -487,6 +539,17 @@ class SelectTracker:
                 return None
             self._last_key = key
             self._told = True
+            # 等过了才放弃、而且开始等以后没给过推荐：这一次程序没给推荐（见 _note_unadvised）。给过推荐以后某一帧
+            # 又读不全（_hold 为 None）、只读到共同部分以后按挑出的那一个给了推荐的（_hold["shown"] 不是 _shown）不算
+            hold = self._hold
+            if hold is not None and hold["expired"] and hold["shown"] is self._shown:
+                reasons = []
+                if not all(seen.names):
+                    reasons.append("name")
+                if any(n and not ok for n, ok in zip(seen.names, known)):
+                    reasons.append("unknown")
+                if reasons:
+                    self._note_unadvised(reasons, seen)
             return s._event("unreadable", problems=problems, raw=list(seen.raw))
 
         s._map_from_chips(names)
@@ -498,9 +561,11 @@ class SelectTracker:
                 return None
             self._last_key = key
             self._told = True
+            self._note_unadvised(["hero"], seen)
             return s._event("hero_needed", offer=list(names), raw=list(seen.raw), problems=problems)
         state = s.build_state(seen)
         unsure = self._star_check == "unsure"
+        by = self._source_by
         # 当前角色用的筹码方案参与判断：切换方案、编辑正在用的方案后同一个画面也重算
         plan = s.scheme_plan()
         # 识别到的稀有度（图标边框颜色）只用于给资料库未收录的候选定中性分：这几格的读数变了要重算；
@@ -508,7 +573,9 @@ class SelectTracker:
         rarity = list(getattr(seen, "rarity", None) or ()) or None
         graded = tuple(rarity[i] if rarity and i < len(rarity) else None
                        for i, n in enumerate(names) if n not in db.chips)
-        key = (names, state, plan, graded)
+        # 来源的依据（by）也参与判断：同一次三选一里后来才认准来源（例如这时才认出自己在玩家列表第几行、横幅对上了）、
+        # 局面却没变时也重发一次，推荐照搬算过的（AdviceMemo），推荐日志、悬浮窗按后一条记来源
+        key = (names, state, plan, graded, by)
         if key == self._last_key:
             # 局面没变就不重复给推荐。同一组候选后来读全了（上一次推荐时的识别提示有的这一帧已经没有了），重发一次，
             # 去掉过时的提示；这一帧新冒出的提示（读全以后又偶尔读错）不添上：只留上一次就有、这一帧仍有的。
@@ -531,8 +598,16 @@ class SelectTracker:
             s.log_state("scheme", hero=state.hero, scheme=plan.record(advice.scheme_schools) if plan else None)
         self._shown = (names, getattr(seen, "rerolls", None), tuple(problems))
         self._told = True
+        # 已有筹码还要靠面板（中途打开、还没读到「查看筹码」面板）：这次推荐只按记下的筹码算，一个都没记下时就是按没有筹码算
+        # （Event.owned_unknown）。离开很久后回来要面板核对、但还记着之前的筹码时不算：之前的都知道，推荐照记着的筹码算
+        g = s.game
+        unknown = bool(g.panel_needed) and not (g._resume_check and state.owned)
+        owned_sources, owned_panel = s.owned_marks(state.owned)
+        self._note_advised(state)
         return s._event("advice", advice=advice, state=state, problems=problems, raw=list(seen.raw),
-                        select_no=self._select_no)
+                        select_no=self._select_no, owned_unknown=unknown, map_source=s.map_source,
+                        difficulty_source=s.difficulty_info.source, owned_sources=owned_sources,
+                        owned_panel=owned_panel, source_by=by)
 
     def _advise(self, seen, names: tuple, rarity, state, plan, unsure: bool, key):
         """算这一帧的推荐（_compute）：当前星数的一份；星数拿不准（unsure，见 first_star）时另算高一星的一份；按方案计算时
@@ -607,7 +682,60 @@ class SelectTracker:
         offer, raw = list(names or ()), self._last_raw
         self._last_key = self._last_names = None
         picked, self._selected = self._selected, None
-        return self.session._select_closed(names, offer, raw, picked)
+        item, self._unadvised = self._unadvised, None  # 先取走：记账出错时也不并进下一次三选一的那一项
+        ev = self.session._select_closed(names, offer, raw, picked)
+        if item is not None:
+            if getattr(ev, "kind", "") == "picked" and ev.chip:
+                item["pick"] = ev.chip
+            select_no = item.pop("select_no", 0)
+            self.session._push(self.session._event("unadvised", unadvised=item, select_no=select_no))
+        return ev
+
+    def _note_unadvised(self, reasons, seen) -> None:
+        """这次三选一程序放弃等待、没给推荐（unreadable 等过了才放弃、hero_needed）：开一项，或者往现有的那一项里补原因。
+
+        一项里记：轮次（头一次算进来时）、原因（按头一次出现的先后，不重复）、advised（后来给了推荐没有）、星数和来源
+        （一直没给推荐时开这一项这一刻按概率行估，见 _source_guess；后来给了推荐时由 _note_advised 改成推荐里的）、
+        最后看到选中的筹码（关掉时由 close 补上）。同一次三选一里再算进来时只补原因。"""
+        s = self.session
+        item = self._unadvised
+        if item is None:
+            star, source = self._source_guess(seen)
+            item = self._unadvised = {
+                "select_no": self._select_no, "round": s.settings.round, "reasons": [],
+                "advised": False, "star": star, "source": "task" if source == "task" else None, "pick": None,
+            }
+        for reason in reasons:
+            if reason not in item["reasons"]:
+                item["reasons"].append(reason)
+
+    def _note_advised(self, state) -> None:
+        """这一次三选一后来给出了推荐（见 frame 建 advice 事件那一处）：之前开过的 unadvised 项改成给了推荐，
+        星数、来源用这一份局面里的（一直没给推荐时开的那一项里是按概率行估的）。只认开了这一项以后的头一个推荐：
+        同一次三选一里之后重算出的推荐（星数、来源后来改判了）不再改这一项。"""
+        item = self._unadvised
+        if item is None or item["advised"] or item["select_no"] != self._select_no:
+            return
+        item["advised"] = True
+        item["star"] = state.star
+        item["source"] = state.source
+
+    def _source_guess(self, seen) -> tuple[int | None, str | None]:
+        """开 unadvised 项时按概率行估这一次的星数和来源：和 build_state 取一样的参数调 Session.judge_source，
+        只用它的返回值，不改记下的星数。judge_source 改的只有两样：一局里一直没读到星数时，估成升星、筹码商店的会抬高
+        估星数的下限（GameState._star_guess_floor），和给了推荐时一样（没给推荐的这一次也是一次升星、筹码商店的三选一，
+        之后估的星数同样不该比它低）；_rarity_table 里可能顺带判本局难度，而 frame 前面的 _read_difficulty 在同一帧
+        已经判过一样的。"""
+        s = self.session
+        names = tuple(getattr(seen, "names", None) or ())
+        probabilities = tuple(seen.probabilities) if getattr(seen, "probabilities", None) else None
+        rarity = list(getattr(seen, "rarity", None) or ()) or [None]
+        try:
+            star, source, _tier = s.judge_source(probabilities, names, rarity[0],
+                                                 bool(getattr(seen, "team", False)))
+        except Exception:  # noqa: BLE001  估不出来只影响这一项里的星数和来源，不能因此不给无法识别/请选择角色
+            return None, None
+        return star, source
 
     # ------------------------------------------------------------ 帧里的几项判断
 

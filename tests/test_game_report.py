@@ -32,15 +32,20 @@ NOW = datetime(2026, 1, 2, 12, 0, 0)
 SINCE = datetime(2025, 1, 1)
 
 
-def format_checker():
-    """报告格式的检查函数；没设 ACC_REPORT_CHECK、或那里没有 report_format.py 时跳过。"""
+def format_module():
+    """报告格式那一头的模块；没设 ACC_REPORT_CHECK、或那里没有 report_format.py 时跳过。"""
     if REF is None or not (REF / "report_format.py").is_file():
         raise unittest.SkipTest("没有报告格式的检查函数（环境变量 ACC_REPORT_CHECK）")
     if str(REF) not in sys.path:
         sys.path.insert(0, str(REF))
     import report_format
 
-    return report_format.clean_report
+    return report_format
+
+
+def format_checker():
+    """报告格式的检查函数；没设 ACC_REPORT_CHECK、或那里没有 report_format.py 时跳过。"""
+    return format_module().clean_report
 
 
 def chip(name: str, rarity: str = "蓝", school: str = "星光") -> dict:
@@ -110,6 +115,30 @@ def gameover(when="2026-01-01T11:00:00", game=GAME, **changes) -> dict:
     return record
 
 
+def table_player(seat=1, **changes) -> dict:
+    record = {"seat": seat, "self": False, "bot": True, "hero": "米米",
+              "kills": 3, "downs": 1, "damage_dealt": 1000, "damage_taken": 500, "heal": 0,
+              "best": ["damage_dealt"], "coins_all": 120, "coins_transferred": 30,
+              "chips": ["甲", "乙"], "chips_unknown": 0,
+              "badges": [{"kind": "大荒星陨", "value": 1000}]}
+    record.update(changes)
+    return record
+
+
+def table(when="2026-01-01T11:00:10", game=GAME, **changes) -> dict:
+    record = {"t": "table", "time": when, "game": game, "map": "森秋幻境", "difficulty": "普通",
+              "rounds": 13, "players": [table_player(1), table_player(2)]}
+    record.update(changes)
+    return record
+
+
+def unadvised(when="2026-01-01T10:30:00", game=GAME, **changes) -> dict:
+    record = {"t": "unadvised", "time": when, "game": game, "select_no": 3, "round": 4,
+              "reasons": ["name"], "advised": False, "star": 2, "source": None, "pick": None}
+    record.update(changes)
+    return record
+
+
 class Case(unittest.TestCase):
     def setUp(self):
         base = paths.temp_dir() / "tests-game-report"
@@ -132,6 +161,22 @@ class Case(unittest.TestCase):
         clean(report)
         return report
 
+    def explain(self, report):
+        """table 在收数据的服务那一头不会被存成 null；没有检查函数时只跳过这一步。"""
+        try:
+            module = format_module()
+        except unittest.SkipTest:
+            return
+        self.assertIsNone(module.explain_table(report))
+
+    def explain_unadvised(self, report):
+        """unadvised 在收数据的服务那一头不会被存成 null；没有检查函数时只跳过这一步。"""
+        try:
+            module = format_module()
+        except unittest.SkipTest:
+            return
+        self.assertIsNone(module.explain_unadvised(report))
+
     def write(self, records):
         path = self.logs / "2026-01.jsonl"
         with path.open("w", encoding="utf-8", newline="\n") as f:
@@ -152,6 +197,101 @@ class Case(unittest.TestCase):
 
 
 class BuildTest(Case):
+    def test_map_source_in_state(self):
+        """每次三选一的 state 里总有 map_source：从 offer 记录顶层取（不是 state 里的），白名单里的照写，旧记录、
+        值不对的写 null。"""
+        for record, want in ((offer(map_source="tasks"), "tasks"), (offer(), None), (offer(map_source="别的"), None),
+                             (offer(state=state(map_source="result")), None)):
+            with self.subTest(record=record, want=want):
+                report = self.clean(game_report.build([record], GAME, install=INSTALL, since=SINCE))
+                self.assertEqual(report["offers"][0]["state"]["map_source"], want)
+
+    def test_end_map_source(self):
+        """结束记录：map_source 只收 END_MAP_SOURCES 里的值，别的写 null；map_in_game 照文字写。旧记录没有这两项
+        时也不写。"""
+        records = [offer(), gameover(map_source="result", map_in_game="园林中庭")]
+        report = self.clean(game_report.build(records, GAME, install=INSTALL, since=SINCE))
+        self.assertEqual((report["end"]["map_source"], report["end"]["map_in_game"]), ("result", "园林中庭"))
+        records = [offer(), gameover(map_source="别的", map_in_game="园林中庭")]
+        report = self.clean(game_report.build(records, GAME, install=INSTALL, since=SINCE))
+        self.assertIsNone(report["end"]["map_source"])
+        self.assertEqual(report["end"]["map_in_game"], "园林中庭")
+        report = self.clean(game_report.build([offer(), gameover()], GAME, install=INSTALL, since=SINCE))
+        self.assertNotIn("map_source", report["end"])
+
+    def test_difficulty_source_in_state(self):
+        """每次三选一的 state 里总有 difficulty_source：从 offer 记录顶层取，白名单里的照写，旧记录、值不对的写 null。"""
+        for record, want in ((offer(difficulty_source="cap"), "cap"), (offer(), None),
+                             (offer(difficulty_source="别的"), None),
+                             (offer(state=state(difficulty_source="rows")), None)):
+            with self.subTest(record=record, want=want):
+                report = self.clean(game_report.build([record], GAME, install=INSTALL, since=SINCE))
+                self.assertEqual(report["offers"][0]["state"]["difficulty_source"], want)
+
+    def test_owned_lists_in_state(self):
+        """每次三选一的 state 里 owned_sources、owned_panel 和清理过的 owned 一一对应：旧记录没有时都是 null；
+        长度对不上时两样都 null；不是文字的筹码项和数组按同一批下标对齐。"""
+        record = offer(state=state(owned=["甲", "乙"]), owned_sources=["pick", "manual"],
+                       owned_panel=[True, False])
+        report = self.clean(game_report.build([record], GAME, install=INSTALL, since=SINCE))
+        st = report["offers"][0]["state"]
+        self.assertEqual((st["owned"], st["owned_sources"], st["owned_panel"]),
+                         (["甲", "乙"], ["pick", "manual"], [True, False]))
+        for record in (offer(),  # 旧记录没有
+                       offer(state=state(owned=["甲", "乙"]), owned_sources=["pick"],
+                             owned_panel=[True, False])):  # 长度对不上
+            with self.subTest(record=record):
+                report = self.clean(game_report.build([record], GAME, install=INSTALL, since=SINCE))
+                st = report["offers"][0]["state"]
+                self.assertIsNone(st["owned_sources"])
+                self.assertIsNone(st["owned_panel"])
+        # 来路不是白名单里的值：那一项写 null
+        record = offer(state=state(owned=["甲", "乙"]), owned_sources=["pick", "别的"],
+                       owned_panel=[True, False])
+        report = self.clean(game_report.build([record], GAME, install=INSTALL, since=SINCE))
+        self.assertEqual(report["offers"][0]["state"]["owned_sources"], ["pick", None])
+        # owned 里有不是文字的项：_text_list 丢掉它，两样按同一批下标取
+        record = offer(state=state(owned=["甲", 5, "乙"]), owned_sources=["pick", "given", "added"],
+                       owned_panel=[True, True, False])
+        report = self.clean(game_report.build([record], GAME, install=INSTALL, since=SINCE))
+        st = report["offers"][0]["state"]
+        self.assertEqual((st["owned"], st["owned_sources"], st["owned_panel"]),
+                         (["甲", "乙"], ["pick", "added"], [True, False]))
+        # 超过上限：owned 截到 200 项，两样也截到同样的项
+        names = [f"筹{i}" for i in range(game_report.MAX_ARRAY + 5)]
+        record = offer(state=state(owned=names), owned_sources=["pick"] * len(names),
+                       owned_panel=[True] * len(names))
+        report = self.clean(game_report.build([record], GAME, install=INSTALL, since=SINCE))
+        st = report["offers"][0]["state"]
+        self.assertEqual((len(st["owned"]), len(st["owned_sources"]), len(st["owned_panel"])),
+                         (game_report.MAX_ARRAY, game_report.MAX_ARRAY, game_report.MAX_ARRAY))
+        self.assertEqual(set(st["owned_sources"]), {"pick"})
+
+    def test_end_new_fields(self):
+        """结束记录新加的四项：难度依据只收 DIFFICULTY_SOURCES 里的值；两样数组和 end.owned 对齐；cap_rejected
+        只收 0～10 亿的整数。旧记录没有时写 null，每一项都在。"""
+        records = [offer(state=state(owned=["甲", "乙"])),
+                   gameover(owned=["甲", "乙"], owned_sources=["pick", "panel"], owned_panel=[True, False],
+                            difficulty_source="result", cap_rejected=2)]
+        report = self.clean(game_report.build(records, GAME, install=INSTALL, since=SINCE))
+        end = report["end"]
+        self.assertEqual((end["owned_sources"], end["owned_panel"], end["difficulty_source"], end["cap_rejected"]),
+                         (["pick", "panel"], [True, False], "result", 2))
+        report = self.clean(game_report.build([offer(), gameover()], GAME, install=INSTALL, since=SINCE))
+        end = report["end"]
+        self.assertEqual((end["owned_sources"], end["owned_panel"], end["difficulty_source"], end["cap_rejected"]),
+                         (None, None, None, None))
+        for bad in ("-1", -1, True, 1_000_000_001, 2.0):
+            records = [offer(), gameover(difficulty_source="别的", cap_rejected=bad)]
+            report = self.clean(game_report.build(records, GAME, install=INSTALL, since=SINCE))
+            self.assertEqual((report["end"]["difficulty_source"], report["end"]["cap_rejected"]), (None, None))
+
+    def test_map_sources_match_labels(self):
+        """报告的 MAP_SOURCES 和 session.core 的 MAP_SOURCE_LABEL 的键一致，结束的另加 result。"""
+        from advisor.session.core import MAP_SOURCE_LABEL
+        self.assertEqual(game_report.MAP_SOURCES, frozenset(MAP_SOURCE_LABEL))
+        self.assertEqual(game_report.END_MAP_SOURCES, game_report.MAP_SOURCES | {"result"})
+
     def test_updates_use_last_record(self):
         """同一次三选一有几条时取最后一条：局面和推荐以后一条为准，选择、反馈也各取最后一条。"""
         records = [
@@ -217,13 +357,13 @@ class BuildTest(Case):
         self.assertEqual(report["offers"][0]["advice"]["unrecorded"], [0, 2])
 
     def test_scheme_share_code(self):
-        """按方案推荐时把日志里记的那份方案写回分享码，只取 CA<版本>-<编码> 这一段。"""
+        """按方案推荐时把日志里记的那份方案写回分享码，只取 ACC<版本>-<编码> 这一段。"""
         db = data.load_db()
         hero = next(iter(db.heroes))
         first, second = list(db.chips)[:2]
         catalog = schemes.get_catalog()
         expected = schemes.to_short(schemes.Scheme(hero=hero, tiers={first: "core", second: "first"}), catalog)
-        expected = expected[expected.index("CA"):]
+        expected = expected[expected.index("ACC"):]
         raw = {"id": "x", "name": "方案名", "hero": hero,
                "tiers": {first: "必选", second: "推荐"}, "schools": ["攻击"]}
         records = [offer(advice=advice(best=first), scheme=raw, default_best=second)]
@@ -245,7 +385,7 @@ class BuildTest(Case):
         original = schemes.Scheme(hero=hero, tiers={chips[0]: "first", chips[1]: "core", chips[2]: "first",
                                                     chips[3]: "core", chips[4]: "avoid"})
         expected = schemes.to_short(original, catalog)
-        expected = expected[expected.index("CA"):]
+        expected = expected[expected.index("ACC"):]
         raw = plan_of(db, original).record(["攻击"])
         report = self.clean(game_report.build([offer(scheme=raw, default_best=chips[0])], GAME,
                                               install=INSTALL, since=SINCE))
@@ -267,8 +407,8 @@ class BuildTest(Case):
         with mock.patch.object(schemes, "WRITE_MAPS", True):
             report = self.clean(game_report.build([offer(scheme=raw)], GAME, install=INSTALL, since=SINCE))
         code = report["offers"][0]["scheme"]
-        self.assertTrue(code.startswith("CA2-"), code)
-        self.assertEqual(code, plain[plain.index("CA"):])
+        self.assertTrue(code.startswith("ACC2-"), code)
+        self.assertEqual(code, plain[plain.index("ACC"):])
 
     def test_scheme_unwritable_is_null(self):
         """筹码没有编号等写不出分享码时，这一条 scheme 写 null，整份报告照样拼得出来。"""
@@ -491,12 +631,211 @@ class BuildTest(Case):
         self.assertIsNone(report["app"]["data_date"])
 
 
+class TableTest(Case):
+    """结束时的数据表（第 3 版）：取这一局最后一条 table 记录，照格式清理。"""
+
+    def built(self, records):
+        return game_report.build(records, GAME, install=INSTALL, since=SINCE)
+
+    def test_without_table_record(self):
+        """没有 table 记录时 schema 是 3、table 是 null，整份过格式检查。"""
+        report = self.clean(self.built([offer()]))
+        self.assertEqual(report["schema"], 3)
+        self.assertIsNone(report["table"])
+        self.explain(report)
+
+    def test_table_fields(self):
+        """正常的表：地图、难度、轮数和每栏的各项照写；整份过格式检查，table 不会被服务存成 null。"""
+        report = self.clean(self.built([offer(), table()]))
+        item = report["table"]
+        self.assertEqual((item["map"], item["difficulty"], item["rounds"]), ("森秋幻境", "普通", 13))
+        self.assertEqual(len(item["players"]), 2)
+        first = item["players"][0]
+        self.assertEqual(first, {
+            "seat": 1, "self": False, "bot": True, "hero": "米米",
+            "kills": 3, "downs": 1, "damage_dealt": 1000, "damage_taken": 500, "heal": 0,
+            "best": ["damage_dealt"], "coins_all": 120, "coins_transferred": 30,
+            "chips": ["甲", "乙"], "chips_unknown": 0,
+            "badges": [{"kind": "大荒星陨", "value": 1000}],
+        })
+        self.explain(report)
+
+    def test_last_record_of_this_game_only(self):
+        """同一局几条 table 取最后一条（按记录先后，不按结束时刻）；别的局的 table 不带进来。"""
+        records = [offer(), table(when="2026-01-01T11:00:20", map="后记的"),
+                   table(when="2026-01-01T11:00:10", map="真正最后一条"),
+                   table(game="别的局", map="别的局的地图")]
+        report = self.clean(self.built(records))
+        self.assertEqual(report["table"]["map"], "真正最后一条")
+        self.explain(report)
+
+    def test_numbers_cleaned(self):
+        """整数只收 0～1e9：布尔值、3.0、负数、超过上限、NaN 都写 null；两端照收。"""
+        player = table_player(1, kills=True, downs=3.0, damage_dealt=-1,
+                              damage_taken=1_000_000_001, heal=float("nan"),
+                              coins_all=0, coins_transferred=1_000_000_000,
+                              chips_unknown="0")
+        report = self.clean(self.built([offer(), table(rounds=-1, players=[player])]))
+        item = report["table"]
+        self.assertIsNone(item["rounds"])
+        cleaned = item["players"][0]
+        self.assertIsNone(cleaned["kills"])
+        self.assertIsNone(cleaned["downs"])
+        self.assertIsNone(cleaned["damage_dealt"])
+        self.assertIsNone(cleaned["damage_taken"])
+        self.assertIsNone(cleaned["heal"])
+        self.assertIsNone(cleaned["chips_unknown"])
+        self.assertEqual((cleaned["coins_all"], cleaned["coins_transferred"]), (0, 1_000_000_000))
+        self.explain(report)
+
+    def test_best_cleaned(self):
+        """best 只留五项数字里的，去重、保持原来的先后；不认得的丢掉，不是数组时写 null。"""
+        player = table_player(1, best=["kills", "不认得", "kills", {"a": 1}, "damage_dealt", "heal"])
+        report = self.clean(self.built([offer(), table(players=[player])]))
+        self.assertEqual(report["table"]["players"][0]["best"], ["kills", "damage_dealt", "heal"])
+        self.explain(report)
+        player = table_player(1, best="damage_dealt")
+        report = self.clean(self.built([offer(), table(players=[player])]))
+        self.assertIsNone(report["table"]["players"][0]["best"])
+        self.explain(report)
+
+    def test_badges_cleaned(self):
+        """称号只收那 14 个：认不出的写 null，不是对象的项丢掉；不是数组时写 null。"""
+        player = table_player(1, badges=[
+            {"kind": "死神", "value": 3.0}, {"kind": "不认得的称号", "value": 5},
+            {"kind": "蜗牛", "value": -1}, "不是对象", {"kind": "囤积者"},
+        ])
+        report = self.clean(self.built([offer(), table(players=[player])]))
+        self.assertEqual(report["table"]["players"][0]["badges"], [
+            {"kind": "死神", "value": None}, {"kind": None, "value": 5},
+            {"kind": "蜗牛", "value": None}, {"kind": "囤积者", "value": None},
+        ])
+        self.explain(report)
+        player = table_player(1, badges=None)
+        report = self.clean(self.built([offer(), table(players=[player])]))
+        self.assertIsNone(report["table"]["players"][0]["badges"])
+        self.explain(report)
+
+    def test_chips_and_badges_cut(self):
+        """筹码多于 40 截到 40、只留文字项；称号多于 8 截到 8；截断了记一行错误记录。"""
+        player = table_player(1, chips=["筹码%d" % i for i in range(45)] + [None, {"a": 1}],
+                              badges=[{"kind": "死神", "value": i} for i in range(10)])
+        with mock.patch.object(errors, "log_error") as logged:
+            report = self.clean(self.built([offer(), table(players=[player])]))
+        cleaned = report["table"]["players"][0]
+        self.assertEqual(len(cleaned["chips"]), 40)
+        self.assertEqual(cleaned["chips"][0], "筹码0")
+        self.assertEqual(len(cleaned["badges"]), 8)
+        self.assertTrue(logged.called)
+        self.explain(report)
+        player = table_player(1, chips=["甲", None, {"a": 1}, "乙"])
+        report = self.clean(self.built([offer(), table(players=[player])]))
+        self.assertEqual(report["table"]["players"][0]["chips"], ["甲", "乙"])
+        self.explain(report)
+
+    def test_bad_structure_drops_whole_table(self):
+        """players 不是数组、是空数组、多于 4 项、有非对象、座位重复或超出 1～4：整个 table 为 null。"""
+        cases = {
+            "不是数组": "坏的",
+            "空数组": [],
+            "多于 4 项": [table_player(i) for i in range(1, 6)],
+            "有非对象": [table_player(1), "不是对象"],
+            "座位重复": [table_player(1), table_player(1)],
+            "座位 0": [table_player(0)],
+            "座位 5": [table_player(5)],
+        }
+        for label, players in cases.items():
+            with self.subTest(label):
+                report = self.clean(self.built([offer(), table(players=players)]))
+                self.assertIsNone(report["table"])
+                self.explain(report)
+
+    def test_two_self_all_null(self):
+        """两项以上 self 为 true 时，所有玩家的 self 都写 null（服务也是这么存的）。"""
+        players = [table_player(1, self=True), table_player(2, self=True), table_player(3, self=False)]
+        report = self.clean(self.built([offer(), table(players=players)]))
+        self.assertEqual([player["self"] for player in report["table"]["players"]], [None, None, None])
+        self.explain(report)
+
+    def test_no_names_or_extra_keys(self):
+        """记录里多写的 name、level、game、time、lane 都不带；报告整份转成文字也查不到。"""
+        player = table_player(1, name="玩家假名甲乙丙", level=999)
+        record = table(players=[player], lane="假线名", extra="多的键")
+        text = json.dumps(self.clean(self.built([offer(), record])), ensure_ascii=False)
+        for word in ("玩家假名甲乙丙", '"level"', "假线名", "多的键", GAME, record["time"]):
+            self.assertNotIn(word, text)
+
+    def test_constants_match_result_table(self):
+        """五项数字、14 个称号和 vision/result_table.py 的 STATS、BADGES 一样。"""
+        from advisor.vision import result_table
+        self.assertEqual(game_report.TABLE_STATS, result_table.STATS)
+        self.assertEqual(game_report.TABLE_BADGES, result_table.BADGES)
+
+
+class UnadvisedTest(Case):
+    """认出了三选一、没给推荐的那几次（第 3 版外层的 unadvised）：按局号和 since 挑，最多 50 项，清理成六个键，
+    不合格的一项丢掉，一项都没有时写空数组。"""
+
+    def built(self, records, **kw):
+        return game_report.build(records, GAME, install=INSTALL, since=kw.pop("since", SINCE), **kw)
+
+    def test_without_records_is_empty_list(self):
+        """一次都没有时写 []（不是 null）：整份过格式检查，unadvised 不会被服务存成 null。"""
+        report = self.clean(self.built([offer()]))
+        self.assertEqual(report["unadvised"], [])
+        self.explain_unadvised(report)
+
+    def test_fields_and_order(self):
+        """按日志里的先后，只带六个键（select_no 不发）；值照清理：reasons 只留三种、不重复，round/star 非负整数，
+        advised 布尔值，source 和 pick 文字或 null。"""
+        records = [offer(),
+                   unadvised(select_no=9, round=6, reasons=["unknown", "unknown", "别的", "name"],
+                             advised=True, star=3, source="shop", pick="书签", extra="多的键"),
+                   unadvised(when="2026-01-01T10:40:00", select_no=10, round=True, reasons=["hero"],
+                             advised="是", star=-1, source="别的", pick=7)]
+        report = self.clean(self.built(records))
+        first, second = report["unadvised"]
+        self.assertEqual(first, {"round": 6, "reasons": ["unknown", "name"], "advised": True, "star": 3,
+                                 "source": "shop", "pick": "书签"})
+        self.assertEqual(second, {"round": None, "reasons": ["hero"], "advised": False, "star": None,
+                                  "source": None, "pick": None})
+        self.explain_unadvised(report)
+
+    def test_bad_item_dropped(self):
+        """原因一项都不剩的项丢掉，整块照旧是数组、其余项还在，不会变成 null。"""
+        records = [offer(), unadvised(reasons=[]), unadvised(reasons=["别的"]),
+                   unadvised(when="2026-01-01T10:40:00", reasons=["name"])]
+        report = self.clean(self.built(records))
+        self.assertEqual([item["reasons"] for item in report["unadvised"]], [["name"]])
+        self.explain_unadvised(report)
+
+    def test_other_games_and_before_since_left_out(self):
+        """别的局的、since 以前的（时刻读不出的也算）不带进来。"""
+        since = datetime(2026, 1, 1, 10, 20)
+        records = [offer(when="2026-01-01T10:30:00"), unadvised(when="2026-01-01T10:10:00"), unadvised(when="读不出"),
+                   unadvised(game="别的局"), unadvised(when="2026-01-01T10:31:00")]
+        report = self.clean(self.built(records, since=since))
+        self.assertEqual(len(report["unadvised"]), 1)
+        self.explain_unadvised(report)
+
+    def test_max_fifty(self):
+        """多于 50 项时截到 50，并记一行错误记录。"""
+        records = [offer()] + [unadvised(when=f"2026-01-01T10:{i // 60:02d}:{i % 60:02d}", round=i)
+                               for i in range(55)]
+        with mock.patch.object(errors, "log_error") as logged:
+            report = self.clean(self.built(records))
+        self.assertEqual(len(report["unadvised"]), 50)
+        self.assertEqual((report["unadvised"][0]["round"], report["unadvised"][-1]["round"]), (0, 49))
+        self.assertTrue(logged.called)
+        self.explain_unadvised(report)
+
+
 class StoreTest(Case):
     def test_compact_and_atomic(self):
         path = self.assemble([offer(), gameover()])
         self.assertIsNotNone(path)
         data_bytes = path.read_bytes()
-        self.assertIn(b'{"schema":2,"report":', data_bytes)
+        self.assertIn(b'{"schema":3,"report":', data_bytes)
         self.assertNotIn(b'", "', data_bytes)
         self.assertTrue(data_bytes.startswith(b"{"))
         self.assertNotIn(b"\xef\xbb\xbf", data_bytes)
@@ -845,7 +1184,8 @@ class InstallTest(unittest.TestCase):
 class IntakeTest(Case):
     """端到端：本机起作业站的收数据服务，拿 send_pending 发一份，核对服务收下了、本机的那份删掉了。"""
 
-    def test_round_trip(self):
+    def round_trip(self, records, report_id):
+        """发一份报告给本机的收数据服务，返回服务存下来的那份。"""
         if REF is None or not (REF / "intake.py").is_file():
             raise unittest.SkipTest("没有收数据服务（环境变量 ACC_REPORT_CHECK）")
         import threading
@@ -862,8 +1202,7 @@ class IntakeTest(Case):
         thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
         thread.start()
         try:
-            report = game_report.build([offer(), gameover()], GAME, install=INSTALL, since=SINCE,
-                                       report_id="c" * 32)
+            report = game_report.build(records, GAME, install=INSTALL, since=SINCE, report_id=report_id)
             path = game_report.report_path(report["report"])
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
@@ -873,9 +1212,21 @@ class IntakeTest(Case):
             self.assertFalse(path.exists())
             stored = list(data_dir.glob("players/raw/*/*.json.gz"))
             self.assertEqual(len(stored), 1)
+            return json.loads(gzip.decompress(stored[0].read_bytes()).decode("utf-8"))
         finally:
             server.shutdown()
             server.server_close()
+
+    def test_round_trip(self):
+        stored = self.round_trip([offer(), gameover()], "c" * 32)
+        self.assertEqual(stored["schema"], 3)
+        self.assertIsNone(stored["table"])
+
+    def test_round_trip_with_table(self):
+        """带数据表的报告也照收：服务存下以后 table 还在，没被存成 null。"""
+        stored = self.round_trip([offer(), gameover(), table()], "d" * 32)
+        self.assertEqual(stored["table"]["players"][0]["seat"], 1)
+        self.assertEqual(stored["table"]["map"], "森秋幻境")
 
 
 if __name__ == "__main__":

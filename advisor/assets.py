@@ -1,12 +1,12 @@
 """识别用图片的首次运行下载。
 
-角色照（heroes）、Q 版头像（profiles）和筹码图标（chips）是游戏美术素材，发行版不附带，
-由用户电脑在首次运行时从中文 BWIKI 下载到 paths.download_dir() 下（发行版是个人目录 %LOCALAPPDATA%\\AstralChipCompass\\assets，
+角色照（heroes）、Q 版头像（profiles）、筹码图标（chips）和结算数据表上的称号图标（achieve）是游戏美术素材，发行版不附带，
+由用户电脑在首次运行时从中文 BWIKI 下载到 paths.download_dir() 下（发行版是个人目录
+%LOCALAPPDATA%\\AstralChipCompass\\assets，
 所有版本共用一份，换新版本只下新出的、改过的；开发版是项目的 assets/），只供本机识别使用。随发行版附带的（清单项带
 bundled）在程序目录的 assets/ 下（paths.assets_dir）。下面说的 assets/ 都指 download_dir() 这一层。
-清单项可以带 api 字段，指向图片所在的另一个 wiki 的接口（现在的识别图片都取自 BWIKI，清单里没有这样的项）。
+清单项可以带 api 字段，指向图片所在的另一个 wiki 的接口（现在的清单里没有这样的项）。
 要下载哪些文件、从哪里下、大小和 SHA-1 校验值，都写在 data/assets_manifest.json
-（由 tools/make_assets_manifest.py 生成，地址取自各 wiki 的 imageinfo 接口）。
 
 BWIKI 上只有整张卡面原画、没有角色照的皮肤，和 BWIKI 的角色照跟游戏里不一样（裁的位置、画面不同）的皮肤：
 这些清单项带 crop 字段（裁法的 6 个数，照游戏内核对），title、url、size、sha1 是卡面的。下到卡面、核过校验值以后按裁法裁出角色照（advisor/vision/cardcrop.py），照常写成 .part、
@@ -62,21 +62,7 @@ BWIKI 上只有整张卡面原画、没有角色照的皮肤，和 BWIKI 的角�
 - 下载好了、写不进识别图片的文件夹的（个人目录的磁盘满了、被杀毒软件拦了；退回程序文件夹时程序文件夹放在受保护的文件夹、
   只读的位置）不再重试，原因以 WRITE_FAILED 开头，和网络出错分开（is_write_error）：失败的全是写盘出错时，悬浮窗换成写不进
   的提示（按图片在个人目录还是程序文件夹里写），不再说检查网络。
-- wiki 上的图片更新过（校验值和清单不同）或旧地址 404 时，先攒起来，所有图片都下过一遍以后再一批一批向该图片所在 wiki
-  的 imageinfo 接口要当前的地址和校验值：下到的内容对得上新的就收下，地址或校验值换了的再下一次；新的地址、大小和
-  校验值记进本地覆盖清单 assets/manifest-local.json，之后按它判断图片齐不齐。
-- wiki 上已删除的图片也记进覆盖清单，GONE_RETRY_DAYS 天内启动时不再自动重试（悬浮窗上的「重试」照常重试）。记下的是
-  哪一天、删掉的是哪个文件页（title）：清单里这一项后来换了文件页（例如 wiki 上删掉的旧角色照改成从卡面现裁，问的是卡面），
-  这笔记录说的就不是现在要下的那张，不用它，照常下载（同 effective 不用另一种下法时记下的更新记录）。以前的记录只有日期，
-  那时的清单项都是照原样下载的，只对照原样下载的项算。
-- 个别图片一直下不了（玩家的网络连不上某个图床、wiki 上某张图坏了）：一张连不上的图要试满 RETRIES 次才算失败，每次启动
-  都重下的话，玩家每次都白等一轮（每张最多约一分半钟）。所以一轮下完、属于「个别图片下不了」（isolated）时，其中这一张
-  自己的问题的那几张（is_own_failure：网络出错、5xx 试满次数、单独一次的 403、问过接口仍 404 或内容对不上、卡面裁不出等）
-  记进覆盖清单（failed，记下日期），FAILED_RETRY_DAYS 天以内启动时 missing 不算它们，隔天再自动下载，下好了清掉这笔；
-  悬浮窗上的「重试」照样马上下（retry_items）。
-  点「重试」时先去掉这一轮要下的几张的记号（forget_recent，wiki 上已删除的记录也一样）：用户就是要现在下，这一下正好被
-  站点防护拦下时，它们和别的没下好的图片一样等冷却、到点接着下（中途退出、当天再打开也是）；没被拦、又下不了的照常按原因
-  重新记号。
+
   不记的：被站点防护拦下暂停（冷却另管）、取消、写不进（换个位置才写得进，悬浮窗另有提示）、没接上裁图（程序的问题）、
   wiki 上已删除（另记日期）、最后报成限流（429、503）的：几条下载线程交替收到正常回话、凑不到连着 REJECT_LIMIT 次被拒时，
   一张图试满次数也可能一直是限流，这说明的是站点那边忙，不是这一张的问题，下次启动照常再下。这一轮被拦下、取消了时一张
@@ -113,7 +99,7 @@ from dataclasses import dataclass, field
 from datetime import date, timezone
 from typing import Callable, Iterable
 
-from . import clock, fileio, paths, winhttp
+from . import clock, fileio, paths, update, winhttp
 from .version import SOURCE_URL, VERSION
 
 MANIFEST = "assets_manifest.json"
@@ -191,8 +177,9 @@ NO_SESSION = "建不了下载会话"
 # 只在打开「查看筹码」面板认已有筹码时用（开局时多半还没有筹码），悬浮窗上缺图标时画成稀有度色圈。
 # 角色照里从卡面现裁的那些（带 crop）排在普通角色照后面、Q 版头像前面：卡面一张一两兆（普通角色照几十 K），四十几张加起来
 # 是别的图片全部加起来的两倍，排在中间的话，大多数玩家用的普通角色照要等它们下完，被拦下、只下了一部分时认得出的角色也少；
-# 仍在 Q 版头像前面，是因为用这些皮肤的玩家一进对局同样要认角色
-ORDER = ("heroes", "profiles", "chips")
+# 仍在 Q 版头像前面，是因为用这些皮肤的玩家一进对局同样要认角色。
+# 称号图标排在最后：只在一局结束、读结算数据表认各栏的称号时用（开着对局报告时才读），缺图标时称号的种类写空
+ORDER = ("heroes", "profiles", "chips", "achieve")
 
 
 @dataclass(frozen=True)
@@ -209,6 +196,8 @@ class AssetItem:
     api: str = ""  # 文件页所在 wiki 的接口；空表示 BWIKI（API）
     # 从卡面现裁的角色照：裁法的 6 个数（见 advisor/vision/cardcrop.py），title、url、size、sha1 是卡面的；None 表示照原样下载
     crop: tuple | None = None
+    # True：BWIKI 上缺失的图片，url 指向备用下载地址，下载出错不问 wiki 的接口，也不算进 wiki 的站点防护和限流
+    mirror: bool = False
 
     @property
     def name(self) -> str:
@@ -228,14 +217,23 @@ class Manifest:
 
 
 def load_manifest() -> Manifest:
-    """读 data/assets_manifest.json；没有清单时返回空清单（开发目录里图片本来就齐）。"""
+    """读 data/assets_manifest.json；没有清单时返回空清单（开发目录里图片本来就齐）。不是官方仓库的版本
+    （update.USE_MIRROR 为假，每次读时看）换掉带 mirror 的项：复刻的改版不碰官方的备用地址，带 fallback 的照 fallback 下
+    （同一个本地文件，字段换成 fallback 里的），不带的去掉（见模块说明）。"""
     try:
         raw = json.loads((paths.data_dir() / MANIFEST).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return Manifest()
+    use_mirror = update.USE_MIRROR
     known = set(AssetItem.__dataclass_fields__)
     items = []
     for item in raw.get("items", []):
+        if item.get("mirror") and not use_mirror:
+            fallback = item.get("fallback")
+            if not isinstance(fallback, dict):
+                continue
+            # 本地文件照原来那一项；fallback 里写了 mirror 也不认：复刻的改版一概不从备用地址下
+            item = {**fallback, "dir": item.get("dir"), "file": item.get("file"), "mirror": False}
         fields = {k: v for k, v in item.items() if k in known}
         if "crop" in fields:
             fields["crop"] = _crop_field(fields["crop"])
@@ -431,7 +429,12 @@ def effective(item: AssetItem, local: dict | None = None) -> AssetItem:
     更新记录要和这一项现在的下法对得上才用（_same_kind）：清单在「照原样下载」和「从卡面现裁」之间改过的（例如 wiki 上
     旧的角色照改成从卡面现裁，或者以后又换回角色照），以前记下的是另一张文件（旧的角色照、卡面）的地址和校验值，照它下的话，
     会把旧角色照当卡面裁、或者把卡面当角色照存下来，校验值、大小又对得上，一直当成在。这样的旧记录不用，照清单下，存好以后
-    _keep 把它清掉。"""
+    _keep 把它清掉。
+
+    备用地址上的图片一律照清单：它没有 wiki 上的更新可记（_keep 不记），覆盖清单里这一项的更新记录是它以前还从
+    wiki 下载时记的，地址是 wiki 上的，照它下会一直下不到。存好以后 _keep 把它清掉。"""
+    if item.mirror:
+        return item
     local = local if local is not None else load_local()
     info = local["updated"].get(item.name)
     if not info or not _same_kind(item, info, local):
@@ -499,7 +502,10 @@ def _recently_gone(item: AssetItem, local: dict, today: date | None = None) -> b
     记录要和这一项现在的下法对得上才算（同 effective 不用另一种下法时记下的更新记录）：记着的文件页（title）就是现在要问的
     那一页（_wiki_title）；以前的记录只有日期，那时的清单项都是照原样下载的，只对照原样下载的项（不带 crop）算。清单里这一项
     后来改成从卡面现裁（问的是卡面）、换了文件页的，记录说的是另一张图，不用，照常下载。日期的规矩见 _within。local 是旧的
-    覆盖清单、没有这一节时当没记。"""
+    覆盖清单、没有这一节时当没记。备用地址上的图片不问 wiki，这样的记录是它以前还从 wiki 下载时记的，不用（同
+    effective）。"""
+    if item.mirror:
+        return False
     record = (local.get("gone") or {}).get(item.name)
     if isinstance(record, dict):
         if record.get("title") != _wiki_title(item):
@@ -1218,20 +1224,53 @@ def _keep(job: _Job, data: bytes, stop) -> str | None:
     except OSError as e:  # 写不进：再下载一次也一样，不重试（文件被占用时 fileio 已经等过）；和网络出错分开记
         return f"{WRITE_FAILED}：{type(e).__name__}: {e}"
     updated = None
-    if (job.url, job.sha1, job.size) != (item.url, item.sha1, item.size):
+    # 备用地址上的图片不记「wiki 上更新过」：地址里带内容的 SHA-1，图换了地址也跟着换，没有 wiki 上的更新记录可记
+    if not item.mirror and (job.url, job.sha1, job.size) != (item.url, item.sha1, item.size):
         updated = {"url": job.url, "size": job.size, "sha1": job.sha1}
     local = load_local()
     # 照原样下载的这一项还留着现裁的记录（清单以前把它列成从卡面现裁）：一并清掉，连同 effective 没用的旧更新记录；以前个别
-    # 下载失败记的日期（failed）也清掉
+    # 下载失败记的日期（failed）也清掉。备用地址上的图片还留着以前从 wiki 下载时的更新记录的（effective 不用它）也清掉
     if (updated or cropped or job.overridden or item.name in local["gone"] or item.name in local["cropped"]
-            or item.name in local["failed"]):
+            or item.name in local["failed"] or (item.mirror and item.name in local["updated"])):
         _update_local(item.name, updated=updated, cropped=cropped)
     return None
+
+
+def _get_mirror_image(job: _Job, fetcher: _Fetcher, sleep: Callable[[float], None], stop):
+    """下载一张放在备用地址上的图片（清单项带 mirror）：404、内容对不上、403 只算这一张失败，不问 wiki 的接口；
+    限流（429、503）、网络出错同普通图片，按 BACKOFF 等过再试，最多 RETRIES 次。备用地址的回话不算进 gate（wiki 的站点防护
+    和限流）：备用地址那边出错不能让同一轮里 wiki 的下载停下，也不能让悬浮窗说成 wiki 拒绝了这台电脑。"""
+    if not job.url:
+        return "清单里没有下载地址"
+    reason = "未尝试"
+    backoff = False
+    for attempt in range(RETRIES):
+        if _stopped(stop):
+            return CANCELLED
+        if backoff and _wait(BACKOFF[min(attempt - 1, len(BACKOFF) - 1)], sleep, stop):
+            return CANCELLED
+        try:
+            data = fetcher.get(job.url, stop)
+        except Blocked as e:  # 403 带拦截页面、拿到的是网页：这一张失败，不按 wiki 被拦算
+            return str(e)
+        except DownloadError as e:
+            reason = str(e)
+            if e.status in (403, 404):  # 这一张自己的问题：不问接口，也不再试（同一个地址再要一次多半还是一样）
+                return reason
+            backoff = True
+            continue
+        problem = _check(job.item, data, job.sha1, job.size)
+        if problem is None:
+            return _keep(job, data, stop)
+        return problem  # 地址里带内容的 SHA-1，内容对不上是这一张坏了，没有 wiki 接口可问
+    return reason
 
 
 def _get_image(job: _Job, fetcher: _Fetcher, gate: _Gate, sleep: Callable[[float], None], stop):
     """下载一张图片（第一遍，或问过接口以后再下一次）。返回 None（存好了）、这一张的失败原因（含 CANCELLED），或 REFRESH
     （旧地址 404、内容和清单对不上，还没问过接口的）。被拦时抛 Blocked；被拒、限流、试探请求怎么算见 _Gate。"""
+    if job.item.mirror:
+        return _get_mirror_image(job, fetcher, sleep, stop)
     if not job.url:
         return "清单里没有下载地址"
     if job.item.crop is not None and job.cut is None:

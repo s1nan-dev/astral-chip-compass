@@ -28,7 +28,10 @@ _sfw 是游戏里另一版原画）
   已经按同一张卡面、同一份裁法裁好的跳过；旧的（以前下的 wiki 角色照、裁法改了、卡面换了）重裁。写的时候先写临时文件、
   再整份换上（advisor/fileio.py），不在原来的文件上改：开发目录里的图片可能是指向别处的硬链接，就地写会改到那一份。
   某一张裁不出（卡面解不开、裁法离谱到算不出来）时报出这一张、其余照裁；有张数没裁成时以退出码 1 结束。
-普通的下载（RolePhoto）跳过 card_crops.json 里列的角色照：它们按卡面现裁，BWIKI 上同名的角色照（有的话）和游戏里的不一样。
+  放在备用地址上的角色照（tools/make_assets_manifest.py 的 MIRRORED）不裁：开发目录里那张是游戏内的图，裁法照留在表里，
+  只给不用官方备用地址的复刻版本首次运行时现裁。
+普通的下载（RolePhoto）跳过 card_crops.json 里列的角色照：它们按卡面现裁（或放在备用地址上），BWIKI 上同名的角色照（有的话）
+和游戏里的不一样。
 
 用法：.venv\\Scripts\\python tools\\fetch_assets.py [类型 ...] [--hero 编号 ...]
       类型默认只有 RolePhoto；已下载的文件会跳过。新角色上线后加 --hero 编号 补下它的各皮肤。
@@ -59,6 +62,7 @@ from advisor.assets import (API, API_INTERVAL, SLOW_INTERVAL, DownloadError, _Fe
                             query_imageinfo, refusal_note)
 from advisor.version import SOURCE_URL  # noqa: E402
 from advisor.vision import cardcrop  # noqa: E402
+from tools import make_assets_manifest  # noqa: E402
 from tools.make_assets_manifest import HEROES, hero_ids, read_by_recognition  # noqa: E402
 
 OUT = {"RolePhoto": ROOT / "assets" / "heroes", "Bust": ROOT / "assets" / "heroes",
@@ -173,7 +177,12 @@ def crop_photos(crops: dict[str, tuple[str, list]], heroes: set[str], cards: Pat
         m = re.match(r"UT_Hero_RolePhoto_(\d+)", photo)
         return m.group(1) if m else None
 
-    todo = {photo: crop for photo, crop in sorted(crops.items()) if not heroes or hero_of(photo) in heroes}
+    # 放在备用地址上的不裁（模块说明）：开发目录里那张是游戏内的图，裁了会把它换掉，生成清单时备用地址上的就成了裁的
+    mirrored = {name for kind, name in make_assets_manifest.MIRRORED if kind == "heroes"}
+    todo = {photo: crop for photo, crop in sorted(crops.items())
+            if (not heroes or hero_of(photo) in heroes) and photo not in mirrored}
+    if mirrored & set(crops):
+        print(f"放在备用地址上、不裁的 {len(mirrored & set(crops))} 张（开发目录里是游戏内的图）")
     if cards is None:
         asked = query_imageinfo(sorted({card.replace("_", " ") for card, _ in todo.values()}), ask)
 

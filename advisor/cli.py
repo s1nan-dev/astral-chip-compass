@@ -14,7 +14,7 @@
   循环往复给的额外那次三选一还没给：--endless-due 9（那一次到期的轮次；--owned 里要有循环往复）
   刷新次数：--rerolls 4（游戏里的「刷新 ×4」）或 --rerolls-used 1（已用的次数，剩余按规则推算）；都不给时按一次都没用过
       推算，同悬浮窗读不出刷新次数时：不按多出来的刷新算（只算刷新一次、按公式扣代价）
-  按筹码方案计算：--scheme "【治愈坦克】CA2-……"（方案的分享文字或短字符串，角色要和 --hero 相同；不给时按默认推荐）
+  按筹码方案计算：--scheme "【治愈坦克】ACC2-……"（方案的分享文字或短字符串，角色要和 --hero 相同；不给时按默认推荐）
 按筹码方案计算时，推荐全文写每个选项的位次（和推荐卡片相同）和总分（排查用），不写推荐度（按卡片的先后重新分的推荐度和
 各张自己的总分对不上）；另写刷新按方案的比较、标了档位的候选的档位前瞻、收入降档、同一档按档位前瞻排先后的说明和
 选了之后拿不到的必选、推荐。
@@ -474,7 +474,7 @@ def scheme_from_text(db: DB, text: str, hero: str):
     from .schemes import get_catalog, parse_share
     found = parse_share(text, get_catalog(db)).schemes
     if not found:
-        raise SystemExit("--scheme 无法识别：请粘贴筹码方案的分享文字或短字符串（「【名称】筹码方案 v2｜……」或「【名称】CA2-……」）")
+        raise SystemExit("--scheme 无法识别：请粘贴筹码方案的分享文字或短字符串（「【名称】筹码方案 v2｜……」或「【名称】ACC2-……」）")
     scheme = found[0]
     if scheme.hero != hero:
         raise SystemExit(f"--scheme 的方案是「{scheme.hero}」的，和 --hero「{hero}」不同")

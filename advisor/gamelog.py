@@ -14,17 +14,28 @@ Session 记下的每一条（格式与 Session.recent_events 相同：time 精�
 - 识别读数（read:xxx，见 Session.trace 和 vision.pipeline.FrameProcessor._trace）：read:select 三选一（按记下的位置只认字
   读成的另有 how 为 fast；那样读没读成、改用完整读的另有 fast_miss，是没读成的原因，见 FrameProcessor._select_read）、
   read:selected 选中的候选变了、read:select_rejudged 同一组候选第一次读错、后来读对以后记账重新判（rerolls 刷新次数、
-  in_table 概率行在不在概率表里、source 来源，各自 [第一次, 读对的]，见 Session._open_judged）、read:hud 轮次和任务栏
+  in_table 概率行在不在概率表里、source 来源，各自 [第一次, 读对的]，见 Session._open_judged）、read:select_zero 刷新次数
+  读成 0、按账又不该是 0，隔一会儿再完整识别三张卡（expected 至少该有几次、attempt 第几回，见
+  FrameProcessor._select_reads）、read:hud 轮次和任务栏
   （数字被挡住、只看见轮次标记时另有 mark 为 true；先在标记左边那一小块只认字就读到了的另有 how 为 crop，见
   FrameProcessor._round_quick）、read:round_crop 轮次被挡住时在标记左边那一小块认出的数（round，是手上的轮次或
   往前一轮时交给记账；别的数不交、另有 held 为 true，等完整读确认）、read:progress 进度条（那一块和上次认字时一样、
-  不认字沿用上次读数的另有 reused 为 true，见 FrameProcessor._read_progress）、read:hero 角色、read:stars 星数（how 为「头像」「全员相同」
+  不认字沿用上次读数的另有 reused 为 true，见 FrameProcessor._read_progress）、read:cap_rejected 不采用的进度上限
+  （cap 格数、当时认的地图 map、本局难度的依据 difficulty，同一个数只记一次，见 Session._reject_cap）、
+  read:hero 角色、read:stars 星数（how 为「头像」「全员相同」
   「名字」）、read:coins 星币数（coins、reason 读不出的原因、text、score）、read:own_by_name 头像认不出时按本局记住的名字
   找自己那一行（row 为找到的行或 null，reason 为找不到或不读的原因；不写名字）、read:players 玩家列表和队友、
   read:template 保存角色模板、read:panel「查看筹码」面板（page 第几页、arrows 两端翻页箭头）、read:select_hidden
   三选一被玩家隐藏（开始隐藏时一条，offer 是当时的候选）、read:screen 对局外的画面、read:mutators 畸变组件、
   read:hero_select 认出选角界面、read:difficulty 和 read:difficulty_cap 难度、read:victory 通关画面、read:game_over_banner
-  打输时棋盘上的 GAME OVER 横幅、read:finish_look 看见像通关画面的珊瑚红底、打完时棋盘上那条蓝色斜带（打赢、打输都有）的颜色（还没认字；look 为
+  打输时棋盘上的 GAME OVER 横幅、read:cue_unread 三选一的来源画面（升星横幅、购买窗）颜色像、一段里认了几次字都没
+  认出来（cue 为 banner 或 shop，tries 为认了几次，一段只记一条，见 vision.pipeline.FrameProcessor._check_source_cues）、
+  read:levelup_banner 读到升星横幅上的名次（rank 第几行、own_row 自己那一行，从 0 数；同一个横幅连着几帧只记第一次，
+  名次变了另记）、read:shop_window 认出筹码商店的购买窗（price 价格，读不出为 null；同一个购买窗只记第一次，价格变了
+  另记）、read:source_settle 三选一关掉
+  以后按星数对账（star、base 起点的星数、levelups 已认准的升星、unsure 拿不准的次数、source 补成什么，对不上为 null、
+  selects 这一段的几次；另有 banner_s、row_up 时见 session.Session._settle_sources）、
+  read:finish_look 看见像通关画面的珊瑚红底、打完时棋盘上那条蓝色斜带（打赢、打输都有）的颜色（还没认字；look 为
   coral 或 banner，coral、white 为占比；离上次看见隔了 [watch] pick_grace_ms 以上才记、为 0 时不记，见
   vision.pipeline.FrameProcessor._check_victory）、read:game_over 对局结束、read:game_result 读到奖励画面以后的胜负（outcome、how、coins）、
   read:rejoined 主菜单结束的那一局又连回来、撤回了那次结束接着记（left 离开时第几轮、round 这次第几轮、seconds 离开了几秒）、
@@ -34,7 +45,8 @@ Session 记下的每一条（格式与 Session.recent_events 相同：time 精�
   不再空转、又紧接着认回主菜单重新空转（来回）满了次数时各记一条：on 为 true、why 为 bar_only（开始按钮那一块在来回，
   这次停在主菜单期间只看底栏），on 为 false、why 为 flapping（底栏也在来回，一分钟内不空转）；判过以后这次停在主菜单期间
   来回的那几次不再记（见 vision.pipeline.FrameProcessor._menu_trip）、read:resumed
-  恢复识别、read:newgame_corroborated / read:newgame_vetoed / read:round_implausible 新一局判定的印证和否决、
+  恢复识别、read:newgame_corroborated / read:newgame_vetoed / read:round_implausible / read:round_jump_implausible
+  新一局判定的印证和否决、轮次比进度条走得多出太多而不采用的读数、
   read:match_cancelled / read:result_without_game / read:result_map_mismatch 对局外画面的特殊情形、read:user 用户在
   悬浮窗上的操作（见 ui.overlay.Overlay._trace_user）。
 - 识别本身的状态（Session.log_state）：pause / resume 识别暂停和恢复，带原因、细节和时长，见 overlay_parts/watcher.py 的 Watcher.set_paused；
@@ -52,7 +64,7 @@ Session 记下的每一条（格式与 Session.recent_events 相同：time 精�
   出来的原因（why：stopped / noisy / slow / error，量出来时为空串，见 ui/overlay_parts/ocr_check.py 的 OcrCheck）。
 下面这些种类和字段（status 的 changed、read:select 的 rarity、partial、how 和 fast_miss、advice 的 raw 和 places、read:coins、
 read:own_by_name、read:stars 的 how 为「名字」、read:hud 的 mark 和 how、read:progress 的 reused、read:round_crop、
-read:select_rejudged、
+read:select_rejudged、read:select_zero、
 read:panel 的 page 和 arrows、read:select_hidden、read:rejoined、read:menu_idle、read:finish_look、capture、layer、grab_stats、
 recog_stats、
 download_stats、
