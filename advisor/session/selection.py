@@ -321,23 +321,24 @@ class SelectTracker:
     @property
     def closing(self) -> bool:
         """三选一显示着、再有一帧看不到它就按关掉处理（GONE_FRAMES）：识别流程只在这样的帧上看画面上有没有「您当前正处于
-        隐藏UI状态」（见 hidden），平时不看。"""
+        隐藏UI状态」或 Esc 菜单（见 hidden），平时不看。"""
         return self._visible and self._gone + 1 >= GONE_FRAMES
 
-    def hidden(self):
-        """三选一被隐藏（识别流程在正要按关掉处理的那一帧认出了「您当前正处于隐藏UI状态」）：当界面还开着，这一帧不算看不到
-        它，不记下选中的、不撤销，悬浮窗上的推荐留着。之后的帧照常：
+    def hidden(self, by: str = "hidden_ui"):
+        """三选一被临时盖住（识别流程在正要按关掉处理的那一帧认出了「您当前正处于隐藏UI状态」，或按 Esc 打开的菜单；by 是
+        认出的哪一种）：当界面还开着，这一帧不算看不到它，不记下选中的、不撤销，悬浮窗上的推荐留着。之后的帧照常：
           点「显示」、三选一回来了：接着这一次（不算重新出现，同一组候选不撤销、不重发推荐，绿框照常认）；
           那行字没了、三选一也没回来（隐藏着时间到了、游戏替玩家选了等）：照常按关掉处理，记下最后看到的绿框，和没隐藏时一样
             （游戏实际拿的可能是最左边那个，之后打开面板时按面板改正，见 panel.panel_fixes）；
-          那一帧没认出字（被挡住、认错）：照常按关掉处理，三选一回来时按同一组候选又出现撤销、之后再记，结果仍然对。
-        不发事件，返回 None。开始隐藏时记一条识别记录（select_hidden，offer 为当时的候选）。"""
+          那一帧没认出字、菜单也没认出（被挡住、认错）：照常按关掉处理，三选一回来时按同一组候选又出现撤销、之后再记，
+            结果仍然对。
+        不发事件，返回 None。开始隐藏时记一条识别记录（select_hidden，offer 为当时的候选，by 为哪种盖住）。"""
         if not self._visible:
             return None
         self._gone = min(self._gone, GONE_FRAMES - 1)
         if not self._hidden:
             self._hidden = True
-            self.session.trace("select_hidden", offer=list(self._last_names or ()))
+            self.session.trace("select_hidden", offer=list(self._last_names or ()), by=by)
         return None
 
     def resend(self) -> None:
@@ -555,8 +556,9 @@ class SelectTracker:
         s._map_from_chips(names)
         s._difficulty_changed()  # 地图专属筹码推定出的地图、这次的概率行都会改变本局难度
         if s.hero_source == "pending":
-            # 角色待识别时不给推荐（按上一局的角色算可能完全不对），请用户选择角色
-            key = ("hero_needed", names)
+            # 角色待识别时不给推荐（按上一局的角色算可能完全不对），请用户选择角色。立绘认出的是新角色（game.new_hero）时
+            # 一样不给（资料里没有她的推荐规则），原因照样记 hero；悬浮窗按 new_hero 改写提示，所以它变了也重发一次
+            key = ("hero_needed", names, s.game.new_hero)
             if key == self._last_key:
                 return None
             self._last_key = key
@@ -607,7 +609,8 @@ class SelectTracker:
         return s._event("advice", advice=advice, state=state, problems=problems, raw=list(seen.raw),
                         select_no=self._select_no, owned_unknown=unknown, map_source=s.map_source,
                         difficulty_source=s.difficulty_info.source, owned_sources=owned_sources,
-                        owned_panel=owned_panel, source_by=by)
+                        owned_panel=owned_panel, source_by=by, teammate_guesses=s.teammate_guesses(),
+                        report_info=s.report_info(seen))
 
     def _advise(self, seen, names: tuple, rarity, state, plan, unsure: bool, key):
         """算这一帧的推荐（_compute）：当前星数的一份；星数拿不准（unsure，见 first_star）时另算高一星的一份；按方案计算时
@@ -696,7 +699,9 @@ class SelectTracker:
 
         一项里记：轮次（头一次算进来时）、原因（按头一次出现的先后，不重复）、advised（后来给了推荐没有）、星数和来源
         （一直没给推荐时开这一项这一刻按概率行估，见 _source_guess；后来给了推荐时由 _note_advised 改成推荐里的）、
-        最后看到选中的筹码（关掉时由 close 补上）。同一次三选一里再算进来时只补原因。"""
+        最后看到选中的筹码（关掉时由 close 补上）。同一次三选一里再算进来时只补原因。
+        原因里有 hero（角色还没认出来）时另记这时左下立绘最像谁、相似度（hero_guess、hero_score：最近一次认立绘的结果，
+        game._hero_seen；一次都没认过时为 None），每次算进 hero 时按最近一次的改；没有 hero 时两项都是 None。"""
         s = self.session
         item = self._unadvised
         if item is None:
@@ -704,10 +709,13 @@ class SelectTracker:
             item = self._unadvised = {
                 "select_no": self._select_no, "round": s.settings.round, "reasons": [],
                 "advised": False, "star": star, "source": "task" if source == "task" else None, "pick": None,
+                "hero_guess": None, "hero_score": None,
             }
         for reason in reasons:
             if reason not in item["reasons"]:
                 item["reasons"].append(reason)
+        if "hero" in reasons:
+            item["hero_guess"], item["hero_score"] = s.game._hero_seen or (None, None)
 
     def _note_advised(self, state) -> None:
         """这一次三选一后来给出了推荐（见 frame 建 advice 事件那一处）：之前开过的 unadvised 项改成给了推荐，

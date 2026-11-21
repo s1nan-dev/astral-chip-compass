@@ -57,8 +57,9 @@ from . import templates
 from .chip_select import (hidden_ui_visible, looks_like_overlay_screen, name_strip, read_chip_select,
                           read_chip_select_fast, reread_selected, select_layout, ui_scale)
 from .coins import read_own_coins
+from .esc_menu import esc_menu_visible
 from .frame import Frame, as_frame
-from .hero import read_hero, save_template
+from .hero import new_heroes, read_hero, save_template
 from .hud import (Hud, is_select_screen, mutator_catalog, progress_look, read_hud, read_pregame, read_progress,
                   read_round_crop, same_progress_look, task_panel_visible)
 from .pick_watch import PickWatch
@@ -772,6 +773,8 @@ class FrameProcessor:
         # 悬浮窗手动模式跟随三选一时，隐藏着也接着看（等三选一回来或关掉）；按热键的那一帧是隐藏着的时候不报「当前画面不是
         # 筹码三选一界面」
         self.select_hidden = False
+        # 上一行的原因（"hidden_ui" 或 "esc_menu"，记为识别记录 read:select_hidden 的 by）；没认出时为 None
+        self._hidden_by: str | None = None
         # Session 不知道的那一次三选一正被隐藏着（按热键的那一帧认出了那行字，见 _select_hidden）：之后每帧照样看一眼那行字，
         # 那行字没了、三选一回来了就不再看
         self._hidden_unseen = False
@@ -1203,21 +1206,28 @@ class FrameProcessor:
             return
         self.covered_shot = shot
 
-    def _select_hidden(self, img: Frame | np.ndarray, force: bool = False) -> bool:
+    def _select_hidden(self, img: Frame | np.ndarray, force: bool = False) -> str | None:
         """这一帧没有三选一：三选一正要按关掉处理（WatchHints.select_closing，界面消失后的第 GONE_FRAMES 帧起）时，看一眼
-        画面上有没有「您当前正处于隐藏UI状态」（chip_select.hidden_ui_visible，只识别已知位置的一条，约 10 毫秒），平时不看。
-        认出了就是玩家点了三选一界面上的「隐藏」：交给 Session.on_select_hidden，当三选一还开着。
-        隐藏期间每一帧都是这样的帧（不算看不到三选一，一直正要按关掉处理），每帧看一次；隐藏着的时候识别按平时的间隔取帧。
-        按热键要求的那一帧（force）也看一眼：手动模式下三选一出来以后没按过热键就被隐藏了，Session 不知道这一次三选一，
-        不会正要按关掉处理。认出了就之后每帧照样看（_hidden_unseen），悬浮窗手动模式据此跟随，点「显示」、三选一回来时照常
-        认出、给推荐；那行字没了就不再看。这一次 Session 那边没开着，交给它不起作用（SelectTracker.hidden）。"""
+        画面上有没有「您当前正处于隐藏UI状态」（chip_select.hidden_ui_visible，只识别已知位置的一条，约 10 毫秒），没认出
+        时再看一眼画面正中是不是 Esc 菜单（esc_menu.esc_menu_visible，认出菜单上的图鉴、设定、认输、关闭游戏中的两项，
+        一次约 0.16 秒），平时不看。认出了就是三选一被临时盖住（玩家点了「隐藏」，或按 Esc 打开了菜单）：交给
+        Session.on_select_hidden，当三选一还开着。
+        隐藏着、菜单开着期间每一帧都是这样的帧（不算看不到三选一，一直正要按关掉处理），每帧看一次；识别按平时的间隔取帧。
+        按热键要求的那一帧（force）也看一眼：手动模式下三选一出来以后没按过热键就被隐藏、打开了菜单，Session 不知道这一次
+        三选一，不会正要按关掉处理。认出了就之后每帧照样看（_hidden_unseen），悬浮窗手动模式据此跟随，关掉菜单、「显示」以后
+        三选一回来时照常认出、给推荐；都认不出就不再看。这一次 Session 那边没开着，交给它不起作用（SelectTracker.hidden）。
+        返回认出的原因（"hidden_ui" 或 "esc_menu"，记为识别记录 select_hidden 的 by）；都没认出时为 None。"""
         closing = self._hint().select_closing
         was, self._hidden_unseen = self._hidden_unseen, False  # 看那行字出错时不再接着看
         if not (closing or force or was):
-            return False
-        hidden = bool(_timed("select_hidden", hidden_ui_visible, img))
-        self._hidden_unseen = hidden and not closing
-        return hidden
+            return None
+        by = None
+        if bool(_timed("select_hidden", hidden_ui_visible, img)):
+            by = "hidden_ui"
+        elif bool(_timed("esc_menu", esc_menu_visible, img)):
+            by = "esc_menu"
+        self._hidden_unseen = by is not None and not closing
+        return by
 
     def _note_unread(self, img: np.ndarray) -> None:
         """这一帧的三选一交给记账以后（process，在 _call_frame 之后）：记账说这一帧新读的三选一有筹码没读出来、又不在刷新后
@@ -1381,12 +1391,14 @@ class FrameProcessor:
                 self._recheck_round = self._recheck_progress = self._check_due = False
                 self._drop_check_at = None
                 self._clear_select_retries()
-                self.select_hidden = bool(self._safe("select_hidden", self._select_hidden, frame, force))
+                self._hidden_by = self._safe("select_hidden", self._select_hidden, frame, force)
+                self.select_hidden = bool(self._hidden_by)
             if seen is not None or self.select_hidden:
-                self._safe("quiet", self._note_in_game, now)  # 三选一显示着（被玩家隐藏着也算）：在对局里
+                self._safe("quiet", self._note_in_game, now)  # 三选一显示着（被隐藏着也算）：在对局里
             if self.select_hidden:
-                # 三选一被玩家隐藏了：当它还开着，这一帧不算看不到它，不记下选中的、不撤销，推荐留着
-                self._safe("frame", self._call, events, self.session.on_select_hidden)
+                # 三选一被临时盖住（玩家点了「隐藏」或按 Esc 打开了菜单）：当它还开着，这一帧不算看不到它，不记下选中的、
+                # 不撤销，推荐留着
+                self._safe("frame", self._call, events, self.session.on_select_hidden, self._hidden_by or "hidden_ui")
             else:
                 self._safe("frame", self._call_frame, events, seen)
                 if seen is not None:
@@ -2266,9 +2278,11 @@ class FrameProcessor:
         guess = _timed("hero", read_hero, img, self.db)
         self._hero_misses = 0 if guess is not None and guess.hero else self._hero_misses + 1
         if guess is not None:
+            new = getattr(guess, "new", None)
             self._trace("hero", hero=getattr(guess, "hero", None), best=getattr(guess, "best", None),
                         score=round(float(getattr(guess, "score", 0.0)), 3),
-                        runner_up=round(float(getattr(guess, "runner_up", 0.0)), 3), image=getattr(guess, "image", ""))
+                        runner_up=round(float(getattr(guess, "runner_up", 0.0)), 3), image=getattr(guess, "image", ""),
+                        **({"new": new} if isinstance(new, str) and new else {}))  # 认出的是新角色（资料里还没有）
         ev = self._call(events, self.session.on_hero, guess)
         if ev is not None and ev.kind == "newgame":
             self._hero_misses = 0
@@ -2388,20 +2402,51 @@ class FrameProcessor:
         self._last_mates = now
         self._mates_tries += 1
         players = _timed("players", read_players, img, hero)
-        if players is None or players.own_row is None:
+        if players is None:
+            return True
+        # 资料里的角色，加上识别图片的最新清单里资料还没有的新角色（hero.new_heroes：队友照常显示她的名字，new 标出是她）
+        fresh = new_heroes(self.db)
+        by_id = {**fresh, **{h.id: h.name for h in self.db.heroes.values()}}
+        if players.own_row is None:
+            # 认不出自己是哪一行：自己的头像最像的那一行、相关度，和那一行静止比对最像谁，只交给对局报告（Session.on_self_row）
+            match = players.self_match
+            row = players.rows[match["row"]] if match is not None and 0 <= match["row"] < len(players.rows) else None
+            info = None if match is None else {
+                "self_score": match["score"], "self_margin": match["margin"],
+                **(self._guess_fields(row, by_id) if row is not None else {}),
+            }
+            self._self_row(events, info)
             return True
         # 按头像认出的自己那一行的名字：头像认不出时按名字找自己（「查看筹码」面板）
         mine = players.rows[players.own_row] if players.own_row < len(players.rows) else None
         if mine is not None and mine.visible and mine.name and not mine.bot:
             self._note_own(players.own_row, name_key(mine.name))
-        by_id = {h.id: h.name for h in self.db.heroes.values()}
-        rows = [{"row": p.row, "hero": by_id.get(p.hero_id), "bot": p.bot} for p in players.teammates]
+        self._self_row(events, None)
+        # 每一行另带最像的角色、相似度和比第二像的高出多少（不论采用没有），以及最像的那套造型、第二像的角色和造型：
+        # 队友认不出时，对局报告里记这一行最像谁
+        rows = [{"row": p.row, "hero": by_id.get(p.hero_id), "bot": p.bot,
+                 "new": p.best_id in fresh, **self._guess_fields(p, by_id)} for p in players.teammates]
         self._trace("players", own_row=players.own_row, rows=[
             {"row": p.row, "hero": by_id.get(p.hero_id), "best": by_id.get(p.best_id), "score": p.score,
              "margin": p.margin, "name": p.name, "bot": p.bot} for p in players.rows
         ])
         self._call(events, self.session.on_teammates, rows)
         return True
+
+    def _self_row(self, events: list[Event], info: dict | None) -> None:
+        """自己那一行认没认出来交给 Session（on_self_row：认不出时记下最像的那一行，认出了清掉），只给对局报告。"""
+        fn = getattr(self.session, "on_self_row", None)
+        if callable(fn):
+            self._call(events, fn, info)
+
+    @staticmethod
+    def _guess_fields(player, by_id: dict) -> dict:
+        """玩家列表一行静止比对的结果（只给对局报告）：最像的角色名、相似度、比第二像的高出多少、最像的那套造型、第二像的
+        角色名、它的造型和相似度（没有的为 None）。"""
+        return {"best": by_id.get(player.best_id), "score": player.score, "margin": player.margin,
+                "skin": getattr(player, "best_skin", None), "second": by_id.get(getattr(player, "second_id", None)),
+                "second_skin": getattr(player, "second_skin", None),
+                "second_score": getattr(player, "second_score", None)}
 
     def _save_template(self, img: Frame | np.ndarray, events: list[Event]) -> bool:
         """手动指定了角色、立绘却没认出来（或认成别人）：这一帧左下角看得见立绘时，存成这个角色的模板。看左下角的按钮和存的

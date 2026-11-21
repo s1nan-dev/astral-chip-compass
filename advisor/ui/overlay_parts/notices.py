@@ -9,32 +9,22 @@
 """
 from __future__ import annotations
 
-import html
 import os
 import re
 import traceback
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import QUrl
 from PySide6.QtGui import QDesktopServices, QGuiApplication
-from PySide6.QtWidgets import QLabel, QPushButton
+from PySide6.QtWidgets import QPushButton
 
 from ... import paths as app_paths
 from ...paths import logs_dir
 from ...schemes import NOTICE_BROKEN, NOTICE_NEWER, NOTICE_USED_BACKUP
 from .. import lang, log_error
-from ..text import DENIED_CODE, capture_detail, link_style, linkify
-from .factory import (
-    WrapLabel,
-    _button,
-    _clear_layout,
-    _column_widget,
-    _equal_width,
-    _fill_grid,
-    _grid,
-    _row_widget,
-    _set_tip,
-)
+from . import notice_blocks
+from ..text import DENIED_CODE, capture_detail
+from .factory import _clear_layout
 from .wording import (
     ABOUT_LINK,
     ASSETS_TIP,
@@ -69,7 +59,6 @@ from .wording import (
     EXPORTED,
     EXPORTED_NO_ZIP,
     FOLDER_UNWRITABLE,
-    FREE_NOTICE_LINK,
     FREE_NOTICE_RISK,
     GAIN_TEXT,
     GAIN_WHY,
@@ -198,22 +187,6 @@ def shown_keeping(text: str, keep) -> str:
     return lang.t(text)
 
 
-def notice_html(text: str, about: bool = False) -> str | None:
-    """提示行做成链接的写法（富文本）：文字里的网址变成能点的链接（text.linkify，交给系统默认浏览器）；about 为真时（第一次
-    启动的「免费软件」声明那一行）最后一处「关于」（FREE_NOTICE_LINK）也做成同样带底色的链接，地址是 ABOUT_LINK（不是网址，
-    NoticeView.open_link 打开「关于」窗口）。没有要做成链接的时为 None（照旧纯文字）。"""
-    has_url = re.search(r"https?://", text) is not None
-    has_about = about and FREE_NOTICE_LINK in text
-    if not (has_url or has_about):
-        return None
-    out = linkify(text)
-    if has_about:
-        mark = html.escape(FREE_NOTICE_LINK)
-        at = out.rfind(mark)
-        out = f'{out[:at]}<a href="{ABOUT_LINK}" style="{link_style()}">{mark}</a>{out[at + len(mark):]}'
-    return out
-
-
 def few_failed_text(n: int, later: bool = False) -> str:
     """个别图片下不了时下载那一行的文字：失败的全是明天再试的用 DOWNLOAD_FEW，混着别的失败（later）用 DOWNLOAD_FEW_LATER；
     1 张写「用到这张图片的」，多张写「用到这些图片的」。"""
@@ -232,13 +205,6 @@ def folder_text(folder) -> str:
         return app_paths.shown(str(Path(folder).relative_to(app_paths.app_dir())))
     except ValueError:
         return str(folder)
-
-
-# 按钮排在文字下面的提示行：按钮多于两个的都这样排；键在这里的有两个按钮时也这样排（软件内更新那一条、性能自检问「是否允许」
-# 那一条的文字较长，两个按钮跟在右边时文字挤成很多行）
-STACKED_NOTICES = frozenset({"update", "ocr_check"})
-# 两个按钮一样宽的提示行：按钮只有一个字时（〔换〕〔不换〕〔是〕〔否〕）也要好点，宽度见 factory._equal_width
-EQUAL_WIDTH_NOTICES = frozenset({"hant", "ocr_check"})
 
 
 def update_rows(notices) -> list[tuple]:
@@ -632,7 +598,7 @@ class NoticeView:
         # 热键不可用的那一句（热键能用时为空；热键的部件给，不给时按能用）
         self.hotkey_problem = hotkey_problem if hotkey_problem is not None else (lambda: "")
         # 软件内更新的几条（update_notices(这一轮的快照) → UpdateControl.notices，对局中为空；不给时没有）；全局提示里一行
-        # 内容的宽度（notice_width()：按钮排在文字下面的提示行看按钮一行放不放得下，不给时每行两个）
+        # 内容的宽度（notice_width()：提示块右下角的按钮一行放不放得下，不给时每行两个）
         self.update_notices = update_notices if update_notices is not None else (lambda view: ())
         self.notice_width = notice_width
         # 显示筹码名（按界面语言换繁体名）：不给时原样显示（测试、预览）
@@ -670,11 +636,10 @@ class NoticeView:
                               app_paths.shown(ERR_RECORD))
 
     def update(self, view) -> None:
-        """按当前状态排出提示行（NoticeModel.rows），内容（含悬停说明）变了时重建各块。文字里有网址的提示行，网址做成能点的
-        链接（用系统默认浏览器打开）；「免费软件」声明里的「关于」也做成链接（notice_html），点了打开「关于」窗口；其余的
-        按纯文本画（文字里的方案名等照原样显示）。按钮多于两个的提示行（有新版本的那一条），和 STACKED_NOTICES 里有两个按钮的（更新下好了、更新出错、性能自检问是否允许），文字占一行，
-        按钮排在文字下面：一行放得下（notice_width）就排成一行，否则每行两个；其余的按钮跟在文字右边。
-        认出繁体游戏那一条、性能自检的结果在对局进行中（playing）先不显示。"""
+        """按当前状态排出提示行（NoticeModel.rows），内容（含悬停说明）变了时重建各块。每条提示排成一个小块
+        （notice_blocks）：首句加粗当标题，正文一句一行，按钮在块的右下角（一行放得下 notice_width 就排成一行，否则每行
+        两个）；网址换成文字链接（用系统默认浏览器打开），「免费软件」声明里的「关于」也是链接，点了打开「关于」窗口。
+        文字一律转义（方案名等照原样显示）。认出繁体游戏那一条、性能自检的结果在对局进行中（playing）先不显示。"""
         model = self.model
         capture = self.capture()
         personal = self.images_shown()
@@ -704,51 +669,8 @@ class NoticeView:
         model.shown = key
         for notice_box in self.boxes.values():
             _clear_layout(notice_box)
-        for name, text, level, btns in rows:
-            text = lang.t(text)
-            stacked = len(btns) > 2 or (name in STACKED_NOTICES and len(btns) > 1)
-            row, line = _column_widget(6) if stacked else _row_widget(8)
-            row.setObjectName(f"notice-{name}")
-            rich = notice_html(text, about=name == "free")
-            # 纯文本的用 WrapLabel：换行时名称、术语和常用双字词不从中间拆开（例如不排成「下次启动拾 / 星助手」），
-            # text() 照旧是原文。带链接的富文本不插字符（会插进网址里），照旧由 Qt 断行
-            label = WrapLabel(text) if rich is None else QLabel(text)
-            label.setObjectName(f"notice_{level}")
-            label.setWordWrap(True)
-            label.setTextInteractionFlags(Qt.NoTextInteraction)  # 不接鼠标按下和拖动，按在文字上也能拖动悬浮窗
-            if rich is None:
-                # 没有链接的照纯文本画：文字里带着方案名这类自己起的名字时，像网页标记的（<b>粗</b>）也照原样显示
-                label.setTextFormat(Qt.PlainText)
-            else:
-                # 网址、「关于」做成能点的链接（带底色，同「关于」窗口）：链接由 open_link 接（网址交给系统默认浏览器，「关于」
-                # 打开「关于」窗口）；自己处理链接的标签不关文字交互，按在链接上照样能点
-                label.setTextFormat(Qt.RichText)
-                label.setText(rich)
-                label.setOpenExternalLinks(False)
-                label.linkActivated.connect(self.open_link)
-                label.setTextInteractionFlags(Qt.LinksAccessibleByMouse)
-            if tips.get(name):
-                # 诊断包的路径放得下时照写一行，太长时在「\」处换行（text.tip_lines）
-                _set_tip(label, shown_keeping(tips[name], paths))
-            line.addWidget(label, 0 if stacked else 1)
-            buttons = []
-            for btn_text, accent, action, tip in btns:
-                btn = _button(lang.t(btn_text), accent=accent, tip=lang.t(tip))
-                btn.clicked.connect(lambda _=False, cb=self.action(action): cb())
-                buttons.append(btn)
-            grid = None
-            if stacked:
-                grid = _grid()
-                line.addLayout(grid)
-            else:
-                for btn in buttons:
-                    line.addWidget(btn, 0, Qt.AlignVCenter)
-            self.boxes[model.area(name)].addWidget(row)
-            if name in EQUAL_WIDTH_NOTICES and len(buttons) > 1:
-                _equal_width(buttons)  # 放进悬浮窗以后再量（按悬浮窗的样式表）
-            if grid is not None:  # 放进悬浮窗以后再量按钮（按悬浮窗的样式表）
-                _fill_grid(grid, buttons, self.notice_width() if self.notice_width is not None else 0)
-            row.show()
+        notice_blocks.render(self, [(n, lang.t(t), lvl, b) for n, t, lvl, b in rows], tips,
+                             lambda tip: shown_keeping(tip, paths))
 
     @staticmethod
     def _hant_row(row: tuple) -> tuple:
@@ -767,7 +689,7 @@ class NoticeView:
         return getattr(self, action)
 
     def open_link(self, href: str) -> None:
-        """提示行里点了链接（notice_html）：「关于」（ABOUT_LINK）打开「关于」窗口、停在免责声明那一节（外壳的 open_about）；
+        """提示行里点了链接（notice_blocks.link_marks）：「关于」（ABOUT_LINK）打开「关于」窗口、停在免责声明那一节（外壳的 open_about）；
         网址交给系统默认浏览器打开（同「关于」窗口里的链接）。"""
         if href == ABOUT_LINK:
             self.action("open_about")()

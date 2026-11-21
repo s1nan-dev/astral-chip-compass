@@ -2,10 +2,12 @@
 
 这些模块（advisor/logbook.py、diagnostics.py、assets.py、version.py、usage.py）由发布工程负责。悬浮窗只按约定的接口调用：
   logbook      record_offer(state, advice, offer_id, client=None, map_source=None, source_by=None,
-               difficulty_source=None, owned_sources=None, owned_panel=None)、
+               difficulty_source=None, owned_sources=None, owned_panel=None, teammate_guesses=None,
+               report_info=None)、record_shown(offer_id) → 推荐真的显示在了悬浮窗上、record_stop(why) → 还没记对局结束时
+               程序退出（quit）或游戏窗口没了（game_closed）、
                record_source(offer_id, source, by) → 三选一关掉以后补准了来源、record_pick(offer_id, chosen)、
                record_unadvised(select_no, round=None, reasons=None, advised=False, star=None, source=None,
-               pick=None) → 认出了三选一、没给推荐的那一次、
+               pick=None, hero_guess=None, hero_score=None, client=None) → 认出了三选一、没给推荐的那一次、
                record_feedback(offer_id, reason, note)、game_count_since_calibration()、
                records_between(start, end=None) → 这段时间的推荐日志（诊断包用）、
                record_game_over(**info) → 记下对局结束（同一局只调一次；撤销了误认的结束时，真正结束时再调一次；
@@ -27,7 +29,10 @@
                is_crop_failure(reason)、GONE → 失败的原因是卡面裁不出角色照、wiki 上已删除；
                isolated(failed)、deferred(failed) → 这一轮的失败是不是个别图片下不了、其中明天再自动下载的那几张；
                cooldown() → 被站点防护拦下以后的冷却记录（until：到点的时刻），没有时为 None；
-               导入时由这里接上从卡面现裁角色照的函数（use_cropper 的 load：第一次要裁图时才导入，见 _assets）
+               fetch_remote_manifest(stop) → 取识别图片的最新清单，交回 REMOTE_SAVED 等几种之一（在后台线程里调用）；
+               report_status() → 对局报告里识别图片的情况（清单版本、应有几张、本机有几张、缺的文件名、这次运行里下载的张数）；
+               导入时由这里接上从卡面现裁角色照的函数（use_cropper 的 load：第一次要裁图时才导入）、这一版资料里的
+               角色编号（use_hero_ids 的 load：第一次合并最新清单时才读），见 _assets
   version      VERSION、data_date()、about_sections()
 模块缺失或调用出错时不让悬浮窗退出：错误写进错误记录，界面上给出提示。
 """
@@ -62,7 +67,25 @@ def _assets():
     # 在这里接上。只登记导入它的函数（_crop_png_loader），下载模块第一次要裁图时才导入：下载模块本身不依赖识别那一侧，图片
     # 都在、用不着裁图时不导入，裁图模块导入出错也只在要裁图时记一条错误记录
     assets.use_cropper(load=_crop_png_loader)
+    # 识别图片的最新清单可能带来这一版资料里还没有的角色：这样的角色照、Q 版头像认出来也对不上角色，不下。下载模块在底层、不读
+    # 资料，这里登记交回角色编号的函数（_hero_ids_loader），第一次合并最新清单时才读
+    assets.use_hero_ids(load=_hero_ids_loader)
     return assets
+
+
+def _hero_ids_loader():
+    """这一版资料里所有角色的编号（data/heroes.json 的 id，经资料对象 advisor/data.py 的 load_db 读，整数）：下载模块第一次
+    合并识别图片的最新清单时调用（advisor/assets.py 的 use_hero_ids），只调用一次，在调用它的线程里读（几十毫秒）。读不出时
+    记进错误记录、交回 None：按没登记算，最新清单里的图片都下。"""
+    try:
+        from ..data import load_db
+
+        heroes = load_db().heroes.values()
+    except Exception:  # noqa: BLE001
+        log_error("读角色资料出错，识别图片的最新清单里的图片都会下载（拾星助手仍在运行）", traceback.format_exc(),
+                  append=True)
+        return None
+    return sorted({h.id for h in heroes if isinstance(h.id, int) and not isinstance(h.id, bool) and h.id > 0})
 
 
 def _crop_png_loader():

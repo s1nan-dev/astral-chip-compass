@@ -59,7 +59,7 @@ from advisor.ui.overlay_parts import lanes as overlay_lanes  # noqa: E402
 from advisor.ui.overlay_parts import updates  # noqa: E402
 from advisor.ui.overlay_parts import wording as W  # noqa: E402
 from advisor.ui.overlay_parts.app import OverlaySession, SimpleCapture, UiSettings  # noqa: E402
-from advisor.ui.overlay_parts.notices import STACKED_NOTICES, update_rows  # noqa: E402
+from advisor.ui.overlay_parts.notices import update_rows  # noqa: E402
 from advisor.ui.overlay_parts.updates import UpdateControl, UpdateNotice  # noqa: E402
 from advisor.ui.services import Services  # noqa: E402
 from tests.support import qtenv, sandbox  # noqa: E402
@@ -588,34 +588,38 @@ class RowsTest(unittest.TestCase):
                 self.assertEqual(update_rows([note]), [("update", text, level, buttons)])
         self.assertEqual(update_rows([]), [])
         rows = update_rows([UpdateNotice("updated", version="1.2.3"), UpdateNotice("latest", version="1.2.3")])
-        self.assertEqual(rows[0], ("updated", "拾星助手已更新到 1.2.3。", "info",
+        self.assertEqual(rows[0], ("updated", "拾星助手已更新到 1.2.3。\n" + W.UPDATE_VERIFY, "info",
                                    [("关闭本条提示", "", "update_close_done", "关闭本条提示")]))
         self.assertEqual([r[0] for r in rows], ["updated", "update"])
-        self.assertIn("update", STACKED_NOTICES)
 
     def test_updated_news(self):
-        """刚换上新版本：换上的正是 UPDATE_NEWS_VERSION 这一版时列出这一版的主要改动；版本号对不上、列表空着时只写第一句；
-        繁体界面上显示时对着改动按繁体转。"""
+        """刚换上新版本：换上的正是 UPDATE_NEWS_VERSION 这一版时列出这一版的主要改动；版本号对不上、列表空着时不列改动；
+        最后一行都是官网核对页面那一句（UPDATE_VERIFY）；繁体界面上显示时对着改动按繁体转。"""
         def row(version=W.UPDATE_NEWS_VERSION):
             return update_rows([UpdateNotice("updated", version=version)])[0]
 
+        self.assertEqual(W.UPDATE_VERIFY, "※非官方渠道下载的拾星助手，可以在 astral-chip-compass.com/verify/ 核对是否被修改。")
+        self.assertEqual(W.VERIFY_URL, "https://astral-chip-compass.com/verify/")
         expected = [W.UPDATE_DONE.format(version=W.UPDATE_NEWS_VERSION),
                     *(W.UPDATE_NEWS_ITEM.format(item=item) for item in W.UPDATE_NEWS)]
         if W.UPDATE_NEWS_SOON:
             expected.append(W.UPDATE_NEWS_SOON)
-        self.assertEqual(row()[1], "\n".join(expected))
+        self.assertEqual(row()[1], "\n".join([*expected, W.UPDATE_VERIFY]))
         other = "0.0.1"
-        self.assertEqual(row(other)[1], W.UPDATE_DONE.format(version=other))
+        self.assertEqual(row(other)[1], W.UPDATE_DONE.format(version=other) + "\n" + W.UPDATE_VERIFY)
         with mock.patch.object(W, "UPDATE_NEWS", ()):
-            self.assertEqual(row()[1], W.UPDATE_DONE.format(version=W.UPDATE_NEWS_VERSION))
-        # 逐字核对排法：一条一行、前面加「· 」，即将上线的写在最后一行
+            self.assertEqual(row()[1], W.UPDATE_DONE.format(version=W.UPDATE_NEWS_VERSION) + "\n" + W.UPDATE_VERIFY)
+        # 逐字核对排法：一条一行、前面加「· 」，即将上线的写在改动后面，核对那一句在最后一行
         with mock.patch.object(W, "UPDATE_NEWS", ("甲", "乙")), mock.patch.object(W, "UPDATE_NEWS_SOON", "即将上线：丙"):
-            self.assertEqual(row()[1], f"拾星助手已更新到 {W.UPDATE_NEWS_VERSION}。\n· 甲\n· 乙\n即将上线：丙")
+            self.assertEqual(row()[1], f"拾星助手已更新到 {W.UPDATE_NEWS_VERSION}。\n· 甲\n· 乙\n即将上线：丙\n"
+                                       + W.UPDATE_VERIFY)
         hant = lang.to_hant(row()[1])
         changed = [item for item in W.UPDATE_NEWS if lang.to_hant(item) != item]
         self.assertTrue(changed, "繁简对照表里应有要转的改动")
         for item in changed:
             self.assertIn(lang.to_hant(item), hant)
+        self.assertTrue(hant.endswith(lang.to_hant(W.UPDATE_VERIFY)))
+        self.assertIn(W.VERIFY_SHOWN, lang.to_hant(W.UPDATE_VERIFY))  # 域名不转
 
 
 # ------------------------------------------------------------ 控制模块
@@ -2052,8 +2056,8 @@ class OverlayTest(ErrorsCase):
         self.assertNotIn("update", w.notice_model.texts())
 
     def test_layout(self):
-        """有新版本（四个按钮）、下好了、出错（两个按钮）：文字占一行，按钮排在文字下面；下载中（比对本机的文件、只下变了的部分、
-        下整包几句）、已经是最新照旧跟在文字右边。按钮都在悬浮窗里，文字放得下。"""
+        """有新版本（四个按钮）、下好了、出错（两个按钮）、下载中（比对本机的文件、只下变了的部分、下整包几句）、已经是最新：
+        和别的提示一样，按钮都排在文字下面（提示块的右下角）。按钮都在悬浮窗里，文字放得下。"""
         w = self.make()
         w.show()
         u = w.updates
@@ -2061,9 +2065,9 @@ class OverlayTest(ErrorsCase):
         u.failure, u.reason = "download", "下载的文件和发布的不一致（SHA-256 对不上），已删掉"
         for state, below, step, progress in (
                 ("available", True, "", (0, 0)), ("ready", True, "", (0, 0)), ("failed", True, "", (0, 0)),
-                ("downloading", False, "full", (3 * MB, SIZE)), ("downloading", False, "compare", (0, 0)),
-                ("downloading", False, "delta", (3 * MB, PART)), ("downloading", False, "delta", (0, 0)),
-                ("latest", False, "", (0, 0))):
+                ("downloading", True, "full", (3 * MB, SIZE)), ("downloading", True, "compare", (0, 0)),
+                ("downloading", True, "delta", (3 * MB, PART)), ("downloading", True, "delta", (0, 0)),
+                ("latest", True, "", (0, 0))):
             with self.subTest(state=state, step=step):
                 u.state, u.step, u.progress = state, step, progress
                 w.refresh()

@@ -27,10 +27,14 @@ class OfferLog:
     （new_game），撤销时接回原来那一局（undo）。三选一关掉以后补准了来源时（on_source_settled），按记账里的第几次三选一
     找出它用过的编号（刷新过就有好几个），每个都记一条 source 记录。"""
 
-    def __init__(self, services, client=None):
+    def __init__(self, services, client=None, context=None):
         self._services = services  # 返回悬浮窗现在的 services（测试会中途换）
         # 这一局在哪个客户端打的（返回 cn、int、taptap 或 None）：每记一次三选一问一次，认不出时不传给推荐日志
         self._client = client if callable(client) else (lambda: None)
+        # 只给对局报告的、悬浮窗这一侧才知道的几项（返回 {images: 识别图片的情况, window: 游戏窗口的档位}，见
+        # Overlay._report_context）：每记一次三选一、对局结束问一次，出错时当没有
+        self._context = context if callable(context) else (lambda: {})
+        self.offer_refreshed = False  # 现在这个编号是同一次三选一里刷新以后换的（对局报告的 after_reroll）
         self._seq = itertools.count(1)
         self.offer_id: str | None = None
         self.picked_offer_id: str | None = None  # 最近一次记下选择的推荐日志编号（同一组候选又出现时撤销它）
@@ -91,6 +95,31 @@ class OfferLog:
             return {}
         return {"owned_sources": list(sources), "owned_panel": list(panel)}
 
+    def _mates_kwargs(self, ev) -> dict:
+        """记三选一时没认出角色的队友最像谁（teammate_guesses，和 state.teammates 一一对应）：有没认出的队友时才传，
+        测试里假的推荐日志不一定认这个参数。"""
+        value = getattr(ev, "teammate_guesses", None)
+        if not isinstance(value, (list, tuple)) or not any(isinstance(item, dict) for item in value):
+            return {}
+        return {"teammate_guesses": list(value)}
+
+    def _context_info(self) -> dict:
+        """悬浮窗这一侧给对局报告的几项（_context）；出错、不是对象时为空。"""
+        try:
+            info = self._context()
+        except Exception:  # noqa: BLE001  拿不到只少这几项，不能影响记推荐日志
+            return {}
+        return dict(info) if isinstance(info, dict) else {}
+
+    def _report_kwargs(self, ev) -> dict:
+        """记三选一时只给对局报告的几项（report_info）：记账给的（事件的 report_info，见 Session.report_info），加上这个编号
+        是不是刷新以后换的（after_reroll）和悬浮窗这一侧的（_context_info）。事件没带 report_info（Session 以外建的事件）时
+        不传：测试里假的推荐日志不一定认这个参数。"""
+        value = getattr(ev, "report_info", None)
+        if not isinstance(value, dict) or not value:
+            return {}
+        return {"report_info": {**value, "after_reroll": self.offer_refreshed, **self._context_info()}}
+
     def on_advice(self, ev, was_live: bool, eggs) -> None:
         """给出了推荐（ev 是 advice 事件，was_live 为这之前三选一就显示着）：记一条。上一组已经记下了选择时，这是新的一次
         三选一，不论界面是否还算「显示着」（中间可能夹着一帧无法识别的画面）。记账认作另一次三选一的（select_no 和上一条的
@@ -113,8 +142,11 @@ class OfferLog:
                 self.log_pick(self.offer_id, getattr(self._services().logbook, "PICK_REROLL", REROLL))
                 eggs("chose", self.offer_id, unlock.REFRESH)
                 self.offer_id = self.new_id()
+                self.offer_refreshed = True
         else:
             # 同一组候选关闭后又出现（pick_reverted）：仍是同一次三选一，沿用原来的编号
+            if self.reuse_offer_id is None:
+                self.offer_refreshed = False
             self.offer_id = self.reuse_offer_id or self.new_id()
         self.reuse_offer_id = None
         self.offer_names, self.offer_rerolls, self.offer_select = names, rerolls, select_no
@@ -127,7 +159,18 @@ class OfferLog:
                 del self.select_offers[next(iter(self.select_offers))]
         self._services().call("logbook", "record_offer", st, adv, self.offer_id,
                               **self._client_kwargs(), **self._map_kwargs(ev), **self._source_kwargs(ev),
-                              **self._difficulty_kwargs(ev), **self._owned_kwargs(ev))
+                              **self._difficulty_kwargs(ev), **self._owned_kwargs(ev), **self._mates_kwargs(ev),
+                              **self._report_kwargs(ev))
+
+    def on_shown(self) -> None:
+        """现在这一次三选一的推荐真的显示在了悬浮窗上（悬浮窗判断）：交给推荐日志记一条（同一个编号推荐日志只记一次）。"""
+        if self.offer_id is not None:
+            self._services().call("logbook", "record_shown", self.offer_id)
+
+    def on_stop(self, why: str) -> None:
+        """这一局可能没等到对局结束：程序退出（quit）、游戏窗口没了（game_closed）。交给推荐日志记一条（这一局已经记过
+        对局结束的，对局报告不看它）。"""
+        self._services().call("logbook", "record_stop", why)
 
     def on_picked(self, chip: str) -> str | None:
         """三选一关闭、记下了选择 chip：记在这一次三选一上，返回这一次的编号（没有时为 None）。"""
@@ -152,7 +195,8 @@ class OfferLog:
             self._services().call("logbook", "record_offer", last_ev.state, last_ev.advice, target,
                                   **self._client_kwargs(), **self._map_kwargs(last_ev),
                                   **self._source_kwargs(last_ev), **self._difficulty_kwargs(last_ev),
-                                  **self._owned_kwargs(last_ev))
+                                  **self._owned_kwargs(last_ev), **self._mates_kwargs(last_ev),
+                                  **self._report_kwargs(last_ev))
         elif not live:
             self.reuse_offer_id = target
 
@@ -163,11 +207,13 @@ class OfferLog:
             self._services().call("logbook", "record_source", offer_id, ev.source, ev.source_by)
 
     def on_unadvised(self, ev) -> None:
-        """一次三选一认出来了、程序放弃等待、没给推荐就关掉了（记账发的 unadvised 事件）：交给推荐日志记一条。"""
+        """一次三选一认出来了、程序放弃等待、没给推荐就关掉了（记账发的 unadvised 事件）：交给推荐日志记一条，认得出客户端
+        时一并给（一局一次推荐都没有时，对局报告的客户端从这里取）。"""
         item = getattr(ev, "unadvised", None)
         if not isinstance(item, dict):
             return
-        self._services().call("logbook", "record_unadvised", select_no=getattr(ev, "select_no", 0), **item)
+        self._services().call("logbook", "record_unadvised", select_no=getattr(ev, "select_no", 0),
+                              **{**item, **self._client_kwargs()})
 
     def supplement(self, chip: str, offer_id: str | None) -> None:
         """补录了漏掉的那次三选一（offer_id 是那一次的编号）：照选择记下，via 为 supplement（和正常选的、
@@ -195,6 +241,7 @@ class OfferLog:
         """判定为新的一局：这一局的编号作废；记下的选择留一份（撤销新一局时接回去）。"""
         self.offer_id, self.offer_names, self.offer_rerolls, self.offer_select = None, (), None, None
         self.picked_offer_id = self.reuse_offer_id = None
+        self.offer_refreshed = False
         self.pick_offer_ids_before, self.pick_offer_ids = self.pick_offer_ids, {}
 
     def new_game(self) -> None:
@@ -229,6 +276,10 @@ class OfferLog:
         if key == self.game_over_logged:
             return False
         self.game_over_logged = key
+        report = info.get("report_info")
+        if isinstance(report, dict) and report:
+            # 只给对局报告的几项：记账给的每局那几项，加上悬浮窗这一侧的（识别图片、游戏窗口的档位）
+            info = {**info, "report_info": {**report, **self._context_info()}}
         self._services().call("logbook", "record_game_over", **info)
         return True
 

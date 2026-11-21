@@ -49,6 +49,7 @@ from .factory import (
     _text_label,
     _text_rules,
 )
+from . import notice_blocks
 from .state import EV_REFRESHING
 from .wording import *  # noqa: F401,F403
 
@@ -139,10 +140,12 @@ def build_global(ov, box) -> None:
     ov.global_area, global_box = _column_widget(5)
     ov.global_area.setObjectName("globalArea")  # 皮肤的样式表可以给这一块底色（GLOBAL_MARGINS 为内边距）
     ov._skinned(lambda b=global_box: b.setContentsMargins(*O.GLOBAL_MARGINS))
-    ov.global_notices, ov.global_notice_box = _column_widget(5)
+    # 当前状态那一句（例如「未找到游戏窗口，请先启动游戏。」）排在提示上面；提示是一个个小块，块与块之间空开（notice_blocks）
+    ov.global_notices, ov.global_notice_box = _column_widget(notice_blocks.BLOCK_GAP)
     ov.global_msg = _message_label()
-    global_box.addWidget(ov.global_notices)
+    global_box.setSpacing(notice_blocks.BLOCK_GAP)
     global_box.addWidget(ov.global_msg)
+    global_box.addWidget(ov.global_notices)
     box.addWidget(ov.global_area)
 
 

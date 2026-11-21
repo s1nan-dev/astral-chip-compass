@@ -28,10 +28,14 @@ tools/fetch_assets.py --crop 记下的那笔，和首次运行时判断在不在
 只写进它的 fallback。card_crops.json、sfw_skip.json、heroes.json 读不出来、写得不对时不写清单（先运行
 tools/check_data.py 看哪里不对）。
 
-用法：.venv\\Scripts\\python tools\\make_assets_manifest.py [--force]
+用法：.venv\\Scripts\\python tools\\make_assets_manifest.py [--force] [--remote 文件 --serial 序号]
   有图片在 wiki 上找不到、或本地文件和 wiki 上的不一致时，打印出来并以退出码 1 结束，不写清单（免得发行版下载的
   图片和开发时测过的不一样、或少了图片）。核对无误时才写 data\\assets_manifest.json。
   --force  确实要照写时用（例如 wiki 上删了一张图）：打印的内容和平时一样，照写清单
+  --remote 文件  另出识别图片的最新清单（备用地址上的 assets-latest.json，程序检查更新时取），不写 data\\assets_manifest.json；
+            项的来源同上面那份，去掉 stars 类和随发行版附带的（程序不认这两样），另写 data/heroes.json 的全部角色
+            （编号、简体名、从这一版程序起认识）。写完照程序认清单的规矩（advisor.assets.parse_remote）核一遍，核不过就删掉。
+  --serial 序号  最新清单的序号，由人给：只增不减（程序收到比存着的小的会整份不用），不给时不写
   接口请求之间至少隔 assets.API_INTERVAL 秒（同发行版下载时的规矩）。被站点防护拦下（assets.Blocked：HTTP 567、拿到的
   是拦截页面等）或被限流（429、503）时马上停下、不再发请求，打印原因和几点几分以后再运行（assets.refusal_note），以退出码
   2 结束，不写清单：接着请求只会把封禁拖长，这段时间浏览器打开 wiki 也会被拦。
@@ -50,9 +54,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from advisor import paths  # noqa: E402
-from advisor.assets import (API, API_INTERVAL, MANIFEST, WIKI_HOME, AssetItem, DownloadError, _Fetcher,  # noqa: E402
-                            is_present, load_local, query_imageinfo, refusal_note)
+from advisor.assets import (API, API_INTERVAL, MANIFEST, NEW_HERO_NAME_MAX, REMOTE_DIRS, REMOTE_FORMAT,  # noqa: E402
+                            WIKI_HOME, AssetItem, DownloadError, _Fetcher, is_present, load_local, parse_remote,
+                            query_imageinfo, refusal_note)
 from advisor.update import MIRROR_BASE  # noqa: E402
+from advisor.version import VERSION  # noqa: E402
 from advisor.vision.stars import profile_photo_hero  # noqa: E402
 from tools import json_layout  # noqa: E402
 
@@ -119,6 +125,65 @@ def hero_ids() -> set[int] | None:
     return ids or None
 
 
+def remote_heroes() -> list[dict]:
+    """data/heroes.json 里的全部角色，照最新清单 heroes 的写法（id、name、since=这一版程序）。读不出来、写得不对时抛
+    ValueError（说明哪一项不对）：最新清单里不合的项程序会整项丢掉，新角色的图就下不到了，所以这里先停下。"""
+    try:
+        heroes = json.loads((paths.data_dir() / HEROES).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raise ValueError(f"data/{HEROES} 读不出来") from None
+    if not isinstance(heroes, list) or not heroes:
+        raise ValueError(f"data/{HEROES} 不是角色表，或者一个角色都没有")
+    out: list[dict] = []
+    seen: set[int] = set()
+    for hero in heroes:
+        hero_id = hero.get("id") if isinstance(hero, dict) else None
+        name = hero.get("name") if isinstance(hero, dict) else None
+        if not (isinstance(hero_id, int) and not isinstance(hero_id, bool) and 1 <= hero_id <= 999_999):
+            raise ValueError(f"data/{HEROES} 里有角色没有编号，或编号不对：{hero_id!r}")
+        if not (isinstance(name, str) and name and name.strip() == name and name.isprintable()):
+            raise ValueError(f"data/{HEROES} 里编号 {hero_id} 没有简体名，或写法不对")
+        if len(name) > NEW_HERO_NAME_MAX:
+            raise ValueError(f"data/{HEROES} 里编号 {hero_id} 的简体名「{name}」超过 {NEW_HERO_NAME_MAX} 个字："
+                             "最新清单里写不下，程序会丢掉这一项")
+        if hero_id in seen:
+            raise ValueError(f"data/{HEROES} 里编号 {hero_id} 写了不止一次")
+        seen.add(hero_id)
+        out.append({"id": hero_id, "name": name, "since": VERSION})
+    return out
+
+
+def write_remote(out: Path, serial: int, items: list[dict], heroes: list[dict]) -> int:
+    """写识别图片的最新清单（备用地址上的 assets-latest.json）：自带清单里能放进最新清单的项（去掉 stars 类和随发行版附带
+    的，见 assets.REMOTE_DIRS 和 parse_remote 的规矩），另写 heroes。要写的字节先照程序认清单的规矩（parse_remote）核一遍：
+    核不过就不写、删掉同名的旧文件，免得发出去一份程序整份不用的（或者错拿旧的那份去传）。parse_remote 核不过抛
+    ValueError，是以后的格式时抛别的异常：这里都当核不过。"""
+    listed = sorted((item for item in items if item["dir"] in REMOTE_DIRS and not item.get("bundled")),
+                    key=lambda item: (item["dir"], item["file"]))
+    document = {"format": REMOTE_FORMAT, "serial": serial, "generated": date.today().isoformat(),
+                "items": listed, "heroes": heroes}
+    data = json_layout.format_json(document).encode("utf-8")
+    try:
+        remote = parse_remote(data)
+    except Exception as e:  # noqa: BLE001
+        try:
+            out.unlink(missing_ok=True)
+        except OSError:
+            pass
+        print(f"要写的最新清单程序核对不过（{e}），没写 {out}（同名的旧文件也删掉了）：先查清哪一项不对，不要发出去。")
+        return 1
+    try:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(data)
+    except OSError as e:
+        print(f"写不了 {out}（{e.strerror or type(e).__name__}）。")
+        return 1
+    print(f"最新清单 {len(remote.items)} 项（不含 stars 类和随发行版附带的 {len(items) - len(listed)} 项）、"
+          f"角色 {len(remote.heroes)} 个，序号 {remote.serial}；已写入 {out}")
+    print(f"核对通过：程序认这份清单（format {REMOTE_FORMAT}）。")
+    return 0
+
+
 def read_by_recognition(name: str, heroes: set[int]) -> bool:
     """这张 Q 版头像识别会不会读：文件名认得出角色编号（和认头像同一个判断，advisor/vision/stars.py 的 profile_photo_hero），
     而且是 heroes 里的角色。"""
@@ -157,7 +222,27 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--force", action="store_true",
                     help="有对不上的也照写清单（平时不写：先查清为什么对不上）")
+    ap.add_argument("--remote", metavar="输出文件",
+                    help="另出识别图片的最新清单（备用地址上的 assets-latest.json），不写 data 下的清单")
+    ap.add_argument("--serial", type=int, metavar="序号",
+                    help="最新清单的序号（只增不减，由人给；只和 --remote 一起用）")
     args = ap.parse_args()
+    if args.serial is not None and not args.remote:
+        print("--serial 只和 --remote 一起用。")
+        return 1
+    if args.remote and args.serial is None:
+        print("没给 --serial：最新清单的序号由人给，只增不减（先看上一次用的是几）。没写最新清单。")
+        return 1
+    if args.remote and args.serial < 1:
+        print(f"--serial 要是正整数，给的是 {args.serial}。没写最新清单。")
+        return 1
+    latest_heroes = []
+    if args.remote:
+        try:
+            latest_heroes = remote_heroes()
+        except ValueError as e:
+            print(f"{e}。没写最新清单。")
+            return 1
 
     crops, skip, heroes = read_crops(), read_sfw_skip(), hero_ids()
     for value, name, why in ((crops, CARD_CROPS, "读不出来或写得不对"), (skip, SFW_SKIP, "读不出来或写得不对"),
@@ -288,6 +373,9 @@ def main() -> int:
     if (not_found or differs or uncut) and not args.force:
         print("没写清单：确实要照写时加 --force")
         return 1
+
+    if args.remote:
+        return write_remote(Path(args.remote), args.serial, items, latest_heroes)
 
     manifest = {
         "version": 1,

@@ -71,7 +71,8 @@ class FakeLogbook(_FakeLogbook):
     """推荐日志的假对象（tests/support/fakes），每次推荐另记下首推：offers 里是（编号, 候选, 首推）。"""
 
     def record_offer(self, state, advice, offer_id, client=None, map_source=None, source_by=None,
-                     difficulty_source=None, owned_sources=None, owned_panel=None):
+                     difficulty_source=None, owned_sources=None, owned_panel=None,
+                     teammate_guesses=None, report_info=None):
         self.offers.append((offer_id, tuple(e.chip.name for e in advice.evals), advice.best))
 
 

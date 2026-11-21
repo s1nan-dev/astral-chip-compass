@@ -130,7 +130,11 @@ class EventHandlers:
         self.advice.shown_ev = ev
         self.advice.stale_shown = False
         offer = getattr(ev, "offer", None) or ()
-        self.advice.set_live_view(lambda: self.advice.hero_needed_view(offer))
+        # 立绘认出的是新角色时提示更新拾星助手（Session 发 hero_needed 时按它分开发，它变了会重发一次）
+        with self.lock:
+            new_hero = getattr(getattr(self.session, "game", None), "new_hero", None)
+        new_hero = new_hero if isinstance(new_hero, str) and new_hero else None
+        self.advice.set_live_view(lambda: self.advice.hero_needed_view(offer, new_hero))
         self.eggs.count("triple", self.eggs.golds(offer))  # 候选认出来了（推荐暂停）：三个金色照样算
 
     def on_picked(self, ev, was_live: bool, was_kind: str):
@@ -306,7 +310,8 @@ class EventHandlers:
 
     def log_game_over(self) -> None:
         """推荐日志记下对局结束（OfferLog.game_over）：session.game_over_info（依据、地图、难度、轮次、进度上限、胜负和
-        依据），另加星数、进度条当前格和已有筹码（以后校准用：实际在第几轮结束）。按 session.games 和胜负去重：同一局的结束
+        依据），另加星数、进度条当前格和已有筹码（以后校准用：实际在第几轮结束），以及只给对局报告的每局那几项
+        （report_info，见 Session.report_info）。按 session.games 和胜负去重：同一局的结束
         （结算画面读到好几次等）只记一次；胜负是结束以后才定的（读到奖励画面），定了再记一条。撤销了房间等画面结束以后开的
         新一局时，那次结束是误认的，这一局真正结束时再记一条。同一局都以后一条为准（见 Overlay.undo_new_game）。
 
@@ -323,6 +328,11 @@ class EventHandlers:
                 info = {**info, "star": s.settings.star if s.settings.star_read else None,
                         "progress": s.game.progress, "owned": owned,
                         "owned_sources": owned_sources, "owned_panel": owned_panel}
+                # 只给对局报告的每局那几项（Session.report_info；Session 以外的对象没有时不带）
+                report = getattr(s, "report_info", None)
+                report = report() if callable(report) else None
+                if isinstance(report, dict) and report:
+                    info["report_info"] = report
         logged = self.offers.game_over(info, games)
         if not callable(self.report_game):
             return

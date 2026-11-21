@@ -38,7 +38,7 @@ __all__ = [  # layout.py 用 import * 取这些
     "MAP_SCHEME_REVERT", "MAP_SCHEME_REVERTED", "MAP_SCHEME_REVERT_TIP", "MAP_SCHEME_SWITCHED", "MAP_SCHEME_TEXT",
     "MAP_SOURCE_TIP", "MISSED_PROMPT", "NEWGAME_MIDGAME", "NEWGAME_MIDGAME_NOTICE_MS", "NEWGAME_NOTICE_MS",
     "NEWGAME_OWNED", "NEWGAME_TEXT",
-    "NEW_USER_COLLAPSED",
+    "NEW_HERO", "NEW_USER_COLLAPSED",
     "NOTICE_AREA", "NO_DOWNLOAD_ENV", "NO_GAME", "OPEN_TASKS", "OWNED_EMPTY", "OWNED_UNIT", "OWNED_UNKNOWN",
     "OWNED_UNKNOWN_ADVICE",
     "PANEL_FIXED", "PANEL_READ", "PANEL_TAB", "PANEL_UNKNOWN", "PAUSED", "PAUSED_BIT", "PAUSED_MIN_TIP", "PAUSED_TIP",
@@ -98,6 +98,9 @@ FOLLOW_FRAMES = 5  # 手动模式：三选一消失后最多再看几帧，等 S
 # 需要用户操作、或识别结果的提示。角色待识别、推荐暂停时「推荐」卡片里的大字：
 # 角色下拉框在上方的「筹码方案」卡片里（一行显示时这张卡片随之出现）
 PROMPT_HERO = "请在上方「筹码方案」卡片的角色下拉框中选择当前角色"
+# 立绘认出的是新角色（识别图片的最新清单里有、这一版资料里还没有的角色）：没有她的推荐规则，换掉 PROMPT_HERO 那一句；
+# 角色胶囊的悬停说明也写这一句
+NEW_HERO = "这个角色是新出的，请更新拾星助手"
 HERO_PAUSED = "角色：待识别，推荐已暂停。选择角色后立即计算推荐。"
 # 角色胶囊（「识别」卡片状态胶囊的第二项，排在识别本身的状态之后）的悬停说明：
 # 角色下拉框在下方的「筹码方案」卡片里。手动指定时的三种说明见 _show_hero_state
@@ -600,7 +603,7 @@ OCR_LOW_SPEC_ASK_ALSO = "是否打开「低配模式」？"
 OCR_REASON_UNKNOWN = "可能的原因：电源、内存、别的程序、限速都查过，没有问题，这台电脑的处理器跑文字识别本身就比较慢。"
 # 界面是简体、三选一认出游戏是繁体中文时标题栏下方的一条（排在本节「免费软件」声明前面，见 notices.NoticeModel.rows）：
 # 用简体写，显示时才用 lang.to_hant 转成繁体（简体界面平时不读对照表）。「换」把界面语言存成繁体、马上重新打开拾星助手
-# （Overlay.switch_to_hant），「不换」以后不再问（UiSettings.hant_notice_closed）。两个按钮一样宽（notices.EQUAL_WIDTH_NOTICES）。
+# （Overlay.switch_to_hant），「不换」以后不再问（UiSettings.hant_notice_closed）。两个按钮一样宽（notice_blocks.EQUAL_WIDTH_NOTICES）。
 # 对局进行中先不显示，这一局结束、回到大厅或游戏关了再显示
 HANT_NOTICE_TEXT = "认出游戏是繁体中文，界面要换成繁体中文吗？"
 HANT_SWITCH = "换"
@@ -633,8 +636,7 @@ HOTKEY_CHANGE_TIP = "打开「拾星助手设置」窗口，按下新的组合�
 # 软件内更新（overlay_parts/updates.py 的 UpdateControl；查、下载、备好在 advisor/update.py，换版本在 advisor/update_apply.py）：
 # 标题栏下方的一条（NOTICE_AREA 的 update；刚换上新版本时另一条 updated），排在「免费软件」声明前面。只在对局外显示：对局中
 # 先攒着，下载在后台照常进行。有新版本、下载中、解压核对中、下好了、已经是最新、刚换上新版本是说明（边框不变色）；出错时
-# ⚠ 橙色、边框不变色，都带「手动下载」。有新版本（四个按钮）、上次已下好的那一版和出错（两个按钮）时按钮排在文字下面
-# （NoticeView.update、notices.STACKED_NOTICES）。
+# ⚠ 橙色、边框不变色，都带「手动下载」。按钮和别的提示一样排在提示块的右下角（notice_blocks）。
 # 有新版本：{version} 是新版本号，{date} 是资料同步日期那一段（UPDATE_DATE，没有日期时为空），{size} 是要下载多少的那一段
 # （update_size_text：这一版有文件清单时是 UPDATE_SIZE_MAX，点「更新」以后先比对本机的文件、只下变了的部分，压缩包的大小
 # 是上限；没有时是 UPDATE_SIZE）。点「更新」才下载（下载之前先问的就是这一条），下好以后在对局外自动重启换上，不用再点；
@@ -665,11 +667,16 @@ UPDATE_DONE = "拾星助手已更新到 {version}。"
 # 刚换上新版本那一条（UPDATE_DONE）下面列的这一版的主要改动（update_done_text）：换上的正是 UPDATE_NEWS_VERSION 这一版时，
 # UPDATE_NEWS 一条一行、前面加「· 」（UPDATE_NEWS_ITEM），最后一行是 UPDATE_NEWS_SOON（空时不写）；版本号对不上（改了版本号、
 # 列表没跟着改）或者列表是空的，只写 UPDATE_DONE 那一句。发版定号时照这一版的发布说明挑几条短的改这几项（软件维护说明「版本号」）
-UPDATE_NEWS_VERSION = "1.2.0"
-UPDATE_NEWS = ("新角色苍鲤、森秋幻境的新筹码", "优化了对局中途打开拾星助手时，推荐的准确度", "推荐模型优化", "性能表现优化",
-               "Bug修复")
+UPDATE_NEWS_VERSION = "1.3.0"
+UPDATE_NEWS = ("游戏出了新造型也能及时认出", "推荐模型优化", "队友角色识别优化", "Bug修复")
 UPDATE_NEWS_ITEM = "· {item}"
 UPDATE_NEWS_SOON = ""  # 即将上线的（例如「即将上线：……」）；这一版不写
+# 刚换上新版本那一条的最后一行（update_done_text，版本号对不对得上 UPDATE_NEWS_VERSION 都写）：从别处下载的人可以到官网的
+# 核对页面查自己的拾星助手有没有被改过。显示时域名那一段（VERIFY_SHOWN）做成链接，链接文字照写域名（认得出是官网、也能自己
+# 输入），点了打开 VERIFY_URL（notice_blocks.link_marks）
+VERIFY_SHOWN = "astral-chip-compass.com/verify/"
+VERIFY_URL = "https://" + VERIFY_SHOWN
+UPDATE_VERIFY = f"※非官方渠道下载的拾星助手，可以在 {VERIFY_SHOWN} 核对是否被修改。"
 # 出错的几种（update_failed_text 按种类选一句；{reason} 是白话原因，{version} 是没换上的版本号）：检查、下载、解压核对失败；
 # 下好以后自动重启、点「重启更新」时起不来换版本的程序；上一次换版本的结果（advisor/update_apply.py 的 take_result）是
 # 新版本启动失败、已退回（rolled_back，这一版记进跳过），或者没换上（not_applied）。起不来、没换上的两种按这一版没换上的
@@ -859,14 +866,15 @@ def update_failed_text(failure: str, reason: str = "", version: str = "", short:
 
 def update_done_text(version: str) -> str:
     """刚换上新版本那一条：「拾星助手已更新到 x。」（UPDATE_DONE）；换上的正是 UPDATE_NEWS_VERSION 这一版、UPDATE_NEWS 不空时，
-    下面一条一行列出这一版的主要改动（前面加「· 」），最后一行写即将上线的（UPDATE_NEWS_SOON，空时不写）。版本号对不上、
-    列表是空的时只写第一句：改了版本号、列表还没跟着改时，不把上一版的改动当成这一版的写出来。"""
-    text = UPDATE_DONE.format(version=version)
-    if version != UPDATE_NEWS_VERSION or not UPDATE_NEWS:
-        return text
-    lines = [text, *(UPDATE_NEWS_ITEM.format(item=item) for item in UPDATE_NEWS)]
-    if UPDATE_NEWS_SOON:
-        lines.append(UPDATE_NEWS_SOON)
+    下面一条一行列出这一版的主要改动（前面加「· 」），再写即将上线的（UPDATE_NEWS_SOON，空时不写）。版本号对不上、
+    列表是空的时不列改动：改了版本号、列表还没跟着改时，不把上一版的改动当成这一版的写出来。最后一行都是官网核对页面那一句
+    （UPDATE_VERIFY）。"""
+    lines = [UPDATE_DONE.format(version=version)]
+    if version == UPDATE_NEWS_VERSION and UPDATE_NEWS:
+        lines += [UPDATE_NEWS_ITEM.format(item=item) for item in UPDATE_NEWS]
+        if UPDATE_NEWS_SOON:
+            lines.append(UPDATE_NEWS_SOON)
+    lines.append(UPDATE_VERIFY)
     return "\n".join(lines)
 
 
@@ -956,12 +964,17 @@ def ocr_reason_text(reasons, retry: bool = False) -> str:
 
 
 def teammates_text(teammates, db) -> str:
-    """「队友：邦妮、凛（电脑）、待识别」（放在悬停说明里）；没有队友时为空。"""
+    """「队友：邦妮、凛（电脑）、待识别」（放在悬停说明里）；没有队友时为空。资料里还没有的新角色（记账标了 new 的那一项：
+    识别图片的最新清单里有她的名字）照写她的名字，别的资料里没有的写「待识别」。"""
     names = []
     for m in teammates:
         hero = m.get("hero") if isinstance(m, dict) else getattr(m, "hero", None)
         bot = m.get("bot") if isinstance(m, dict) else getattr(m, "bot", False)
-        name = ui_names.hero_in(db, hero) if hero in db.heroes else "待识别"
+        new = m.get("new") is True if isinstance(m, dict) else False
+        if hero in db.heroes:
+            name = ui_names.hero_in(db, hero)
+        else:
+            name = hero if new and isinstance(hero, str) and hero else "待识别"
         names.append(name + ("（电脑）" if bot else ""))
     return "队友：" + "、".join(names) if names else ""
 

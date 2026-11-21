@@ -391,7 +391,7 @@ class PersistentRowsTest(OverlayCase):
         self.assertFalse(w.expanded)
         self.assertTrue(w.global_notices.isVisibleTo(w.panel))
         self.assertEqual(notice_label(w, "stopped").objectName(), "notice_warn")
-        self.assertEqual(notice_label(w, "stopped").text(), "⚠ " + RECOG_STOPPED)
+        self.assertEqual(notice_label(w, "stopped").parent().property("noticeText"), "⚠ " + RECOG_STOPPED)
         self.assertEqual([w.notices.buttons(k) for k in want], [[], [], []])
         self.assertFalse(w.needs_attention())
         w.set_flash_status("已截图识别：当前画面不是筹码三选一界面")

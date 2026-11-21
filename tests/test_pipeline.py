@@ -2206,6 +2206,9 @@ class _FakeReads(unittest.TestCase):
         self.db = load_db()
         self.seen, self.round, self.current = None, 5, 9
         self.log: list[str] = []
+        # 三选一正要按关掉处理的那一帧还会看 Esc 菜单（pipeline._select_hidden）：默认画面上没有，免得每条测试都真去读字
+        self.esc_menu = False
+        self.esc_calls = mock.Mock(side_effect=lambda img: self.esc_menu)
 
         def logged(name, result):
             def call(*args, **kwargs):
@@ -2231,6 +2234,7 @@ class _FakeReads(unittest.TestCase):
             mock.patch.object(pipeline, "read_own_coins", side_effect=logged(
                 "coins", lambda: SimpleNamespace(value=None, reason="没有认出玩家列表上自己那一行", text="", score=0.0))),
             mock.patch.object(pipeline, "read_players", side_effect=logged("players", lambda: None)),
+            mock.patch.object(pipeline, "esc_menu_visible", self.esc_calls),
             mock.patch.object(pipeline, "read_chip_panel", None),
             mock.patch.object(pipeline, "is_select_screen", side_effect=logged("pick", lambda: False)),
             mock.patch.object(pipeline, "read_pregame", side_effect=logged("pregame", lambda: Pregame())),

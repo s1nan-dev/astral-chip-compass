@@ -559,8 +559,7 @@ class SchemeMapNoticeTest(unittest.TestCase):
         self.recognize(LONG)
         text = "本局按地图换用了「A<B&C>」"
         self.assertEqual(self.row()[1], text)
-        labels = [lb.text() for lb in w.scheme_notices.findChildren(QLabel) if lb.text()]
-        self.assertIn(text, labels)
+        self.assertEqual(self.shown_texts(w), [text])
 
     def test_markup_name_plain(self):
         """方案名像网页标记（<b>粗</b>、&lt;）时也照原样显示：那一行的标签按纯文本画，不画成粗体，&lt; 也不画成 <。"""
@@ -571,8 +570,20 @@ class SchemeMapNoticeTest(unittest.TestCase):
         self.recognize(LONG)
         text = MAP_SCHEME_TEXT.format(name=name)
         self.assertEqual(self.row()[1], text)
-        labels = [lb for lb in w.scheme_notices.findChildren(QLabel) if lb.text() == text]
-        self.assertEqual([lb.textFormat() for lb in labels], [Qt.PlainText])
+        self.assertEqual(self.shown_texts(w), [text])  # 画出来的字就是原文：没有画成粗体，&lt; 也没有画成 <
+
+    @staticmethod
+    def shown_texts(w) -> list[str]:
+        """「筹码方案」卡片的提示块里画出来的字（富文本排好以后的纯文字，去掉不换行用的不可见字符）。"""
+        from PySide6.QtGui import QTextDocument
+
+        out = []
+        for lb in w.scheme_notices.findChildren(QLabel):
+            if lb.text() and lb.isVisibleTo(w.scheme_notices):
+                doc = QTextDocument()
+                doc.setHtml(lb.text())
+                out.append(doc.toPlainText().replace("\u2060", "").replace("\u200b", ""))
+        return out
 
     def test_dropdown_applicable_maps(self):
         """方案下拉框：标了适用地图的那几项悬停说明最后一段写「适用地图：……」（按 Scheme.maps 的先后、用「、」隔开），

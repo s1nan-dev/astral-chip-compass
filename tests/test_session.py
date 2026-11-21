@@ -3147,6 +3147,44 @@ class TeammatesTest(unittest.TestCase):
         s.new_game()
         self.assertEqual(s.game.teammates, [])
 
+    def test_guesses_latest_read_for_unknown_rows(self):
+        """没认出角色的那一行记最近一次读到的最像谁（不是相似度最高的那一次）；最像的是自己的角色、别的队友已经占了的
+        角色也照记；认出了角色的那一项为 None；推荐事件带着和局面里的队友一一对应的这一份，读数变了不另发 status。"""
+        s = self.session
+        first = [{"row": 0, "hero": "阿兰娜", "bot": True, "best": "阿兰娜", "score": 0.91, "margin": 0.2},
+                 {"row": 1, "hero": None, "bot": True, "best": "恋", "score": 0.83, "margin": 0.02},
+                 {"row": 2, "hero": None, "bot": False, "best": "凛", "score": 0.7, "margin": 0.1}]
+        s.on_teammates(first)
+        s.on_teammates(first)
+        later = [dict(first[0]), {**first[1], "best": "派德曼", "score": 0.61, "margin": 0.01},
+                 {**first[2], "score": 0.72}]
+        self.assertIsNone(s.on_teammates(later))  # 只有最像谁的读数变了：队友没变，不发 status
+        self.assertEqual(s.teammate_guesses(), [
+            None,
+            {"guess": "派德曼", "score": 0.61, "margin": 0.01},
+            {"guess": "凛", "score": 0.72, "margin": 0.1},  # 和自己同角色：没采用，照实记
+        ])
+        ev = s.on_frame(frame(OFFER_A))
+        self.assertEqual(ev.kind, "advice")
+        self.assertEqual(len(ev.teammate_guesses), len(ev.state.teammates))
+        self.assertEqual(ev.teammate_guesses, s.teammate_guesses())
+        # 最像谁不放进局面：读数变了同一个局面不重算推荐
+        s.on_teammates([{**later[1], "score": 0.5}])
+        self.assertIsNone(s.on_frame(frame(OFFER_A)))
+
+    def test_guess_none_without_reading(self):
+        """读到的行没有最像谁（没有头像比得上、旧的调用方不给这几项）、资料库里没有的名字：三项都是 None；数不合格的写 None。"""
+        s = self.session
+        s.on_teammates([{"row": 0, "hero": None, "bot": True},
+                        {"row": 1, "hero": None, "bot": True, "best": None, "score": -1.0, "margin": 0.0},
+                        {"row": 2, "hero": None, "bot": True, "best": "没有这个角色", "score": 0.5, "margin": 0.1},
+                        {"row": 3, "hero": None, "bot": True, "best": "恋", "score": float("nan"), "margin": True}])
+        self.assertEqual(s.teammate_guesses(), [
+            {"guess": None, "score": None, "margin": None}, {"guess": None, "score": None, "margin": None},
+            {"guess": None, "score": None, "margin": None}, {"guess": "恋", "score": None, "margin": None}])
+        s.new_game()
+        self.assertEqual(s.teammate_guesses(), [])
+
 
 class HistoryTest(unittest.TestCase):
     def test_recent_events_and_snapshot_are_json(self):
@@ -4356,6 +4394,30 @@ class UnadvisedTest(unittest.TestCase):
         s.on_frame(None)
         item = [e for e in s.take_events() if e.kind == "unadvised"][0].unadvised
         self.assertEqual((item["reasons"], item["round"], item["advised"]), (["hero"], 2, False))
+        self.assertEqual((item["hero_guess"], item["hero_score"]), (None, None))  # 一次都没认过立绘
+
+    def test_hero_guess_latest_portrait(self):
+        """原因里有 hero 时记这时左下立绘最像谁、相似度（最近一次认立绘的结果，没把握的也算；资料库里没有的名字记 None）；
+        原因里没有 hero 时两项都是 None。"""
+        from types import SimpleNamespace
+        s = Session(self.db, Settings(hero="凛"))
+        s._clock = lambda: 100.0
+        s.settings.round = 2
+        s.on_hero(SimpleNamespace(hero=None, best="米米", score=0.9, runner_up=0.88, image=""))
+        s.on_hero(SimpleNamespace(hero=None, best="恋", score=0.61, runner_up=0.6, image=""))
+        self.assertEqual(s.on_frame(chips(self.OFFER, rerolls=4)).kind, "hero_needed")
+        s.on_frame(None)
+        s.on_frame(None)
+        item = [e for e in s.take_events() if e.kind == "unadvised"][0].unadvised
+        self.assertEqual((item["hero_guess"], item["hero_score"]), ("恋", 0.61))
+        s.on_hero(SimpleNamespace(hero=None, best="不存在的角色", score=0.5, runner_up=0.1, image=""))
+        self.assertEqual(s.game._hero_seen, (None, 0.5))
+        # 没有 hero 的原因：两项都是 None
+        self.assertIsNone(self.at(0.0, self.hidden()))
+        self.assertEqual(self.at(0.6, self.hidden()).kind, "unreadable")
+        close(self.s)
+        item = self.items()[0].unadvised
+        self.assertEqual((item["reasons"], item["hero_guess"], item["hero_score"]), (["name"], None, None))
 
     def test_unknown_name(self):
         """有读出来的筹码名资料里没有（也没标成资料未收录）：原因按 name、unknown 的先后记。"""

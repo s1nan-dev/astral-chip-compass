@@ -1,17 +1,22 @@
-"""三选一界面上点了「隐藏」：三选一整个收起、只剩棋盘，正中偏下出现一行「您当前正处于隐藏UI状态」，点「显示」后
-三选一照原样回来。认出那行字时当三选一还开着：不记下选中的、不撤销，推荐留着。
+"""三选一被临时盖住：点了界面上的「隐藏」，或显示着时按 Esc 打开了菜单。两种都当三选一还开着：不记下选中的、不撤销，
+不出补录（missed_pick），推荐留着。
 
-A. 认那行字（advisor/vision/chip_select.py 的 hidden_ui_visible，HiddenTextTest、HiddenTextLogicTest）：一局实机录像里的四帧
-   缩到 960×540 的样本：隐藏之前、隐藏着两张（一张左下角被轮盘挡了一部分）、点显示以后；上下加黑边成 4:3（三选一界面居中、
-   贴着下边各一种）、左右加黑边成 21:9 的窗口；隐藏着的画面过不了三选一的预筛。文字识别换成假的：空画面不调它，读到的字
-   读漏一两个、把握低、是别的字时怎么算。样本不随仓库发布，放在 samples/pages/，缺了就跳过。
+A. 认隐藏UI那行字（advisor/vision/chip_select.py 的 hidden_ui_visible，HiddenTextTest、HiddenTextLogicTest）：一局实机录像里的
+   四帧缩到 960×540 的样本：隐藏之前、隐藏着两张（一张左下角被轮盘挡了一部分）、点显示以后；上下加黑边成 4:3（三选一界面
+   居中、贴着下边各一种）、左右加黑边成 21:9 的窗口；隐藏着的画面过不了三选一的预筛。文字识别换成假的：空画面不调它，
+   读到的字读漏一两个、把握低、是别的字时怎么算。样本不随仓库发布，放在 samples/pages/，缺了就跳过。
+A2. 认 Esc 菜单（advisor/vision/esc_menu.py 的 esc_menu_visible，EscMenuTextTest、EscMenuLogicTest）：两张实机截图缩到 960 宽
+   前后的几种窗口比例上都认得出；三选一、对局、结算、选角这几张正常画面都认不出；文字识别换成假的：简繁两种写法、混着的、
+   只认出一项时怎么算。截图不随仓库发布，放在 samples/pages/，缺了就跳过。
 B. 记账（SelectTracker.hidden、Session.on_select_hidden，HiddenLedgerTest）：录像里那一次（隐藏后点显示：不撤销、不重发推荐，
    确定后记一次）；隐藏着时间到了（那行字没了、三选一没回来：照常按绿框记，打开面板后按面板改正）；那一帧没认出字（照常先记
-   后撤，结果仍然对）；隐藏两次；三选一没显示时不起作用；识别记录在开始隐藏时记一条。
+   后撤，结果仍然对）；隐藏两次；三选一没显示时不起作用；识别记录在开始隐藏时记一条。Esc 菜单盖住几帧不补录，关掉、同一组
+   候选回来时接着这一次；真的收起、没看到选中时照旧补录。
 C. 识别流程（FrameProcessor，HiddenFlowTest）：只在三选一正要按关掉处理的那一帧看那行字（平时、三选一显示着、消失后的第 1 帧
    都不看），隐藏着时每帧看一次；认出时交给 Session.on_select_hidden；认那行字出错时照常按关掉处理。按热键要求的那一帧也看
    一眼：刚隐藏的第 1 帧照样当三选一还开着；Session 不知道的那一次（手动模式下没按过热键就隐藏了）认出后每帧接着看，
-   点显示后照常认出、给推荐，那行字没了就不再看。识别函数换成假的。
+   点显示后照常认出、给推荐，那行字没了就不再看。隐藏UI那行字没认出时再看一眼 Esc 菜单，只在正要按关掉处理的帧看；认出后
+   同样交给 Session，识别记录写明 by=esc_menu。识别函数换成假的。
 D. 悬浮窗的识别线程（Watcher，HiddenFollowTest）：手动模式跟随三选一时，隐藏着也接着看（取帧按平时的间隔），隐藏结束后照常
    再看几帧就停；不是真的 True（测试里的假对象）不算。按热键的那一帧是隐藏着的时候不报「当前画面不是筹码三选一界面」。
 """
@@ -30,8 +35,9 @@ from PySide6.QtCore import Qt
 from advisor.data import load_db
 from advisor.session import Session, Settings, split_extra
 from advisor.ui.overlay_parts.wording import FOLLOW_FRAMES
-from advisor.vision import chip_select, pipeline
+from advisor.vision import chip_select, esc_menu, pipeline
 from advisor.vision.chip_select import hidden_ui_visible, looks_like_overlay_screen
+from advisor.vision.esc_menu import esc_menu_visible
 from tests.support import qtenv, samples
 from tests.test_pipeline import _FakeReads, offer
 from tests.test_resume import ADVISE, fake_advise, select
@@ -43,6 +49,21 @@ OFFER = ["标靶", "可口糖果", "夹心饼干-美味"]
 GREEN = 2
 # 和三选一有关的事件（其余的状态、提示类事件不看）
 SELECT_KINDS = ("advice", "picked", "missed_pick", "idle", "pick_reverted")
+
+# 三选一显示着时按 Esc 打开的菜单（实机截图，繁体客户端）。和其余游戏截图一样放在 samples/pages/，不随仓库发布，缺了跳过。
+ESC_MENU_FRAMES = (
+    "pages/20261108_151400_esc_menu_hant_00.png",
+    "pages/20261108_151438_esc_menu_hant_07.png",
+)
+HAVE_ESC_MENU = samples.samples_ok(*ESC_MENU_FRAMES)
+ESC_REASON = samples.samples_reason(*ESC_MENU_FRAMES)
+# 认不出 Esc 菜单的正常画面：三选一、对局、结算、选角
+NORMAL_FRAMES = (
+    "20261002_013522_chipselect_levelup_star1_badge_on.png",
+    "20261002_021351_battle_scene.png",
+    "20261002_151251_result_2560x1057.jpg",
+    "20261002_015300_select_screen_lowres.jpg",
+)
 
 # ------------------------------------------------------------------ A. 认那行字
 
@@ -129,6 +150,64 @@ class HiddenTextLogicTest(unittest.TestCase):
                 self.assertGreaterEqual(calls, 1)
 
 
+# ------------------------------------------------------------------ A2. 认 Esc 菜单
+
+
+@unittest.skipUnless(HAVE_ESC_MENU, ESC_REASON)
+class EscMenuTextTest(unittest.TestCase):
+    """A2：实机截图上的 Esc 菜单（真的文字识别）。"""
+
+    def test_menu_frames(self):
+        """三选一显示着时按 Esc 打开的菜单：几种窗口比例上都认得出（菜单在画面正中）。"""
+        for name in ESC_MENU_FRAMES:
+            for label, img in windows(load(name)):
+                with self.subTest(name=name, window=label):
+                    self.assertTrue(esc_menu_visible(img))
+
+    @unittest.skipUnless(samples.samples_ok(*NORMAL_FRAMES), samples.samples_reason(*NORMAL_FRAMES))
+    def test_normal_frames(self):
+        """三选一、对局、结算、选角这几张正常画面上认不出（只认画面正中，四项里至少两项才算）。"""
+        for name in NORMAL_FRAMES:
+            with self.subTest(name=name):
+                self.assertFalse(esc_menu_visible(load(name)))
+
+
+class EscMenuLogicTest(unittest.TestCase):
+    """A2：认 Esc 菜单的几条规矩（文字识别换成假的）。"""
+
+    def check(self, texts) -> bool:
+        """960×540 的画面上读到的各段文字是 texts。"""
+        lines = [SimpleNamespace(text=t) for t in texts]
+        with mock.patch.object(esc_menu.io, "ocr", return_value=lines):
+            return esc_menu_visible(np.full((540, 960, 3), 40, np.uint8))
+
+    def test_two_words(self):
+        """简繁两种写法、简繁混着读出的、读漏一两项的都认；只认出一项、读成别的字的不算。"""
+        for texts, want in (
+                (("图鉴", "设定", "认输", "关闭游戏"), True),
+                (("圖鑑", "設定", "認輸", "關閉遊戲"), True),
+                (("圖鉴", "設定", "別的畫面"), True),  # 文字识别读出简繁混着的字
+                (("设定", "关闭游戏"), True),
+                (("图鉴", "别的字"), False),  # 只认出一项
+                (("图鉴", "设定", "认输", "关闭游戏", "再来一项"), True),
+                ((), False),
+        ):
+            with self.subTest(texts=texts):
+                self.assertIs(self.check(texts), want)
+
+    def test_reads_only_the_middle(self):
+        """只看画面正中那一块：交给文字识别的范围不包含整屏（左右、上下都留出大片）。"""
+        img = np.full((1080, 1920, 3), 40, np.uint8)
+        with mock.patch.object(esc_menu.io, "ocr", return_value=[]) as ocr:
+            esc_menu_visible(img)
+        box = ocr.call_args.args[1]
+        x0, y0, x1, y1 = box
+        self.assertGreater(x0, 1920 // 4)
+        self.assertLess(x1, 1920 * 3 // 4)
+        self.assertLess(y1 - y0, 1080 // 2)
+        self.assertLess(x1 - x0, 1920 // 2)
+
+
 # ------------------------------------------------------------------ B. 记账
 
 
@@ -144,8 +223,8 @@ def panel(owned):
 
 
 class HiddenLedgerTest(PatchedAdvise):
-    """B：三选一被隐藏时的记账。每一帧照识别流程的顺序喂：看得到三选一时 on_frame(读数)；看不到时，正要按关掉处理的那一帧
-    认出了那行字就 on_select_hidden，否则 on_frame(None)。"""
+    """B：三选一被临时盖住时的记账。每一帧照识别流程的顺序喂：看得到三选一时 on_frame(读数)；看不到时，正要按关掉处理的
+    那一帧认出了隐藏UI那行字或 Esc 菜单就 on_select_hidden（by 写明是哪一种），否则 on_frame(None)。"""
 
     def setUp(self):
         super().setUp()
@@ -155,13 +234,14 @@ class HiddenLedgerTest(PatchedAdvise):
         self.s.take_events()
         self.events: list = []
 
-    def feed(self, seen=None, hidden: bool = False):
-        """一帧：seen 是三选一读数（None 为看不到）；hidden 是这一帧认出了那行字（只在正要按关掉处理时才会认）。"""
+    def feed(self, seen=None, hidden: bool = False, by: str = "hidden_ui"):
+        """一帧：seen 是三选一读数（None 为看不到）；hidden 是这一帧认出了隐藏UI那行字或 Esc 菜单（只在正要按关掉处理时
+        才会认），by 是认出的哪一种。"""
         s = self.s
         if hidden:
             self.assertIsNone(seen)
-            self.assertTrue(s.select.closing)  # 识别流程只在这样的帧上看那行字
-            ev = s.on_select_hidden()
+            self.assertTrue(s.select.closing)  # 识别流程只在这样的帧上看那行字、菜单
+            ev = s.on_select_hidden(by)
             self.assertIsNone(ev)  # 不发事件
         else:
             ev = s.on_frame(seen)
@@ -171,12 +251,12 @@ class HiddenLedgerTest(PatchedAdvise):
     def kinds(self) -> list:
         return [e.kind for e in self.events if e.kind in SELECT_KINDS]
 
-    def board(self, hidden_text: bool, panel_owned=None):
-        """一帧看不到三选一的画面，照识别流程的先后喂：正要按关掉处理的帧才看那行字（hidden_text 为画面上有没有那行字，
+    def board(self, hidden_text: bool, panel_owned=None, by: str = "hidden_ui"):
+        """一帧看不到三选一的画面，照识别流程的先后喂：正要按关掉处理的帧才看那行字、Esc 菜单（hidden_text 为画面上有没有，
         认出了 on_select_hidden，否则 on_frame(None)），平时直接 on_frame(None)；panel_owned 不为 None 时「查看筹码」
         面板开着，接着 on_panel。"""
         s = self.s
-        self.feed(hidden=hidden_text and s.select.closing)
+        self.feed(hidden=hidden_text and s.select.closing, by=by)
         if panel_owned is not None:
             ev = s.on_panel(panel(panel_owned))
             before, after = split_extra(s.take_events())
@@ -320,6 +400,30 @@ class HiddenLedgerTest(PatchedAdvise):
         self.assertEqual(self.kinds(), ["advice", "picked"])
         self.assertEqual(len(self.hidden_records()), 2)
 
+    def test_esc_menu_not_missed(self):
+        """按 Esc 打开的菜单盖住三选一（隐藏UI那行字没有）：同样当三选一还开着，几帧都不补录；菜单关掉、同一组候选回来时
+        接着这一次，不撤销、不重发推荐；确定后只记一次。识别记录写明是因为 Esc 菜单。"""
+        self.feed(select(OFFER, selected=GREEN))
+        self.feed(None)
+        for _ in range(5):
+            self.feed(hidden=True, by="esc_menu")
+        self.assertEqual(self.kinds(), ["advice"])
+        self.assertEqual(self.s.settings.owned, [])
+        self.feed(select(OFFER, selected=GREEN))
+        self.feed(None)
+        self.feed(None)
+        self.assertEqual(self.kinds(), ["advice", "picked"])
+        self.assertEqual(self.s.settings.owned, [OFFER[GREEN]])
+        self.assertEqual([r["by"] for r in self.hidden_records()], ["esc_menu"])
+
+    def test_real_close_still_misses(self):
+        """三选一真的收起（普通对局画面），没看到绿框选中的：菜单也没有，照旧请玩家补录。"""
+        self.feed(select(OFFER))
+        for _ in range(3):
+            self.feed(None)
+        self.assertEqual(self.kinds(), ["advice", "missed_pick"])
+        self.assertEqual(self.s.game.missed_offer, OFFER)
+
     def test_not_showing_no_effect(self):
         """三选一没显示时（已经关掉了）认出那行字不起作用：不记识别记录，状态不变。"""
         s = self.s
@@ -335,8 +439,8 @@ class HiddenLedgerTest(PatchedAdvise):
 
 
 class HiddenFlowTest(_FakeReads):
-    """C：FrameProcessor 什么时候看那行字、认出以后怎么交给 Session（识别函数换成假的，见 tests/test_pipeline.py 的
-    _FakeReads；看那行字记成 hidden）。"""
+    """C：FrameProcessor 什么时候看那行字、Esc 菜单，认出以后怎么交给 Session（识别函数换成假的，见 tests/test_pipeline.py 的
+    _FakeReads；看那行字记成 hidden，Esc 菜单换成 esc_menu）。"""
 
     def setUp(self):
         super().setUp()
@@ -414,6 +518,45 @@ class HiddenFlowTest(_FakeReads):
         events = self.frame(10.3)[0] + self.frame(10.6)[0]
         self.assertEqual([e.chip for e in events if e.kind == "picked"], [OFFER[GREEN]])
         self.assertEqual(self.session.settings.owned, [OFFER[GREEN]])
+
+    def test_esc_menu_keeps_select_open(self):
+        """隐藏UI那行字没认出、画面正中认出了 Esc 菜单：当三选一还开着，菜单开着期间每帧看一次、不发事件；菜单关掉、同一组
+        候选回来：不撤销、不重发推荐；确定后只记一次。识别记录写明是因为 Esc 菜单。"""
+        self.open()
+        self.esc_menu = True
+        self.seen = None
+        events, _ = self.frame(4.3)
+        self.assertEqual(self.esc_calls.call_count, 0)  # 第 1 帧还不是正要按关掉处理
+        self.assertEqual(self.kinds(events), [])
+        later = []
+        for i in range(5):
+            events, log = self.frame(4.6 + 0.5 * i)
+            later += events
+            self.assertIn("hidden", log)  # 先看隐藏UI那行字，没认出再看 Esc 菜单
+            self.assertTrue(self.proc.select_hidden)
+            self.assertFalse(self.proc.chip_select_visible)
+        self.assertEqual(self.esc_calls.call_count, 5)
+        self.assertFalse({"picked", "missed_pick", "idle", "pick_reverted"} & set(self.kinds(later)))
+        self.assertEqual(self.session.settings.owned, [])
+        self.esc_menu, self.seen = False, self.green  # 关掉菜单，三选一原样回来
+        events = self.frame(7.0)[0]
+        self.assertNotIn("pick_reverted", self.kinds(events))
+        self.assertFalse(self.proc.select_hidden)
+        self.seen = None
+        events = self.frame(7.3)[0] + self.frame(7.6)[0]
+        self.assertEqual([e.chip for e in events if e.kind == "picked"], [OFFER[GREEN]])
+        records = [r for r in self.session.recent_events(600) if r["kind"] == "read:select_hidden"]
+        self.assertEqual([r["by"] for r in records], ["esc_menu"])
+
+    def test_no_menu_still_closes_and_misses(self):
+        """那行字和 Esc 菜单都没认出（真的收起了）：照常按关掉处理；没看到绿框时照旧请玩家补录。"""
+        self.green.selected = None
+        self.open()
+        self.seen = None
+        self.frame(4.3)
+        events = self.frame(4.6)[0]
+        self.assertIn("missed_pick", self.kinds(events))
+        self.assertFalse(self.proc.select_hidden)
 
     def test_text_gone_records_green(self):
         """隐藏着时间到了、游戏替玩家选了：那行字没了、三选一没回来，下一帧照常按关掉处理，记下绿框。"""

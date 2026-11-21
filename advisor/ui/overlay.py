@@ -158,6 +158,7 @@ class Overlay(QWidget):
     hotkey_change_requested = Signal(str)  # 选了新的热键：请热键线程更换（结果回到 on_hotkey_changed / _change_failed）
     download_progress = Signal(int, int, str)  # 后台下载线程 → 界面：（已完成, 总数, 文件名）
     download_finished = Signal(object, object)  # 后台下载线程 → 界面：(ok, failed)
+    manifest_fetched = Signal(object, object)  # 取识别图片最新清单的线程 → 界面：(取的结果, 第几次取)
     # 后台导出线程 → 界面：（诊断包目录或 None, 旁边另打的压缩包：打不成时为空字符串，不打时为 None）
     export_finished = Signal(object, object)
     # 再次启动拾星助手：等「显示」请求的线程（single_instance.listen）→ 界面线程显示悬浮窗（on_relaunch）
@@ -210,7 +211,8 @@ class Overlay(QWidget):
         self.message = Message(lang.t("等待筹码三选一界面…"), "advice")
         self.live_state = LiveState()
         self.notice_model = NoticeModel(lane_only=self.primary is not None)
-        self.offers = OfferLog(lambda: self.services, client=self._client)
+        self.offers = OfferLog(lambda: self.services, client=self._client, context=self._report_context)
+        self._shown_offer: str | None = None  # 已经告诉推荐日志「推荐显示出来了」的那一次三选一编号（_note_shown）
         self._cost_failed = False  # 算升星的花费（Session.next_star_cost）出过错（只记一次错误记录）
         # 下面几样悬浮窗建好以后由 main() 接上（测试、预览里换成假的或留空）；部件经回调现取，不在建的时候记下
         # 返回最近一帧游戏画面（导出诊断用）。None 或没有画面时：截取屏幕的方式下现截一张，直接截取时不带原图
@@ -314,6 +316,7 @@ class Overlay(QWidget):
 
         self.download_progress.connect(self._download_progress)
         self.download_finished.connect(self._download_finished)
+        self.manifest_fetched.connect(self._manifest_fetched)
         self.export_finished.connect(self._export_done)
         self.relaunch_requested.connect(self.on_relaunch)
         self.message.say(self._waiting_text(), "advice")
@@ -393,7 +396,7 @@ class Overlay(QWidget):
             session=session, lock=lock, run_background=lambda fn: self.run_background(fn), later=self._later,
             refresh=self.refresh, update_settings=self.dialogs.update_settings_dialog, trace_user=self._trace_user,
             quit_app=self._quit_app, playing=self._lanes_playing, windows_open=self._other_windows_open,
-            hidden_lanes=self._hidden_lanes)
+            hidden_lanes=self._hidden_lanes, fetch_assets=lambda: self.background.fetch_manifest())
         self.updates.setParent(self)
         # 对局报告（reporting.py）：开关、一局结束时拼和存、启动时补拼和发送。开关、本机编号和算报告编号用的随机值在设置里，
         # 全程序一份；第二张的一局经 Overlay.report_game_over 交给第一张那一份拼。启动时的补拼和发送和自动检查更新同一时刻
@@ -446,7 +449,7 @@ class Overlay(QWidget):
             assets_unwritable=lambda: self.notice_model.assets_unwritable, later=self._later,
             unread_source=lambda: self.unread_source, pick_source=lambda: self.pick_source,
             covered_source=lambda: self.covered_source, finish_source=lambda: self.finish_source,
-            also_pause=self._companion_watchers)
+            also_pause=self._companion_watchers, emit_fetched=self.manifest_fetched.emit)
         # 位置和前台状态：跟着游戏窗口、拖动，前台状态和窗口层次（follow.py 的 WindowFollower）。独立窗口的层次（self.windows）
         # 用到时再取：第二张搭完界面以后才换成第一张那一份（_attach_primary），第二张的层次变了也照第一张的层次把它们重设一遍。
         # 关窗口时临时置顶的那一轮只管第一张：只在第一张不置顶时开始，第二张的层次变了不打断它（打断了，临时置顶的第一张和
@@ -465,7 +468,7 @@ class Overlay(QWidget):
             relayer=lambda: self.windows.relayer(), notice_platform=self._notice_platform_seen,
             companion_activity=self._companion_activity, companion_rect=self._companion_rect,
             companion_fixed=self._companion_fixed, yields=lambda: self.primary is not None,
-            restack=self._restack)
+            restack=self._restack, game_gone=lambda: self.offers.on_stop("game_closed"))
         # 系统托盘（follow.py）：图标、菜单、显示、再次启动的回应。开着的独立窗口同样用到时再取 self.windows：第二张从托盘
         # 「显示」时也把它们放回悬浮窗上面
         self.tray_part = Tray(
@@ -570,6 +573,42 @@ class Overlay(QWidget):
             shared = getattr(self.session.settings, "platform", None)
             platform = capture.STEAM if shared == capture.BOTH else None
         return capture.client_of(capture.found_title(platform))
+
+    def _report_context(self) -> dict:
+        """对局报告要的、悬浮窗这一侧才知道的几项（OfferLog 每记一次三选一、对局结束时问）：images 识别图片的情况
+        （assets.report_status：清单版本、应有几张、本机有几张、缺的文件名、这次运行里从哪下成几张、失败几张；不带路径），
+        window 游戏窗口的档位（game_report.window_tier：分辨率档位和窗口化还是全屏，不写精确像素）。拿不到的那一项不带。"""
+        from .. import game_report
+
+        out: dict = {}
+        status = getattr(self.services.assets, "report_status", None) if self.services is not None else None
+        if callable(status):
+            try:
+                out["images"] = status()
+            except Exception:  # noqa: BLE001  拿不到只少这一项
+                pass
+        client = getattr(self.follower, "game_client", None)
+        rect = self.follower.game_rect
+        if client is not None and rect is not None:
+            screen = QGuiApplication.screenAt(rect.center())
+            geom = screen.geometry() if screen is not None else None
+            full = None if geom is None else (rect.contains(geom.adjusted(2, 2, -2, -2)))
+            out["window"] = game_report.window_tier(client[3], full)
+        return out
+
+    def _note_shown(self) -> None:
+        """刷新以后：推荐正显示着、真的露在悬浮窗上（悬浮窗显示着没最小化、推荐那一块看得见、游戏窗口在、悬浮窗没被别的窗口
+        盖住）时，告诉推荐日志这一次三选一的推荐显示出来了（对局报告的 shown；同一次只告诉一次）。"""
+        live = self.live_state
+        offer_id = self.offers.offer_id
+        if not (live.on and live.kind == EV_ADVICE) or offer_id is None or offer_id == self._shown_offer:
+            return
+        if not self.isVisible() or self.isMinimized() or not self.body.isVisibleTo(self):
+            return
+        if self.follower.activity in (None, "nogame", "minimized") or self.follower.covered:
+            return
+        self._shown_offer = offer_id
+        self.offers.on_shown()
 
     @property
     def platform_seen(self) -> str:
@@ -935,6 +974,7 @@ class Overlay(QWidget):
             self._guarded("托盘提示", lambda: self.tray_part.tray.setToolTip(
                 lang.t("拾星助手") + "\n" + self.status.summary_tip_text.split("\n\n")[0][:120]))
         self._guarded("高度和位置", self.fit_height)
+        self._guarded("推荐显示的记录", self._note_shown)
 
     def _guarded(self, part: str, step, *args):
         """refresh 的一块：出错只记进错误记录（每次刷新都出同一个错时只整条记一次，见 advisor/errors.py），返回 None；
@@ -980,7 +1020,12 @@ class Overlay(QWidget):
         for w in root.findChildren(QWidget):
             if not w.isVisibleTo(root):
                 continue
-            if isinstance(w, (Pill, TaggedText)):
+            if w.property("noticeBlock"):
+                # 提示块（notice_blocks）：标题、正文拆成了几个标签、网址换成了链接，这里按一条提示取它的原文
+                out.append(w.property("noticeText") or "")
+            elif isinstance(w, QLabel) and w.parent() is not None and w.parent().property("noticeBlock"):
+                continue
+            elif isinstance(w, (Pill, TaggedText)):
                 out.append(w.text())
             elif isinstance(w, MapPill):
                 out.append(w.display_text())
@@ -2359,7 +2404,7 @@ class Overlay(QWidget):
     # ------------------------------------------------------------ 后台任务和设置窗口的入口（background.Background）
     # 留着：设置窗口按名字回调（export_diagnostics）、main() 直接调用（check_assets、previews_on_hold）、提示行的
     # 「重试」按钮按名字找（start_download），以及跨线程信号接的槽（_download_progress、_download_finished、
-    # _export_done：信号从后台线程发出，槽要留在悬浮窗这个 QObject 上才会排队回到界面线程，不能改接到普通对象上）
+    # _manifest_fetched、_export_done：信号从后台线程发出，槽要留在悬浮窗这个 QObject 上才会排队回到界面线程，不能改接到普通对象上）
 
     def export_diagnostics(self) -> None:
         """导出诊断包：第一张统一导出，第二张的状态和对局快照放在 state.json 的 lanes 键下，第二张最近的一帧和本局、
@@ -2398,6 +2443,9 @@ class Overlay(QWidget):
 
     def _download_finished(self, ok, failed) -> None:
         self.background.download_finished(ok, failed)
+
+    def _manifest_fetched(self, result, seq) -> None:
+        self.background.manifest_fetched(result, seq)
 
     def _export_done(self, path, zip_path=None) -> None:
         self.background.export_done(path, zip_path)
@@ -2534,6 +2582,8 @@ class Overlay(QWidget):
         _quietly(self.hide)
         if self.follower.timer is not None:
             _quietly(self.follower.timer.stop)
+        # 推荐日志：这一局还没记对局结束的，记一笔是程序退出了（对局报告写没认到结束的原因；记过结束的报告不看它）
+        _quietly(lambda: self.offers.on_stop("quit"))
         if shared:
             if self.tray_part.tray is not None:
                 _quietly(self.tray_part.tray.hide)

@@ -994,9 +994,9 @@ class ReadmePathsTest(unittest.TestCase):
     PREFIX = re.compile(
         r"(?<![\w./\\-])((?:advisor|tools|docs|data|tests|packaging|samples|assets|LICENSES)[/\\][\w.\-*/\\]*)")
     SUFFIXES = (".py", ".json", ".toml", ".md", ".txt", ".png", ".ico", ".bat")
-    # 见 tests/support/samples.py、tests/private_data.py；assets 下的三个文件夹是按 data/assets_manifest.json 下载的识别图片
+    # 见 tests/support/samples.py、tests/private_data.py；assets 下的四个文件夹是按 data/assets_manifest.json 下载的识别图片
     NOT_SHIPPED = ("samples", "tests/data/coins", "tests/data/private.json", "assets/heroes", "assets/profiles",
-                   "assets/chips")
+                   "assets/chips", "assets/achieve")
 
     @classmethod
     def setUpClass(cls):

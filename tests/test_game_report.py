@@ -228,6 +228,36 @@ class BuildTest(Case):
                 report = self.clean(game_report.build([record], GAME, install=INSTALL, since=SINCE))
                 self.assertEqual(report["offers"][0]["state"]["difficulty_source"], want)
 
+    def test_teammate_guesses(self):
+        """第 4 版：角色为 null 的队友那一项另有 guess、score、margin（offer 记录顶层 teammate_guesses 按下标对上的那一项；
+        两个数写成 0～1 的两位小数、超出的夹到两端）；认出了角色的不带这三项。旧记录没有、长度对不上时三项都是 null。"""
+        mates = [{"hero": "米米", "bot": True}, {"hero": None, "bot": False}, {"hero": None, "bot": True}]
+        record = offer(state=state(teammates=mates), teammate_guesses=[
+            {"guess": "米米", "score": 0.9, "margin": 0.3},  # 认出了的那一项：不带
+            {"guess": "恋", "score": 0.834, "margin": 0.016},
+            {"guess": "凛", "score": 1.4, "margin": -0.2}])
+        report = self.clean(game_report.build([record], GAME, install=INSTALL, since=SINCE))
+        self.assertEqual(report["schema"], 4)
+        self.assertEqual(report["offers"][0]["state"]["teammates"], [
+            {"hero": "米米", "bot": True},
+            {"hero": None, "bot": False, "guess": "恋", "score": 0.83, "margin": 0.02},
+            {"hero": None, "bot": True, "guess": "凛", "score": 1.0, "margin": 0.0}])
+        empty = {"guess": None, "score": None, "margin": None}
+        for guesses in (None, [None, None], "不是数组", [None, {"guess": 7, "score": 0.5, "margin": 0.1}, None],
+                        [None, {"guess": "恋", "score": "高", "margin": True}, None]):
+            with self.subTest(guesses=guesses):
+                changes = {} if guesses is None else {"teammate_guesses": guesses}
+                report = self.clean(game_report.build([offer(state=state(teammates=mates), **changes)], GAME,
+                                                      install=INSTALL, since=SINCE))
+                got = report["offers"][0]["state"]["teammates"]
+                self.assertEqual(got[0], {"hero": "米米", "bot": True})
+                if isinstance(guesses, list) and len(guesses) == 3 and isinstance(guesses[1], dict) \
+                        and guesses[1]["guess"] == "恋":
+                    self.assertEqual(got[1], {"hero": None, "bot": False, "guess": "恋", "score": None, "margin": None})
+                else:
+                    self.assertEqual(got[1], {"hero": None, "bot": False, **empty})
+                self.assertEqual(got[2], {"hero": None, "bot": True, **empty})
+
     def test_owned_lists_in_state(self):
         """每次三选一的 state 里 owned_sources、owned_panel 和清理过的 owned 一一对应：旧记录没有时都是 null；
         长度对不上时两样都 null；不是文字的筹码项和数组按同一批下标对齐。"""
@@ -638,9 +668,9 @@ class TableTest(Case):
         return game_report.build(records, GAME, install=INSTALL, since=SINCE)
 
     def test_without_table_record(self):
-        """没有 table 记录时 schema 是 3、table 是 null，整份过格式检查。"""
+        """没有 table 记录时 schema 是 4、table 是 null，整份过格式检查。"""
         report = self.clean(self.built([offer()]))
-        self.assertEqual(report["schema"], 3)
+        self.assertEqual(report["schema"], 4)
         self.assertIsNone(report["table"])
         self.explain(report)
 
@@ -786,19 +816,33 @@ class UnadvisedTest(Case):
         self.explain_unadvised(report)
 
     def test_fields_and_order(self):
-        """按日志里的先后，只带六个键（select_no 不发）；值照清理：reasons 只留三种、不重复，round/star 非负整数，
-        advised 布尔值，source 和 pick 文字或 null。"""
+        """按日志里的先后，只带八个键（select_no、v、client 不发）；值照清理：reasons 只留三种、不重复，round/star 非负
+        整数，advised 布尔值，source 和 pick 文字或 null；旧记录没有 hero_guess、hero_score 时两项都是 null。"""
         records = [offer(),
                    unadvised(select_no=9, round=6, reasons=["unknown", "unknown", "别的", "name"],
-                             advised=True, star=3, source="shop", pick="书签", extra="多的键"),
+                             advised=True, star=3, source="shop", pick="书签", extra="多的键", client="cn"),
                    unadvised(when="2026-01-01T10:40:00", select_no=10, round=True, reasons=["hero"],
                              advised="是", star=-1, source="别的", pick=7)]
         report = self.clean(self.built(records))
         first, second = report["unadvised"]
         self.assertEqual(first, {"round": 6, "reasons": ["unknown", "name"], "advised": True, "star": 3,
-                                 "source": "shop", "pick": "书签"})
+                                 "source": "shop", "pick": "书签", "hero_guess": None, "hero_score": None})
         self.assertEqual(second, {"round": None, "reasons": ["hero"], "advised": False, "star": None,
-                                  "source": None, "pick": None})
+                                  "source": None, "pick": None, "hero_guess": None, "hero_score": None})
+        self.explain_unadvised(report)
+
+    def test_hero_guess(self):
+        """第 4 版：原因里有 hero 时 hero_guess 照文字写、hero_score 写成 0～1 的两位小数（超出的夹到两端）；原因里没有
+        hero 时两项都是 null（记录里带着也不发）；hero_guess 不是文字时两项都是 null。有 offer 的局也带。"""
+        records = [offer(),
+                   unadvised(reasons=["hero"], hero_guess="米米", hero_score=0.8349),
+                   unadvised(when="2026-01-01T10:31:00", reasons=["name", "hero"], hero_guess="恋", hero_score=1.7),
+                   unadvised(when="2026-01-01T10:32:00", reasons=["name"], hero_guess="米米", hero_score=0.8),
+                   unadvised(when="2026-01-01T10:33:00", reasons=["hero"], hero_guess=3, hero_score=0.8),
+                   unadvised(when="2026-01-01T10:34:00", reasons=["hero"], hero_guess="米米", hero_score=float("nan"))]
+        report = self.clean(self.built(records))
+        self.assertEqual([(item["hero_guess"], item["hero_score"]) for item in report["unadvised"]],
+                         [("米米", 0.83), ("恋", 1.0), (None, None), (None, None), ("米米", None)])
         self.explain_unadvised(report)
 
     def test_bad_item_dropped(self):
@@ -830,12 +874,93 @@ class UnadvisedTest(Case):
         self.explain_unadvised(report)
 
 
+class UnadvisedOnlyTest(Case):
+    """第 4 版：一局一条 offer 记录都没有、却认出过三选一（unadvised）时也拼一份：offers 为空列表，unadvised 照实带；
+    要有这一局的结束才拼，结束以后偶然认成的不带。"""
+
+    def built(self, records, **kw):
+        return game_report.build(records, GAME, install=INSTALL, since=kw.pop("since", SINCE), **kw)
+
+    def test_report_without_offers(self):
+        """offers 为空列表；started 是头一条 unadvised 的时刻（UTC，到分钟）；版本、数据日期、客户端取最后一条 unadvised
+        记的；end、result、table 照旧取这一局的；整份过格式检查。"""
+        records = [unadvised(when="2026-01-01T10:20:00", reasons=["hero"], hero_guess="米米", hero_score=0.71,
+                             v="1.2.1", data_date="2026-01-01", client="cn"),
+                   unadvised(when="2026-01-01T10:40:00", reasons=["hero"], hero_guess="恋", hero_score=0.66,
+                             v="1.2.1", data_date="2026-01-01", client="taptap"),
+                   gameover(outcome="loss", how="game_over"), table()]
+        report = self.clean(self.built(records, report_id="b" * 32))
+        self.assertEqual(report["schema"], 4)
+        self.assertEqual(report["offers"], [])
+        self.assertEqual([item["hero_guess"] for item in report["unadvised"]], ["米米", "恋"])
+        self.assertEqual(report["app"], {"version": "1.2.1", "data_date": "2026-01-01"})
+        self.assertEqual(report["client"], "taptap")
+        self.assertEqual(report["started"], game_report._utc(datetime(2026, 1, 1, 10, 20)))
+        self.assertEqual(report["end"]["why"], "结算画面")
+        self.assertEqual(report["result"], {"outcome": "loss", "how": "game_over"})
+        self.assertEqual(report["table"]["map"], "森秋幻境")
+        self.assertEqual(report["report"], "b" * 32)
+        self.explain_unadvised(report)
+
+    def test_old_records_fill_defaults(self):
+        """旧记录没有版本、客户端：版本写当前这一版，数据日期、客户端写 null。"""
+        report = self.clean(self.built([unadvised(), gameover()]))
+        self.assertEqual(report["app"]["version"], game_report.VERSION)
+        self.assertIsNone(report["app"]["data_date"])
+        self.assertIsNone(report["client"])
+
+    def test_needs_end(self):
+        """没有这一局的结束（没有 gameover、时刻读不出、离最后一条 unadvised 超过 GAME_GAP）时不拼：不在对局里偶然认成的
+        三选一、还在打的局不凭空发一份。"""
+        cases = ([unadvised()],
+                 [unadvised(), gameover(when="读不出")],
+                 [unadvised(when="2026-01-01T08:00:00"), gameover(when="2026-01-01T11:00:00")],
+                 [unadvised(game="别的局"), gameover()],
+                 [unadvised(when="2026-01-01T11:30:00"), gameover(when="2026-01-01T11:00:00")])
+        for records in cases:
+            with self.subTest(records=records):
+                self.assertIsNone(self.built(records))
+
+    def test_after_end_left_out(self):
+        """结束以后在大厅等画面上偶然认成的三选一（同一局号、时刻晚于结束）不带；误认的结束以后接着打、后来又结束的，
+        取最后一条结束，前面的都带上。"""
+        records = [unadvised(when="2026-01-01T10:30:00", round=4), gameover(when="2026-01-01T11:00:00"),
+                   unadvised(when="2026-01-01T11:05:00", round=None)]
+        report = self.clean(self.built(records))
+        self.assertEqual([item["round"] for item in report["unadvised"]], [4])
+        records = [unadvised(when="2026-01-01T10:30:00", round=4), gameover(when="2026-01-01T10:40:00", why="误认"),
+                   unadvised(when="2026-01-01T10:50:00", round=6), gameover(when="2026-01-01T11:00:00")]
+        report = self.clean(self.built(records))
+        self.assertEqual([item["round"] for item in report["unadvised"]], [4, 6])
+        self.assertEqual(report["end"]["why"], "结算画面")
+
+    def test_bad_items_only_is_none(self):
+        """unadvised 一项都带不了（原因不合格）、since 以前的：不拼。"""
+        self.assertIsNone(self.built([unadvised(reasons=["别的"]), gameover()]))
+        self.assertIsNone(self.built([unadvised(), gameover()], since=datetime(2026, 1, 1, 10, 45)))
+
+    def test_game_with_offers_not_taken_as_unadvised_only(self):
+        """这一局有 offer 记录、只是都在 since 以前（开关在局中打开）或最后一条落在了别的局：照旧不拼，不当成整局没给推荐。"""
+        records = [offer(when="2026-01-01T10:00:00"), unadvised(), gameover()]
+        self.assertIsNone(self.built(records, since=datetime(2026, 1, 1, 10, 10)))
+        records = [offer("o1", when="2026-01-01T10:00:00"), unadvised(), gameover(),
+                   offer("o1", when="2026-01-01T10:50:00", game="别的局")]
+        self.assertIsNone(self.built(records))
+
+    def test_max_fifty(self):
+        """多于 50 项时截到 50（按日志先后留前面的）。"""
+        records = [unadvised(when=f"2026-01-01T10:{i // 60:02d}:{i % 60:02d}", round=i) for i in range(55)]
+        with mock.patch.object(errors, "log_error"):
+            report = self.clean(self.built(records + [gameover(when="2026-01-01T10:59:00")]))
+        self.assertEqual([item["round"] for item in report["unadvised"]], list(range(50)))
+
+
 class StoreTest(Case):
     def test_compact_and_atomic(self):
         path = self.assemble([offer(), gameover()])
         self.assertIsNotNone(path)
         data_bytes = path.read_bytes()
-        self.assertIn(b'{"schema":3,"report":', data_bytes)
+        self.assertIn(b'{"schema":4,"report":', data_bytes)
         self.assertNotIn(b'", "', data_bytes)
         self.assertTrue(data_bytes.startswith(b"{"))
         self.assertNotIn(b"\xef\xbb\xbf", data_bytes)
@@ -999,6 +1124,23 @@ class BackfillTest(Case):
         self.assertEqual(len(written), 1)
         report = json.loads(written[0].read_text(encoding="utf-8"))
         self.assertEqual(report["offers"][0]["state"]["hero"], "乙")
+        index = json.loads((game_report.folder() / "index.json").read_text(encoding="utf-8"))
+        self.assertEqual(set(index["games"]), {GAME})
+
+    def test_unadvised_only_game(self):
+        """一条 offer 都没有、认出过三选一的局：有结束、隔够了 GAME_GAP 时补拼（offers 为空）；没有结束的不拼、不记进索引；
+        离现在不到 GAME_GAP 的先等（unadvised 的时刻也算进「最后一条」）。"""
+        records = [unadvised(when=(NOW - timedelta(hours=4)).isoformat(), reasons=["hero"]),
+                   gameover(when=(NOW - timedelta(hours=3, minutes=30)).isoformat()),
+                   unadvised(when=(NOW - timedelta(hours=5)).isoformat(), game="g-no-end"),
+                   unadvised(when=(NOW - timedelta(hours=3)).isoformat(), game="g-recent"),
+                   gameover(when=(NOW - timedelta(hours=2, minutes=30)).isoformat(), game="g-recent"),
+                   unadvised(when=(NOW - timedelta(hours=1)).isoformat(), game="g-recent")]
+        written, _ = self.backfill(records)
+        self.assertEqual(len(written), 1)
+        report = json.loads(written[0].read_text(encoding="utf-8"))
+        self.assertEqual((report["offers"], len(report["unadvised"])), ([], 1))
+        self.assertIsNotNone(report["end"])
         index = json.loads((game_report.folder() / "index.json").read_text(encoding="utf-8"))
         self.assertEqual(set(index["games"]), {GAME})
 
@@ -1219,7 +1361,7 @@ class IntakeTest(Case):
 
     def test_round_trip(self):
         stored = self.round_trip([offer(), gameover()], "c" * 32)
-        self.assertEqual(stored["schema"], 3)
+        self.assertEqual(stored["schema"], 4)
         self.assertIsNone(stored["table"])
 
     def test_round_trip_with_table(self):
@@ -1227,6 +1369,465 @@ class IntakeTest(Case):
         stored = self.round_trip([offer(), gameover(), table()], "d" * 32)
         self.assertEqual(stored["table"]["players"][0]["seat"], 1)
         self.assertEqual(stored["table"]["map"], "森秋幻境")
+
+
+# ---------------------------------------------------------------- 第 4 版后来补的几项（report_info 等）
+
+
+def game_info(**changes) -> dict:
+    """offer 记录、对局结束记录顶层 report_info 里每局的那几项（新版本记的样子）。"""
+    base = {
+        "images": {"manifest": "2026-01-01", "serial": 12, "expected": 400, "present": 398,
+                   "missing": ["UT_Hero_ProfilePhoto_101_01.png", "UT_Hero_RolePhoto_105.png"],
+                   "wiki": 3, "mirror": 1, "failed": 0},
+        "watch": {"round": 1, "late": False},
+        "lang": "hant",
+        "teammate_reads": [{"row": 1, "first_round": 1, "reads": 3, "adopted": True},
+                           {"row": 2, "first_round": 2, "reads": 5, "adopted": False}],
+        "errors": {"count": 2, "kinds": {"OSError": 1}},
+        "window": {"tier": "1440p", "mode": "fullscreen"},
+        "perf": {"frames": 120, "frame_ms": 85, "slow_frames": 2, "ui_stalls": 1},
+    }
+    base.update(changes)
+    return base
+
+
+class ReportInfoTest(Case):
+    """第 4 版另带的统计用的几项：从推荐日志 offer 记录、对局结束记录顶层的 report_info 取，逐项清理；旧记录没有时不带。"""
+
+    def build(self, records):
+        return self.clean(game_report.build(records, GAME, install=INSTALL, since=SINCE))
+
+    def test_old_records_unchanged(self):
+        """旧版本记的局（没有 report_info）：外层、每次三选一都不多出这几项，结束了的局也没有 end_reason。"""
+        report = self.build([offer(), gameover()])
+        for key in (*game_report.GAME_INFO_KEYS, "end_reason"):
+            self.assertNotIn(key, report)
+        item = report["offers"][0]
+        for key in ("t", "chip_scores", "shown", "shop"):
+            self.assertNotIn(key, item)
+        self.assertNotIn("after_reroll", item["state"])
+        self.assertNotIn("self_row", item["state"])
+
+    def test_per_offer_fields(self):
+        """每次的几项：t 取这次三选一第一条记录的（取整），chip_scores 两位小数、夹到 0～1、读不出的写 null，after_reroll、
+        self_row 放进 state，shown 看有没有 shown 记录。"""
+        info = {"t": 30.6, "chip_scores": [0.91234, 1.5, "读不出"], "after_reroll": True,
+                "self_row": {"guess": "米米", "score": 0.712, "margin": 0.04, "skin": "01", "second": "恋",
+                             "second_skin": "base", "second_score": 0.69, "self_score": 0.512, "self_margin": 0.01}}
+        records = [offer(report_info={**info, "t": 12.4}),
+                   offer(when="2026-01-01T10:00:20", report_info=info),
+                   {"t": "shown", "time": "2026-01-01T10:00:21", "offer_id": "o1"}]
+        item = self.build(records)["offers"][0]
+        self.assertEqual(item["t"], 12)
+        self.assertEqual(item["chip_scores"], [0.91, 1.0, None])
+        self.assertIs(item["shown"], True)
+        self.assertIs(item["state"]["after_reroll"], True)
+        self.assertEqual(item["state"]["self_row"], {
+            "guess": "米米", "score": 0.71, "margin": 0.04, "guess_skin": "01", "second": "恋",
+            "second_skin": "base", "second_score": 0.69, "self_score": 0.51, "self_margin": 0.01})
+        item = self.build([offer(report_info={"t": -3, "after_reroll": "是"})])["offers"][0]
+        self.assertIsNone(item["t"])
+        self.assertIsNone(item["chip_scores"])
+        self.assertIs(item["shown"], False)
+        self.assertIsNone(item["state"]["after_reroll"])
+        self.assertNotIn("self_row", item["state"])
+
+    def test_shop_only_for_shop_source(self):
+        """shop 只在来源是筹码商店时带：价格、这次进商店买的第几个；不是商店来的不带。"""
+        shop = {"shop": {"price": 20, "buy": 2}}
+        item = self.build([offer(state=state(source="shop"), report_info=shop)])["offers"][0]
+        self.assertEqual(item["shop"], {"price": 20, "buy": 2})
+        item = self.build([offer(state=state(source="shop"), report_info={"t": 1})])["offers"][0]
+        self.assertIsNone(item["shop"])
+        item = self.build([offer(report_info=shop)])["offers"][0]
+        self.assertNotIn("shop", item)
+
+    def test_teammate_skin_and_second(self):
+        """队友认不出的那一项：推荐日志里记了造型、第二像的时另带 guess_skin、second、second_skin、second_score。"""
+        mates = [{"hero": None, "bot": False}]
+        guesses = [{"guess": "恋", "score": 0.8, "margin": 0.05, "skin": "01_sfw", "second": "米米",
+                    "second_skin": "../x", "second_score": 0.754}]
+        got = self.build([offer(state=state(teammates=mates), teammate_guesses=guesses)])
+        self.assertEqual(got["offers"][0]["state"]["teammates"][0], {
+            "hero": None, "bot": False, "guess": "恋", "score": 0.8, "margin": 0.05, "guess_skin": "01_sfw",
+            "second": "米米", "second_skin": None, "second_score": 0.75})
+
+    def test_game_info_latest_and_cleaned(self):
+        """每局的几项取最后一条带着它的记录（对局结束记录排在三选一后面），逐项清理：缺的文件名只收 .png 文件名
+        （带路径的丢掉），异常只收类名，档位、语言不认识的写 null；记录里没有的那一项写 null。"""
+        early = game_info(lang="繁体", window={"tier": "8k", "mode": "windowed"})
+        late = {"images": {**game_info()["images"], "missing": ["C:\\Users\\x\\a.png", "UT_Hero_RolePhoto_101.png"]},
+                "errors": {"count": 3, "kinds": {"bad name!": 2, "ValueError": 1, "OSError": True}}}
+        records = [offer(report_info=early), gameover(report_info=late)]
+        report = self.build(records)
+        self.assertEqual(report["images"]["missing"], ["UT_Hero_RolePhoto_101.png"])
+        self.assertEqual(report["errors"], {"count": 3, "kinds": {"ValueError": 1}})
+        self.assertIsNone(report["lang"])
+        self.assertEqual(report["window"], {"tier": None, "mode": "windowed"})
+        self.assertEqual(report["watch"], {"round": 1, "late": False})
+        self.assertEqual(report["teammate_reads"][0], {"row": 1, "first_round": 1, "reads": 3, "adopted": True})
+        self.assertEqual(report["perf"], {"frames": 120, "frame_ms": 85, "slow_frames": 2, "ui_stalls": 1})
+        text = json.dumps(report, ensure_ascii=False)
+        self.assertNotIn("Users", text)
+        self.assertNotIn("\\\\", text)
+        report = self.build([offer(report_info={"t": 1})])
+        for key in game_report.GAME_INFO_KEYS:
+            self.assertIsNone(report[key])
+
+    def test_unadvised_only_takes_game_info_from_end(self):
+        """一次推荐都没给的局：每局的几项从对局结束记录里取。"""
+        records = [unadvised(), gameover(report_info=game_info())]
+        report = self.clean(game_report.build(records, GAME, install=INSTALL, since=SINCE))
+        self.assertEqual(report["offers"], [])
+        self.assertEqual(report["lang"], "hant")
+        self.assertEqual(report["window"], {"tier": "1440p", "mode": "fullscreen"})
+
+    def test_end_reason(self):
+        """end 为 null 时的原因：最后一次三选一以后先来的是这一局的 stop（quit、game_closed），还是同一条线上下一局的记录
+        （next_game）；三选一之前的 stop、别的线的记录不算；分不出时新版本记的局写 null；有结束的局不带。"""
+        mine = offer(report_info={"t": 1})
+        nxt = offer(offer_id="o2", when="2026-01-01T12:00:00", game="g20260101-120000")
+        stop = {"t": "stop", "time": "2026-01-01T10:10:00", "game": GAME, "why": "quit"}
+        cases = (
+            ([mine, stop, nxt], "quit"),
+            ([mine, {**stop, "why": "game_closed"}], "game_closed"),
+            ([mine, nxt, stop], "next_game"),
+            ([{**stop, "time": "2026-01-01T09:00:00"}, mine], None),
+            ([mine, {**nxt, "lane": "taptap"}], None),
+            ([mine, {**stop, "why": "别的"}], None),
+        )
+        for records, want in cases:
+            with self.subTest(want=want, kinds=[r["t"] for r in records]):
+                report = game_report.build(records, GAME, install=INSTALL, since=SINCE)
+                self.assertIsNone(report["end"])
+                self.assertEqual(report["end_reason"], want)
+        report = game_report.build([mine, gameover(), stop], GAME, install=INSTALL, since=SINCE)
+        self.assertNotIn("end_reason", report)
+        report = game_report.build([offer(), stop], GAME, install=INSTALL, since=SINCE)
+        self.assertEqual(report["end_reason"], "quit")  # 旧记录也认得出原因时照带
+        report = game_report.build([offer()], GAME, install=INSTALL, since=SINCE)
+        self.assertNotIn("end_reason", report)
+
+    def test_table_guess_for_unknown_hero(self):
+        """结算数据表上角色认不出的那一栏：推荐日志里记了 guess 时带 guess、score；认出了的不带。"""
+        players = [table_player(1, hero=None, guess="恋", score=0.834), table_player(2, guess="米米", score=0.9),
+                   table_player(3, hero=None)]
+        report = self.build([offer(), gameover(), table(players=players)])
+        got = report["table"]["players"]
+        self.assertEqual((got[0]["guess"], got[0]["score"]), ("恋", 0.83))
+        self.assertNotIn("guess", got[1])
+        self.assertNotIn("guess", got[2])
+
+    def test_window_tier(self):
+        """游戏窗口的档位按客户区高度分档，只写档位；全屏、窗口化按给的写，不知道为 null。"""
+        for height, want in ((540, "small"), (600, "720p"), (899, "720p"), (900, "1080p"), (1080, "1080p"),
+                             (1200, "1080p"), (1440, "1440p"), (1600, "1440p"), (1800, "4k"), (2160, "4k")):
+            with self.subTest(height=height):
+                self.assertEqual(game_report.window_tier(height, True), {"tier": want, "mode": "fullscreen"})
+        self.assertEqual(game_report.window_tier(0, False), {"tier": None, "mode": "windowed"})
+        self.assertEqual(game_report.window_tier(float("nan"), None), {"tier": None, "mode": None})
+
+
+class ReportInfoLogbookTest(Case):
+    """推荐日志：report_info 只留认得的键；shown、stop 记录怎么记。"""
+
+    def setUp(self):
+        super().setUp()
+        logbook._reset_for_tests()
+        self.addCleanup(logbook._reset_for_tests)
+
+    def records(self):
+        return list(logbook.iter_records())
+
+    def test_offer_report_info_filtered(self):
+        st, adv = state(), {"evals": [], "best": None}
+        logbook.record_offer(st, adv, "1", report_info={"t": 3.0, "别的": "不要", "lang": "hans"})
+        logbook.record_offer(st, adv, "2", report_info={"别的": 1})
+        logbook.record_offer(st, adv, "3")
+        got = [r.get("report_info") for r in self.records() if r["t"] == "offer"]
+        self.assertEqual(got, [{"t": 3.0, "lang": "hans"}, None, None])
+
+    def test_game_over_report_info_filtered(self):
+        logbook.record_offer(state(), {"evals": []}, "1")
+        logbook.record_game_over(why="结算画面", report_info={"lang": "hant", "路径": "C:\\x"})
+        logbook.record_game_over(why="结算画面", report_info="不是对象")
+        ends = [r for r in self.records() if r["t"] == "gameover"]
+        self.assertEqual(ends[0]["report_info"], {"lang": "hant"})
+        self.assertNotIn("report_info", ends[1])
+
+    def test_shown_once(self):
+        logbook.record_offer(state(), {"evals": []}, "1")
+        logbook.record_shown("1")
+        logbook.record_shown("1")
+        logbook.lane("taptap").record_shown("1")
+        shown = [r for r in self.records() if r["t"] == "shown"]
+        self.assertEqual([(r["offer_id"], r.get("lane")) for r in shown], [("1", None), ("taptap-1", "taptap")])
+
+    def test_stop_needs_game_and_once(self):
+        logbook.record_stop("quit")  # 还没有局号：不记
+        logbook.record_offer(state(), {"evals": []}, "1")
+        game = logbook.current_game()
+        logbook.record_stop("quit")
+        logbook.record_stop("quit")
+        logbook.record_stop("game_closed")
+        logbook.record_stop("别的")
+        stops = [(r["game"], r["why"]) for r in self.records() if r["t"] == "stop"]
+        self.assertEqual(stops, [(game, "quit"), (game, "game_closed")])
+        self.assertEqual(logbook.resumable(), game)  # stop 不影响重启后接哪一局
+        # 又有了三选一以后同一种照样再记（游戏窗口一时找不到又回来、之后真关了：报告只看最后一次三选一以后的）
+        logbook.record_offer(state(), {"evals": []}, "2")
+        logbook.record_stop("game_closed")
+        stops = [(r["game"], r["why"]) for r in self.records() if r["t"] == "stop"]
+        self.assertEqual(stops, [(game, "quit"), (game, "game_closed"), (game, "game_closed")])
+        self.assertEqual(logbook.resumable(), game)
+
+
+class ReportInfoCountersTest(unittest.TestCase):
+    """底层的几样计数：错误记录的次数和异常类名、识别耗时的累计、识别图片的情况、Q 版头像的造型名。"""
+
+    def test_exception_kind(self):
+        tb = 'Traceback (most recent call last):\n  File "C:\\x\\a.py", line 1\nValueError: 读不出 C:\\x'
+        self.assertEqual(errors.exception_kind(tb), "ValueError")
+        self.assertEqual(errors.exception_kind("advisor.winhttp.HttpError: 404"), "HttpError")
+        self.assertEqual(errors.exception_kind("OSError"), "OSError")
+        for detail in ("截短的是：text", "原因：HTTP 503", "", None, "Error: 只有冒号前不像类名的不算 x y"):
+            self.assertIsNone(errors.exception_kind(detail))
+
+    def test_tally_counts_every_call(self):
+        from tests.support.errors import capture_errors
+
+        capture_errors(self)
+        total, kinds = errors.tally()
+        for _ in range(2):
+            errors.log_error("同一个错", "ValueError: x")  # 第二次合并成「又出现」也算一次
+        errors.log_error("别的", "原因：连不上")
+        total2, kinds2 = errors.tally()
+        self.assertEqual(total2 - total, 3)
+        self.assertEqual(kinds2.get("ValueError", 0) - kinds.get("ValueError", 0), 2)
+
+    def test_perf_totals(self):
+        from advisor import perfstats
+
+        before = perfstats.totals()
+        perfstats.record("frame", 1200.0)
+        perfstats.record("frame", 100.0)
+        perfstats.record("ui_lag", 600.0)
+        perfstats.record("advice", 5000.0)  # 别的种类不累计
+        perfstats.take_period()  # 分段统计取走不影响累计
+        after = perfstats.totals()
+
+        def diff(kind):
+            n0, ms0, slow0 = before.get(kind, (0, 0.0, 0))
+            n1, ms1, slow1 = after[kind]
+            return n1 - n0, round(ms1 - ms0), slow1 - slow0
+
+        self.assertEqual(diff("frame"), (2, 1300, 1))
+        self.assertEqual(diff("ui_lag"), (1, 600, 1))
+        self.assertNotIn("advice", after)
+
+    def test_session_minus(self):
+        from advisor.session.core import _minus
+
+        self.assertEqual(_minus((10, 1000.0, 2), (4, 400.0, 1)), (6, 100, 1))
+        self.assertEqual(_minus((3, 30.0, 0), None), (3, 10, 0))
+        self.assertEqual(_minus(None, None), (0, None, 0))
+
+    def test_assets_status(self):
+        from advisor import assets
+
+        saved = dict(assets._run)
+        self.addCleanup(lambda: (assets._run.update(saved), setattr(assets, "_status_cache", None)))
+        assets._run.update({"wiki": 0, "mirror": 0, "failed": 0})
+        wiki = assets.AssetItem("heroes", "UT_Hero_RolePhoto_101.png")
+        mirror = assets.AssetItem("profiles", "UT_Hero_ProfilePhoto_101_01.png", mirror=True)
+        bundled = assets.AssetItem("stars", "s.png", bundled=True)
+        assets._note_run([wiki, mirror], [wiki.name, mirror.name],
+                         [("chips/a.png", "HTTP 404"), ("chips/b.png", assets.PAUSED), ("chips/c.png", assets.CANCELLED)])
+        manifest = assets.Manifest([wiki, mirror, bundled], "2026-01-01", "")
+        with mock.patch.object(assets, "load_manifest", return_value=manifest), \
+                mock.patch.object(assets, "load_local", return_value={}), \
+                mock.patch.object(assets, "is_present", side_effect=lambda item, local=None: item is wiki), \
+                mock.patch.object(assets, "_stored_remote", return_value=None):
+            got = assets.report_status(now=1000.0)
+        self.assertEqual(got, {"manifest": "2026-01-01", "serial": None, "expected": 2, "present": 1,
+                               "missing": ["UT_Hero_ProfilePhoto_101_01.png"], "wiki": 1, "mirror": 1, "failed": 1})
+
+    def test_photo_skin(self):
+        from advisor.vision import stars
+
+        self.assertEqual(stars.photo_skin("UT_Hero_ProfilePhoto_101.png"), "base")
+        self.assertEqual(stars.photo_skin("UT_Hero_ProfilePhoto_101_01.png"), "01")
+        self.assertEqual(stars.photo_skin("UT_Hero_ProfilePhoto_101_01_sfw.png"), "01_sfw")
+
+
+class ReportInfoSessionTest(unittest.TestCase):
+    """记账给对局报告的几项（Session.report_info）：从第几轮看起、离那时几秒、语言、队友认了几次、认不出自己那一行时的比对、
+    筹码商店的价格和第几个、出了几次错、识别快慢，以及结算数据表上认不出的那一栏最像谁。"""
+
+    def setUp(self):
+        from advisor.data import load_db
+        from advisor.prefs import Settings
+        from advisor.session import Session
+
+        self.now = [100.0]
+        self.db = load_db()
+        self.session = Session(self.db, Settings(hero="凛"), clock=lambda: self.now[0])
+        self.session.game.seen_hero = "凛"
+
+    def frame(self, names, scores=(0.95, 0.7, 1.0)):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(names=list(names), raw=list(names), rerolls=2, probabilities=(60, 37, 3),
+                               selected=None, problems=[], name_scores=list(scores))
+
+    def close(self):
+        self.session.on_frame(None)
+        self.session.on_frame(None)
+
+    def test_error_does_not_block_advice(self):
+        """整理这几项出错时推荐照给，这一次不带（空字典），错误记进错误记录。"""
+        from unittest import mock
+        from tests.support.errors import capture_errors
+
+        logged = capture_errors(self)
+        with mock.patch.object(type(self.session), "_report_info", side_effect=RuntimeError("坏了")):
+            ev = self.session.on_frame(self.frame(["小猪存钱罐", "友情徽章", "医疗箱-紧急治疗"]))
+            self.assertEqual(ev.kind, "advice")
+            self.assertEqual(ev.report_info, {})
+            self.assertEqual(self.session.report_info(), {})
+        self.assertTrue(any("RuntimeError" in detail for _title, detail in logged.entries()))
+
+    def test_offer_fields(self):
+        from tests.support.errors import capture_errors
+        from types import SimpleNamespace
+        from advisor import perfstats
+
+        capture_errors(self)
+        s = self.session
+        s.on_hud(SimpleNamespace(round=1, map=None))
+        errors.log_error("出错了", "KeyError: 'x'")
+        perfstats.record("frame", 1500.0)
+        for _ in range(2):
+            s.on_teammates([{"row": 1, "hero": "恋", "bot": False}, {"row": 2, "hero": None, "bot": True}])
+        self.now[0] = 130.0
+        ev = s.on_frame(self.frame(["小猪存钱罐", "友情徽章", "医疗箱-紧急治疗"]))
+        self.assertEqual(ev.kind, "advice")
+        info = ev.report_info
+        self.assertEqual(info["watch"], {"round": 1, "late": False})
+        self.assertEqual(info["t"], 30.0)
+        self.assertEqual(info["lang"], "hans")
+        self.assertEqual(info["chip_scores"], [0.95, 0.7, 1.0])
+        self.assertEqual(info["teammate_reads"], [
+            {"row": 1, "first_round": 1, "reads": 2, "adopted": True},
+            {"row": 2, "first_round": 1, "reads": 2, "adopted": False}])
+        self.assertEqual(info["errors"], {"count": 1, "kinds": {"KeyError": 1}})
+        self.assertEqual((info["perf"]["frames"], info["perf"]["frame_ms"], info["perf"]["slow_frames"]),
+                         (1, 1500, 1))
+        self.assertNotIn("self_row", info)
+        self.assertNotIn("shop", info)
+
+    def test_self_row(self):
+        s = self.session
+        s.on_self_row({"self_score": 0.52, "self_margin": 0.01, "best": "米米", "score": 0.7, "margin": 0.05,
+                       "skin": "01", "second": "不在资料里", "second_skin": "x", "second_score": 0.6})
+        self.assertEqual(s.report_info()["self_row"], {
+            "guess": "米米", "score": 0.7, "margin": 0.05, "skin": "01", "second": None, "second_skin": None,
+            "second_score": None, "self_score": 0.52, "self_margin": 0.01})
+        s.note_own(2)
+        self.assertNotIn("self_row", s.report_info())  # 认出了自己那一行
+        s.game.own_row = None
+        s.on_self_row(None)
+        self.assertNotIn("self_row", s.report_info())
+
+    def test_shop_buys_in_one_visit(self):
+        s = self.session
+        s.on_shop_window(20)
+        ev = s.on_frame(self.frame(["小猪存钱罐", "友情徽章", "医疗箱-紧急治疗"]))
+        self.assertEqual(ev.report_info["shop"], {"price": 20, "buy": 1})
+        self.close()
+        self.now[0] += 5
+        s.on_shop_window(None)
+        ev = s.on_frame(self.frame(["会员推荐信", "手电筒-强光", "优雅之羽"]))
+        self.assertEqual(ev.report_info["shop"], {"price": None, "buy": 2})
+        self.close()
+        self.now[0] += 60  # 隔得久：下一次进商店重新数
+        s.on_shop_window(25)
+        ev = s.on_frame(self.frame(["小猪存钱罐", "友情徽章", "医疗箱-紧急治疗"]))
+        self.assertEqual(ev.report_info["shop"], {"price": 25, "buy": 1})
+
+    def test_teammate_guess_extra(self):
+        s = self.session
+        s.on_teammates([{"row": 1, "hero": None, "bot": True, "best": "恋", "score": 0.6, "margin": 0.01,
+                         "skin": "01", "second": "米米", "second_skin": "base", "second_score": 0.59}])
+        self.assertEqual(s.teammate_guesses(), [{"guess": "恋", "score": 0.6, "margin": 0.01, "skin": "01",
+                                                 "second": "米米", "second_skin": "base", "second_score": 0.59}])
+
+    def test_table_guess(self):
+        from types import SimpleNamespace
+        from advisor.session.core import _table_record
+
+        s = self.session
+        s.game._mate_guess[1] = ("恋", 0.81, 0.02)
+        column = dict(name=None, bot=None, muted=None, stats={}, best=(), coins_all=None, coins_transferred=None,
+                      chips=None, chips_unknown=None, badges=None)
+        reading = SimpleNamespace(columns=[SimpleNamespace(seat=2, **column), SimpleNamespace(seat=3, **column)],
+                                  map=None, difficulty=None, rounds=None)
+        players = _table_record(s, reading)["players"]
+        self.assertEqual((players[0]["guess"], players[0]["score"]), ("恋", 0.81))
+        self.assertNotIn("guess", players[1])
+
+
+class ReportInfoOfferLogTest(unittest.TestCase):
+    """悬浮窗记三选一：report_info 里另加这个编号是不是刷新以后换的、悬浮窗这一侧的几项；对局结束同样加上。"""
+
+    class Logbook:
+        PICK_REROLL = "刷新"
+
+        def __init__(self):
+            self.offers, self.picks, self.ends = [], [], []
+
+        def record_offer(self, state, advice, offer_id, **kwargs):
+            self.offers.append((offer_id, kwargs.get("report_info")))
+
+        def record_pick(self, offer_id, chosen, via=None):
+            self.picks.append((offer_id, chosen))
+
+        def record_game_over(self, **info):
+            self.ends.append(info)
+
+    def setUp(self):
+        from advisor.ui.overlay_parts.records import OfferLog
+        from advisor.ui.services import Services
+
+        self.logbook = self.Logbook()
+        services = Services(logbook=self.logbook)
+        self.log = OfferLog(lambda: services, context=lambda: {"window": {"tier": "1080p", "mode": "windowed"}})
+
+    def event(self, names, rerolls, info=None):
+        from types import SimpleNamespace
+
+        evals = [SimpleNamespace(chip=SimpleNamespace(name=n)) for n in names]
+        return SimpleNamespace(state=SimpleNamespace(rerolls=rerolls), advice=SimpleNamespace(evals=evals),
+                               select_no=1, report_info={"t": 1.0} if info is None else info)
+
+    def test_after_reroll_and_context(self):
+        eggs = lambda *args: None  # noqa: E731
+        self.log.on_advice(self.event(["甲", "乙", "丙"], 2), False, eggs)
+        self.log.on_advice(self.event(["丁", "戊", "己"], 1), True, eggs)
+        (first, info1), (second, info2) = self.logbook.offers
+        self.assertNotEqual(first, second)
+        self.assertEqual(info1, {"t": 1.0, "after_reroll": False, "window": {"tier": "1080p", "mode": "windowed"}})
+        self.assertIs(info2["after_reroll"], True)
+        self.log.on_advice(self.event(["甲", "乙", "丙"], 1, info={}), True, eggs)  # 事件没带 report_info：不传
+        self.assertIsNone(self.logbook.offers[-1][1])
+
+    def test_game_over_adds_context(self):
+        self.log.game_over({"why": "结算画面", "report_info": {"lang": "hans"}}, 1)
+        self.log.game_over({"why": "结算画面", "outcome": "win"}, 1)
+        self.assertEqual(self.logbook.ends[0]["report_info"],
+                         {"lang": "hans", "window": {"tier": "1080p", "mode": "windowed"}})
+        self.assertNotIn("report_info", self.logbook.ends[1])
 
 
 if __name__ == "__main__":

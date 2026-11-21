@@ -54,7 +54,8 @@ class GameLogbook(FakeLogbook):
         self.offer_games: list[str] = []
 
     def record_offer(self, state, advice, offer_id, client=None, map_source=None, source_by=None,
-                     difficulty_source=None, owned_sources=None, owned_panel=None):
+                     difficulty_source=None, owned_sources=None, owned_panel=None,
+                     teammate_guesses=None, report_info=None):
         super().record_offer(state, advice, offer_id)
         self.offer_games.append(self.game)
 

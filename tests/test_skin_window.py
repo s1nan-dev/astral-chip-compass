@@ -470,6 +470,8 @@ def visible_texts(*windows) -> list[str]:
     out = []
     for window in windows:
         for widget in [window, *window.findChildren(QWidget)]:
+            if widget.property("noticeBlock") and widget.isVisibleTo(window):
+                out.append(widget.property("noticeText"))  # 提示块：按一条提示取原文（标题、正文拆成了几个标签）
             text = getattr(widget, "text", None)
             if not callable(text) or not widget.isVisibleTo(window):
                 continue

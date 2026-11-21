@@ -529,6 +529,13 @@ class ScenarioBase(unittest.TestCase):
                 self.assertTrue(any(p in text for p in places) or quoted, text)
                 for name in quoted:
                     btn = next(b for b in visible_buttons(w, row) if b.text() == name)
+                    if row.property("noticeBlock"):
+                        # 提示块：按钮在文字下面（块的右下角）
+                        labels = [lb for lb in row.findChildren(QLabel) if lb.isVisibleTo(w.panel)]
+                        if w.isVisible():
+                            bottom = max(lb.mapTo(w.panel, QPoint(0, lb.height())).y() for lb in labels)
+                            self.assertGreaterEqual(btn.mapTo(w.panel, QPoint(0, 0)).y(), bottom, name)
+                        continue
                     label = next(lb for lb in row.findChildren(QLabel) if lb.isVisibleTo(w.panel) and lb.text() == text)
                     if w.isVisible():
                         self.assertGreaterEqual(btn.mapTo(w.panel, QPoint(0, 0)).x(),

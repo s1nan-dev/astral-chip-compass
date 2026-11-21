@@ -256,6 +256,7 @@ class SessionView:
     owned: tuple[str, ...] = ()
     hero_source: str = ""  # manual / auto / pending（Session.hero_source）
     seen_hero: str | None = None  # 自动识别到的角色（手动指定时也照记）
+    new_hero: str | None = None  # 立绘认出的新角色（资料里还没有她，Session.game.new_hero）；没有时为 None
     map_source: str | None = None
     map_confidence: str | None = None
     map_ask: object = False  # 要不要请用户选地图（Session.map_ask；本局已结束时为假）
@@ -357,6 +358,7 @@ def take_view(session: SessionAPI, *, ledger: bool = False, switch: bool = False
         star_read=item(lambda: s.star_read, False), map=item(lambda: s.map, None),
         owned=item(lambda: tuple(s.owned), ()),
         hero_source=item(lambda: session.hero_source, ""), seen_hero=item(lambda: session.game.seen_hero, None),
+        new_hero=item(lambda: getattr(session.game, "new_hero", None), None),
         game_over_info=dict(info) if isinstance(info, dict) else info,
         progress=item(lambda: session.game.progress, None),
         progress_cap=item(lambda: session.game.progress_cap, None),

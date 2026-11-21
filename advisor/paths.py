@@ -90,8 +90,8 @@ USED_MARK = f".{USED_TAG}-"
 # .broken-时间），以及 state.fallback.json、schemes.fallback.json 和它们的备份、写回个人目录后标记为用过的「.used-时间」
 USER_FILES = tuple(f"{name}*" for name in (STATE_NAME, STATE_FALLBACK_NAME, SCHEMES_NAME, SCHEMES_FALLBACK_NAME))
 USER_ASSET_RECORDS = ("assets/manifest-local.json", "assets/download-cooldown.json")
-USER_DATA_NAMES = ("logs", "reports", ".tmp", "assets/heroes", "assets/profiles", "assets/chips", "assets/skins",
-                   *USER_ASSET_RECORDS, *USER_FILES)
+USER_DATA_NAMES = ("logs", "reports", ".tmp", "assets/heroes", "assets/profiles", "assets/chips", "assets/achieve",
+                   "assets/skins", *USER_ASSET_RECORDS, *USER_FILES)
 
 # storage_fallback() 的种类（download_fallback() 用 FALLBACK_NO_LOCALAPPDATA、FALLBACK_UNWRITABLE 两种）
 FALLBACK_NO_APPDATA = "no_appdata"  # 没有环境变量 APPDATA（或为空、不是绝对路径）

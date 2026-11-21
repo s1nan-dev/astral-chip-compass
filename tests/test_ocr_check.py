@@ -1234,15 +1234,18 @@ class OverlayRowTest(unittest.TestCase):
         self.assertEqual(yes.mapTo(self.window, QPoint(0, 0)).y(), no.mapTo(self.window, QPoint(0, 0)).y())
         self.assertLess(yes.mapTo(self.window, QPoint(0, 0)).x(), no.mapTo(self.window, QPoint(0, 0)).x())
 
-    def test_only_close_stays_beside_text(self):
-        """只有「关闭本条提示」时照旧在文字右边。"""
+    def test_only_close_under_text_at_right(self):
+        """只有「关闭本条提示」时也和别的提示一样在文字下面、靠提示块的右边。"""
         w = self.window
         w.ocr_check._outcome = OcrNote("poor", threads=4, ms=1240, retry=True, reasons=(Reason("saver"),))
         w.show()
         w.refresh()
         button = w.notices.buttons("ocr_check")[0]
         label = self.label()
-        self.assertGreaterEqual(button.mapTo(w, QPoint(0, 0)).x(), label.mapTo(w, QPoint(label.width(), 0)).x())
+        block = label.parent()
+        self.assertGreaterEqual(button.mapTo(w, QPoint(0, 0)).y(), label.mapTo(w, QPoint(0, label.height())).y())
+        right = block.mapTo(w, QPoint(block.width(), 0)).x()
+        self.assertLessEqual(right - button.mapTo(w, QPoint(button.width(), 0)).x(), 20)
 
     def test_yes_big_cores_saves_setting(self):
         """点「是」（只用大核）：真走 Overlay.set_big_cores，设上、存进设置，提示换成「已改好」，过一会儿再量。"""

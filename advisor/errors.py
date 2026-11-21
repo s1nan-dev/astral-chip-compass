@@ -13,10 +13,14 @@ pythonw 下没有控制台，这是唯一的记录。
   把还没记的次数补上。文件被删掉、换了新文件以后再出同一个错照常整条记。
 - 文件到了 MAX_BYTES 时，旧的改名另存成 overlay_err.old.txt（只留这一份，下次到了时覆盖它），再写新的文件；各种错还没记的
   次数补在另存的旧文件末尾（整条记录在那里）。改不了名（被别的程序占着）时照旧往原文件里追加，不丢这一条。
+- 另在内存里数这次运行一共记了几次错（每一次调用都算，「又出现 N 次」合并的也逐次算），以及详细信息最后一行是异常时的
+  类名各几次（tally）：对局报告按一局开始和结束时的两份相减，写这一局里出了几次错、各是什么异常。只数类名，不留标题、
+  详细信息的原文和路径；写不进记录文件时照样数。
 """
 from __future__ import annotations
 
 import os
+import re
 import sys
 import threading
 import time
@@ -40,12 +44,54 @@ _lock = threading.Lock()
 # 最近整条记下的几种错：(文件, 标题, 详细信息) → [之后又出现了几次还没记, 上次写的时刻（time.monotonic）]，旧的在前
 _seen: OrderedDict[tuple[Path, str, str], list] = OrderedDict()
 
+# 这次运行记过几次错、各种异常的类名各几次（tally）。类名最多数这么多种，再多的只算进总数
+KINDS_MAX = 64
+_tally_lock = threading.Lock()
+_total = 0
+_kinds: dict[str, int] = {}
+# 详细信息最后一行是异常时的那一行：「模块.类名: 信息」或只有类名。只认名字以这几种结尾的，免得把普通的说明当成异常
+_EXCEPTION_LINE = re.compile(
+    r"(?:[A-Za-z_][A-Za-z0-9_]*\.)*([A-Za-z_][A-Za-z0-9_]{0,63}(?:Error|Exception|Warning|Exit|Interrupt|Timeout|Stopped))"
+    r"(?::.*)?")
+
+
+def exception_kind(detail) -> str | None:
+    """详细信息里的异常类名（只取类名，不带模块和信息）：最后一个不空的行是「类名: 信息」这样的写法时取出来，别的为 None。"""
+    if not isinstance(detail, str):
+        return None
+    for line in reversed(detail.strip().splitlines()):
+        line = line.strip()
+        if line:
+            found = _EXCEPTION_LINE.fullmatch(line)
+            return found.group(1) if found else None
+    return None
+
+
+def _count(detail) -> None:
+    global _total
+    kind = exception_kind(detail)
+    with _tally_lock:
+        _total += 1
+        if kind is not None and (kind in _kinds or len(_kinds) < KINDS_MAX):
+            _kinds[kind] = _kinds.get(kind, 0) + 1
+
+
+def tally() -> tuple[int, dict[str, int]]:
+    """这次运行到现在记过几次错（log_error 每调用一次算一次），和异常类名 → 次数（详细信息里认不出异常的只算进总数）。
+    交回副本：两次相减就是这中间的。"""
+    with _tally_lock:
+        return _total, dict(_kinds)
+
 
 def log_error(title: str, detail: str, append: bool = True) -> str:
     """把错误追加进错误记录（ERR_FILE），返回给用户看的「写在哪里」。
 
     append 不起作用（一律追加），保留这个参数只为兼容各处的调用。
     ERR_FILE 每次调用时才取（测试会换掉模块里的这个名字，把错误记录指到自己的临时文件）。"""
+    try:
+        _count(detail)
+    except Exception:  # noqa: BLE001  数不了只少这一次，不能挡住写错误记录
+        pass
     path = ERR_FILE
     try:
         with _lock:

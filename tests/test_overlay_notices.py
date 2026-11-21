@@ -27,7 +27,7 @@ from advisor.ui.services import Services  # noqa: E402
 from advisor.ui.settings import settings_texts  # noqa: E402
 from advisor.ui.text import capture_detail  # noqa: E402
 from tests.support.fakes import FakeLogbook  # noqa: E402
-from tests.support.overlay_cases import APP, ERR_SHOWN_DEV, PROJECT, capture_state, expire_flash, plain_html, shown, temp_dir, tip_text
+from tests.support.overlay_cases import APP, ERR_SHOWN_DEV, PROJECT, capture_state, expire_flash, notice_titles, plain_html, shown, temp_dir, tip_text
 
 
 class CaptureNoticeTest(unittest.TestCase):
@@ -64,7 +64,7 @@ class CaptureNoticeTest(unittest.TestCase):
                 self.assertTrue(CAPTURE_NOTICE[problem].startswith("⚠ "))
                 self.assertTrue(CAPTURE_NOTICE[problem].endswith("已改为截取屏幕：游戏窗口不在前台时暂停识别。"))
                 self.assertNotIn("截图工具截不到悬浮窗", CAPTURE_NOTICE[problem])
-                label = next(lb for lb in w.recog_top.findChildren(QLabel) if lb.text() == CAPTURE_NOTICE[problem])
+                label = notice_titles(w.recog_top, CAPTURE_NOTICE[problem])[0]
                 self.assertEqual(label.objectName(), "notice_warn")
                 self.assertEqual(tip_text(label.toolTip()), tip)
                 self.assertEqual([b.text() for b in w.notices.buttons("capture")], ["关闭本条提示"])
@@ -88,8 +88,7 @@ class CaptureNoticeTest(unittest.TestCase):
 
         def notice_label() -> QLabel:
             # 同一条提示换了悬停说明时整行重建，换下来的那一行隐藏后等待删除：只取显示着的
-            found = [lb for lb in w.recog_top.findChildren(QLabel)
-                     if lb.text() == CAPTURE_NOTICE["failed"] and lb.isVisibleTo(w.recog_top)]
+            found = notice_titles(w.recog_top, CAPTURE_NOTICE["failed"])
             self.assertEqual(len(found), 1)
             return found[0]
 
@@ -123,8 +122,7 @@ class CaptureNoticeTest(unittest.TestCase):
         release = "app\\.tmp\\overlay_err.txt"
 
         def notice_tip() -> str:
-            found = [lb for lb in w.recog_top.findChildren(QLabel)
-                     if lb.text() == CAPTURE_NOTICE["failed"] and lb.isVisibleTo(w.recog_top)]
+            found = notice_titles(w.recog_top, CAPTURE_NOTICE["failed"])
             self.assertEqual(len(found), 1)
             return tip_text(found[0].toolTip())
 
@@ -281,7 +279,7 @@ class FreeNoticeTest(NoticeCase):
         标签）。其余没有链接的提示行照旧是纯文字、不接鼠标。"""
         from PySide6.QtGui import QDesktopServices
 
-        from advisor.ui.text import link_style, linkify
+        from advisor.ui.text import link_style
 
         w = self.make()
         w.notices.check_free_notice()
@@ -290,14 +288,18 @@ class FreeNoticeTest(NoticeCase):
             w.refresh()
             w.show()
             APP.processEvents()
-            label = self.notice_label(w)
+            block = self.notice_label(w).parent()
+            self.assertEqual(block.property("noticeText"), self.TEXT)  # 字一个不改
+            # 首句是标题（没有链接、不接鼠标）；网址和「关于」在正文里，正文那个标签自己接链接
+            title = self.notice_label(w)
+            self.assertEqual(title.textInteractionFlags(), Qt.NoTextInteraction)
+            label = block.findChild(QLabel, "noticeBody")
             self.assertEqual(label.textFormat(), Qt.RichText)
-            about = f'<a href="{ABOUT_LINK}" style="{link_style()}">「关于」</a>'
-            self.assertEqual(label.text(), linkify(self.TEXT).replace("「关于」", about))  # 由同一句转成，字一个不改
+            self.assertIn(f'<a href="{ABOUT_LINK}" style="{link_style()}">', label.text())
             self.assertIn(f'<a href="{self.URL}" style="{link_style()}">', label.text())
+            self.assertNotIn(f">{self.URL}<", label.text().replace("&nbsp;", ""))  # 网址换成了文字链接
             self.assertFalse(label.openExternalLinks())  # 链接由提示行自己接（open_link）
             self.assertTrue(label.textInteractionFlags() & Qt.LinksAccessibleByMouse)
-            self.assertEqual(unpadded(plain_html(label.text())), self.TEXT)
             other = self.notice_label(w, "storage")
             self.assertFalse(other.openExternalLinks())
             self.assertEqual(other.textInteractionFlags(), Qt.NoTextInteraction)

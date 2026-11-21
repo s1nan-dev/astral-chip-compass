@@ -16,6 +16,9 @@ pick_grace）。识别线程每分钟取走一段（take_period），把这一�
 
 另外给 advisor/usage.py 两个公开的用法：usage_snapshot 取这一刻的处理器时间（没有 recog，那是调用线程，在这里没有意义），
 usage_percent 把两次快照换算成占用；每分钟一条的占用记录和导出诊断时现量的线程占用都用它们。
+
+对局报告另要一局里识别跑得快不快：每帧识别（frame）和界面线程的定时器晚到（ui_lag）这两种另有一份从程序启动起的累计
+（totals：次数、总毫秒、不少于 SLOW_MS 里那个数的次数），take_period 不清它；报告按一局开始和结束时的两份相减。
 """
 from __future__ import annotations
 
@@ -42,6 +45,11 @@ _since: float | None = None  # 这一段从什么时候算起（第一次记一�
 _cpu_base: dict | None = None  # 上一次取走时的处理器时间（第一次只记基准，cpu 不出现）
 _ui_handle = None  # 主线程的句柄，第一次用时打开一次留着
 _ui_handle_tried = False
+
+# 累计（totals）的两种和各自算「慢」的门槛（毫秒）：一帧识别花了 1 秒以上；界面线程的定时器晚到半秒以上（界面卡住了，
+# 悬浮窗这段时间不跟手）。只累计这两种，和 take_period 的分段统计互不影响
+SLOW_MS = {"frame": 1000.0, "ui_lag": 500.0}
+_totals: dict[str, list] = {}  # kind →（次数, 总毫秒, 慢的次数），从程序启动起累计，不清零
 
 class _Kind:
     """一种 kind 这一段的累计：次数、总和、最大值，以及（不超过上限时）留存的样本。"""
@@ -247,8 +255,27 @@ def record(kind: str, ms: float) -> None:
                 item.max_ms = value
             if len(item.samples) < MAX_SAMPLES:
                 item.samples.append(value)
+            limit = SLOW_MS.get(kind)
+            if limit is not None and math.isfinite(value):
+                total = _totals.get(kind)
+                if total is None:
+                    total = _totals[kind] = [0, 0.0, 0]
+                total[0] += 1
+                total[1] += value
+                if value >= limit:
+                    total[2] += 1
     except Exception:  # noqa: BLE001  统计本身不能影响识别
         pass
+
+
+def totals() -> dict[str, tuple[int, float, int]]:
+    """从程序启动起的累计（只有 SLOW_MS 里的两种）：kind →（次数, 总毫秒, 不少于门槛的次数）。一次都没记过的不出现。
+    交回副本：两次相减就是这中间的（对局报告按一局开始和结束时的两份算）。出错时交回空字典。"""
+    try:
+        with _lock:
+            return {kind: (int(n), float(ms), int(slow)) for kind, (n, ms, slow) in _totals.items()}
+    except Exception:  # noqa: BLE001  统计本身不能影响别的
+        return {}
 
 
 def count(kind: str) -> None:

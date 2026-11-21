@@ -1,11 +1,12 @@
 """后台任务的界面：导出诊断（诊断包里的对局状态转成 JSON 认得的类型；识别记录和写文件在后台线程里做），以及首次运行时
 下载识别所需的图片（要下的多时下载期间识别暂停，只补少量图片时识别照常；预览图同时画；被站点防护拦下时等到点自动接着下；
 个别图片下不了时提示其余识别照常、之后自动再试；每下完一轮把这一轮的用时和最慢的几张记进识别记录，见
-_log_download_stats）。
+_log_download_stats）。检查更新时、下载失败那一行点「重试」时另在后台取识别图片的最新清单（fetch_manifest，开发版不取），
+取到更新的一份就照合好的清单补下缺的（manifest_fetched）。
 
 Background：状态在部件自己身上，没有控件。诊断包里「悬浮窗状态」那一段由外壳给（overlay_state：读的是悬浮窗和各部件的
 状态）。设置窗口按名字回调、main() 直接调用、提示行的「重试」按钮，以及跨线程信号接的槽（悬浮窗这个 QObject 上）留在悬浮窗上，
-各一行转发到这里；后台线程经悬浮窗的信号把结果交回界面线程（emit_progress、emit_finished、emit_exported）。
+各一行转发到这里；后台线程经悬浮窗的信号把结果交回界面线程（emit_progress、emit_finished、emit_exported、emit_fetched）。
 """
 from __future__ import annotations
 
@@ -41,6 +42,11 @@ COOLDOWN_FALLBACK_MIN = 35  # 下载模块没记下冷却到什么时候时（�
 # 冷却期间点「重试」（下载模块只试一个请求）：离上一次这样试不到这么久（秒）时再点不算，不再发请求（连点也只试一次，界面上
 # 不另提示）。到点自动接着下不受它限制
 RETRY_GAP_S = 10.0
+# 下载失败那一行点「重试」：先取识别图片的最新清单，取完再算要重试哪些；最多等这么久（毫秒），到点还没取完就照现在的清单
+# 重试（连不上时取清单要等到超时，半分钟没有动静不像点了按钮），晚到的结果照取到的时候处理（正在下载的，这一轮下完再查缺的）
+RETRY_FETCH_WAIT_MS = 3000
+# 下载模块交回的「存了更新的一份」（assets.REMOTE_SAVED）：下载模块没有这个名字时照这个认
+REMOTE_SAVED_FALLBACK = "saved"
 
 
 class Background:
@@ -50,7 +56,7 @@ class Background:
                  run_background, watcher, previews, frame_source, emit_progress, emit_finished, emit_exported,
                  update_settings, editor_window, activity, capture_method, overlay_state, export_event, show_export,
                  assets_unwritable=None, later=None, now=None, unread_source=None, pick_source=None,
-                 covered_source=None, finish_source=None, also_pause=None):
+                 covered_source=None, finish_source=None, also_pause=None, emit_fetched=None, frozen=None):
         # 服务：资料库、Session 和它的锁、可选模块（services() 每次现取）；只读的显示状态：三选一显示期间的状态（live：
         # 显示着没有、界面处理过的事件）
         self.db, self.session, self.lock, self.services, self.live = db, session, lock, services, live
@@ -75,6 +81,11 @@ class Background:
         self.also_pause = also_pause if also_pause is not None else (lambda: [])
         # 后台线程交回界面线程：下载进度、下载完了、诊断包写好了（悬浮窗三个信号的 emit）
         self.emit_progress, self.emit_finished, self.emit_exported = emit_progress, emit_finished, emit_exported
+        # 同样：识别图片的最新清单取完了（悬浮窗 manifest_fetched 信号的 emit：(取的结果, 第几次取)）。不给时（测试、预览）
+        # 不取最新清单（fetch_manifest）
+        self.emit_fetched = emit_fetched
+        # 是不是发行版（同 paths.is_frozen，测试换成假的）：开发版不检查更新，也不取最新清单
+        self.frozen = frozen if frozen is not None else app_paths.is_frozen
         # 设置窗口跟着更新、编辑方案窗口（没建过时为 None）、前台状态、实际的截取方式、诊断包里「悬浮窗状态」那一段、导出时
         # 写进推荐全文的那一次推荐（推荐卡片给）、写好诊断包以后提示行写明位置（提示行给）
         self.update_settings, self.editor_window, self.activity = update_settings, editor_window, activity
@@ -111,6 +122,16 @@ class Background:
         self._probed_at: float | None = None  # 冷却期间上一次点「重试」试下载的时刻（time.time，见 RETRY_GAP_S）
         self.blocked = False  # 识别所需的图片还在下载：识别功能暂不可用
         self._preview_waiting: set[str] = set()  # 正在下载的图片里预览局面要用、还没处理完的（_preview_first）
+        # 识别图片的最新清单（fetch_manifest）：正在取、取的停止标志、第几次取（交回的结果按它认是不是这一次的）；点了「重试」、
+        # 等取完再算要重试哪些（_retry_waiting，_retry_seq 认等的是哪一次点击）；正在下载时取到了更新的一份、这一轮下完再查一次
+        # 缺的（_recheck）；退出时叫停以后交回的结果不再管（_closing）
+        self.fetching = False
+        self._fetch_stop = None
+        self._fetch_seq = 0
+        self._retry_waiting = False
+        self._retry_seq = 0
+        self._recheck = False
+        self._closing = False
 
     def snapshot(self, extra: dict | None = None) -> dict:
         """当时的对局状态和悬浮窗状态（写进诊断包的 state.json）。extra 另合并进 state（同时识别时第二张的 lanes 段）。"""
@@ -478,7 +499,7 @@ class Background:
         if self._undo_queue:  # 写的时候撤销了误判：接着存那一份
             self.save_undo_record(*self._undo_queue.pop(0))
 
-    def check_assets(self) -> bool:
+    def check_assets(self, previews: bool = True) -> bool:
         """缺少识别所需的图片时在后台下载。返回是否开始了下载。下载的同时画各套皮肤的预览图：预览的局面要用的那几张图排在
         最前面，处理完就开始画，不等全部下载完（_preview_first、_preview_arrived），下载完再补画没画成的（download_finished）；
         画预览图是静默的，不另加提示，下载照旧按进度提示。不用下载时稍后只画缺了、旧了的（PREVIEW_DELAY_MS 以后，不和启动
@@ -493,27 +514,138 @@ class Background:
         （_show_cooldown）；冷却期间后台识别照常进行，已下载的图片照常用。
         还缺的图片按下载模块的 missing 算：个别下载失败、记了日期的图片当天不算（advisor/assets.py 模块说明「个别图片一直
         下不了」），只缺这几张时不下载、也不提示，明天启动时再下。
+
+        previews 为假时（取到更新的最新清单以后再查一次，_take_missing）不另画预览图：启动时已经排过了。
         """
         if os.environ.get(NO_DOWNLOAD_ENV) == "1":
             return False
         items = self.services().call("assets", "missing", default=None)
+        return self._begin(items, previews)
+
+    def _begin(self, items, previews: bool = True) -> bool:
+        """check_assets 查出来的 items 照它的规矩开始下载（或冷却中写明几点接着下）。返回是否开始了下载。"""
         if not items or self.assets_unwritable():
-            self._refresh_previews(PREVIEW_DELAY_MS)
+            if previews:
+                self._refresh_previews(PREVIEW_DELAY_MS)
             return False
         self._dl_items = list(items)
         until = self._cooling_until()
         if until is not None and until > self.now():
             self._resume_at = until
             self._show_cooldown(len(self._dl_items), 0)
-            self._refresh_previews(PREVIEW_DELAY_MS)
+            if previews:
+                self._refresh_previews(PREVIEW_DELAY_MS)
             return False
         self.start_download()
         return True
 
-    def start_download(self) -> None:
+    # ---- 识别图片的最新清单：跟着检查更新取，取到更新的一份以后查缺图、下载
+
+    def fetch_manifest(self) -> bool:
+        """在后台取识别图片的最新清单（下载模块的 fetch_remote_manifest：联网，在 run_background 的线程里调用，带停止标志，
+        退出时 stop_download 叫停），取完经 emit_fetched 交回界面线程（manifest_fetched）。检查更新时（UpdateControl 的
+        fetch_assets：自动检查和设置窗口的「检查更新」）、下载失败那一行点「重试」时（start_download）调用；和检查更新各在
+        各的后台线程里，检查的结果照常先交回，不等它。返回是否在取（新起了一次，或者上一次还没取完：不另起一次）。
+
+        不取的：开发版（frozen 为假：不检查更新，也不往开发目录的识别图片文件夹里写最新清单）；没接上 emit_fetched 时（测试、
+        预览）；下载模块交不出 fetch_remote_manifest 时；环境变量 CHIP_ADVISOR_NO_DOWNLOAD=1 时（同 check_assets：不下载，
+        也不取清单）；退出时叫停以后。"""
+        if (self._closing or self.emit_fetched is None or os.environ.get(NO_DOWNLOAD_ENV) == "1"
+                or not self.frozen() or not self.services().has("assets", "fetch_remote_manifest")):
+            return False
+        if self.fetching:
+            return True
+        self.fetching = True
+        self._fetch_seq += 1
+        seq = self._fetch_seq
+        stop = self._fetch_stop = StopFlag()
+        services, emit = self.services(), self.emit_fetched
+
+        def work():
+            result = None
+            try:
+                result = services.call("assets", "fetch_remote_manifest", stop, default=None)
+            finally:
+                emit(result, seq)
+
+        self.run_background(work)
+        return True
+
+    def manifest_fetched(self, result, seq) -> None:
+        """最新清单取完了（界面线程，经 manifest_fetched 信号交回）。点了「重试」、正等着它的：不论结果，照现在的清单算要重试
+        哪些、开始下载（_resume_retry）。不是在等「重试」的：存了更新的一份（REMOTE_SAVED）时查缺图、下载（_manifest_saved）；
+        别的结果（没变、没取到、核对不过、以后的格式、复刻版不取、叫停了）什么都不做：核对不过的下载模块已记进错误记录。"""
+        if seq == self._fetch_seq:
+            self.fetching = False
+            self._fetch_stop = None
+        if self._closing:
+            return
+        if self._retry_waiting:
+            self._resume_retry()
+            return
+        saved = getattr(self.services().assets, "REMOTE_SAVED", REMOTE_SAVED_FALLBACK)
+        if result is not None and result == saved:
+            self._manifest_saved()
+
+    def _manifest_saved(self) -> None:
+        """取到了更新的最新清单：正在下载时不另起一轮，记下（_recheck），这一轮下完（download_finished）再查一次缺的；
+        不在下载时马上查（_take_missing）。"""
+        if self._downloading:
+            self._recheck = True
+            return
+        self._take_missing()
+
+    def _take_missing(self) -> None:
+        """照合好的清单（下载模块的 missing 已经算进最新清单）再查一次缺的，照下载那一行现在的状态：
+        - 没有那一行：同启动时（check_assets，不另画预览图）：缺图就下载（要下的多时暂停识别），冷却中写明几点接着下；
+        - 冷却中（blocked）：不绕过冷却，到点照常接着下（_resume_due → start_download 照 missing 下，新的图片也在里面）；
+          只把那一行「其余 N 张」改成现在还缺的张数；
+        - 失败那一行（failed）：上一轮下过的那几张不自动再下（照旧等「重试」、隔天、下次启动，同现在），只下上一轮没有的
+          （最新清单新带来的）；没有这样的就不动那一行。下的这一轮不是点「重试」，不去近期不再自动下载的记号。"""
+        if os.environ.get(NO_DOWNLOAD_ENV) == "1":
+            return
+        state = self.assets_state[0] if self.assets_state is not None else None
+        if state == "downloading":
+            self._recheck = True
+            return
+        if state == "blocked":
+            items = self.services().call("assets", "missing", default=None)
+            if isinstance(items, (list, tuple)) and len(self.assets_state) > 1 and items:
+                self._dl_items = list(items)
+                self.assets_state = ("blocked", len(items), *self.assets_state[2:])
+                self.refresh()
+            return
+        if state == "failed":
+            tried = {name for name in map(_item_name, self._dl_items) if name}
+            items = self.services().call("assets", "missing", default=None)
+            fresh = [item for item in items or () if _item_name(item) not in tried]
+            if not fresh or self.assets_unwritable():
+                return
+            self.assets_state = None  # 这一轮是新下的，不是点「重试」（start_download 按失败那一行认重试）
+            self._begin(fresh, previews=False)
+            return
+        self.check_assets(previews=False)
+
+    def _resume_retry(self) -> None:
+        """点了「重试」、等的最新清单取完了（或者等到了 RETRY_FETCH_WAIT_MS）：照现在的清单算要重试哪些、开始下载
+        （start_download 的 fetched）。等的时候失败那一行已经没了（关掉了、别的一轮开始了）就不下。"""
+        self._retry_waiting = False
+        state = self.assets_state[0] if self.assets_state is not None else None
+        if state == "failed" and not self._downloading:
+            self.start_download(fetched=True)
+
+    def _retry_due(self, seq: int) -> None:
+        """「重试」等最新清单等到了上限：还在等这一次点击的，不再等，照现在的清单重试。"""
+        if self._retry_waiting and seq == self._retry_seq:
+            self._resume_retry()
+
+    def start_download(self, fetched: bool = False) -> None:
         """开始下载：启动时缺图片、点「重试」、冷却到点以后（_resume_due）。
 
-        下载失败那一行点「重试」：下载模块的 retry_items（近期不再自动下载的也算），开始下载之前先去掉这几张的这类记号
+        下载失败那一行点「重试」：先在后台取一次识别图片的最新清单（fetch_manifest），取完（最多等 RETRY_FETCH_WAIT_MS）再照
+        合好的清单算要重试哪些（manifest_fetched → _resume_retry → 这里，fetched 为真）；等的时候再点不算。取不了（开发版、
+        下载模块交不出等，见 fetch_manifest）时马上照现在的清单重试。
+        要重试的是下载模块的 retry_items（近期不再自动下载的也算），开始下载之前先去掉这几张的这类记号
         （下载模块的 forget_recent，在下载线程里调用：覆盖清单被别的程序开着时写盘要稍等）。用户就是要现在下：这一下正好
         被站点防护拦下时，它们和别的没下好的图片一样算进「其余 N 张」、到点接着下（left_after_block、冷却那一支都照下载
         模块的 missing），中途退出、当天再打开也是。下载模块交不出 forget_recent 时照旧下载。启动时、冷却到点、冷却期间点
@@ -536,6 +668,17 @@ class Background:
                 return
             self._probed_at = now
         retrying = state == "failed"
+        if retrying and not fetched:
+            if self._retry_waiting:  # 已经在等最新清单：再点不算
+                return
+            self._retry_waiting = True
+            self._retry_seq += 1
+            seq = self._retry_seq
+            if self.fetch_manifest():
+                if self._retry_waiting:  # 还没取完（取完时已经接着重试了的不再排）
+                    self.later(RETRY_FETCH_WAIT_MS, lambda: self._retry_due(seq))
+                return
+            self._retry_waiting = False  # 取不了：照现在的清单马上重试
         if retrying:
             # 用户点「重试」：wiki 上已删除、个别下载失败而近期不再自动重试的图片也马上重试
             fn = "retry_items" if self.services().has("assets", "retry_items") else "missing"
@@ -607,10 +750,16 @@ class Background:
             log_error("记录下载统计出错（拾星助手仍在运行）", traceback.format_exc(), append=True)
 
     def stop_download(self) -> None:
-        """请正在跑的下载停下（只设停止标志，不等；退出时 shutdown 另外等它一个上限），冷却期间排着的「到点接着下」作废。"""
+        """退出时：请正在跑的下载停下（只设停止标志，不等；退出时 shutdown 另外等它一个上限），冷却期间排着的「到点接着下」
+        作废；正在取的最新清单也叫停（下载模块停止标志置位以后不再存，取的线程是守护线程，不等它），之后交回的结果不再管、
+        不再取，「重试」等着的也作废。"""
         self._resume_seq += 1
+        self._closing = True
+        self._retry_waiting = False
         if self._dl_stop is not None:
             self._dl_stop.set()
+        if self._fetch_stop is not None:
+            self._fetch_stop.set()
 
     def download_progress(self, done: int, total: int, name: str) -> None:
         if self._downloading:
@@ -714,6 +863,11 @@ class Background:
         self.refresh()
         self._icons_arrived()
         self._refresh_previews()
+        if self._recheck and not self._closing:
+            # 这一轮下载期间取到了更新的最新清单：现在照合好的清单再查一次缺的（_take_missing：冷却中的不绕过，失败的这一轮
+            # 下过的不自动再下）
+            self._recheck = False
+            self._take_missing()
 
     def count_write_errors(self, reasons) -> int:
         """reasons（failure_reasons 的结果）里写盘出错的张数（下载模块的 is_write_error：图片下载好了、写不进识别图片的文件夹）。

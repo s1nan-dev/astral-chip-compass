@@ -24,7 +24,8 @@ class FakeLogbook:
         return [r for r in self.records if str(r.get("time", "")) >= str(start)[:19]]
 
     def record_offer(self, state, advice, offer_id, client=None, map_source=None, source_by=None,
-                     difficulty_source=None, owned_sources=None, owned_panel=None):
+                     difficulty_source=None, owned_sources=None, owned_panel=None,
+                     teammate_guesses=None, report_info=None):
         item = (offer_id, tuple(e.chip.name for e in advice.evals))
         self.offers.append(item if client is None else (*item, client))
 

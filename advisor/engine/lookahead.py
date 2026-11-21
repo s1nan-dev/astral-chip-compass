@@ -434,9 +434,11 @@ def _avg_any(sc: Scorer, owned: tuple, chips) -> float:
     return total
 
 
-def lookahead_reason(sc: Scorer, name: str, owned: tuple) -> str:
+def lookahead_reason(sc: Scorer, name: str, owned: tuple, skip_lock: bool = False) -> str:
     """前瞻的说明（整句）。前瞻记 0 的情形（lookahead_times 为 0：预计之后没有筹码三选一，持有的筹码数不设上限，不按
-    空着的格数算；已占满流派名额时第三个流派的筹码，_locked_out）不写。记下的要点（Memo.lookahead_keys）给 lookahead_short 用。"""
+    空着的格数算；已占满流派名额时第三个流派的筹码，_locked_out）不写。记下的要点（Memo.lookahead_keys）给 lookahead_short 用。
+    skip_lock：这张另有「锁流派」一项（parts.lock_school_part，它的说明已经写了锁定哪两个流派、哪些流派不再出现）时为真，
+    不再写「选择后锁定……」那一句，其余几句照写；记下的要点不变。"""
     db = sc.db
     owned = tuple(n for n in owned if n in db.chips)
     if name in owned or name not in db.chips or lookahead_times(sc) <= 0 or _locked_out(sc, name, owned):
@@ -461,8 +463,9 @@ def lookahead_reason(sc: Scorer, name: str, owned: tuple) -> str:
             locked = [s for s in SCHOOLS if s not in after]
             # 按筹码方案计算时，锁掉的流派里有方案的必选、推荐另由「选了之后拿不到……」的提醒写（scheme_rank.loss），
             # 这句不再另接方案的说法
-            bits.append("选择后锁定" + "".join(f"「{s}」" for s in after)
-                        + "流派，" + "".join(f"「{s}」" for s in locked) + "流派的筹码本局不再出现")
+            if not skip_lock:
+                bits.append("选择后锁定" + "".join(f"「{s}」" for s in after)
+                            + "流派，" + "".join(f"「{s}」" for s in locked) + "流派的筹码本局不再出现")
             keys["locked"] = (after, locked)
             lost = sorted(
                 (c for c in value0 if db.chips[c].school in locked and value0[c] >= strong),
@@ -541,7 +544,7 @@ def lookahead_reason(sc: Scorer, name: str, owned: tuple) -> str:
     return "；".join(bits)
 
 
-def lookahead_short(sc: Scorer, name: str, owned: tuple) -> str:
+def lookahead_short(sc: Scorer, name: str, owned: tuple, skip_lock: bool = False) -> str:
     """前瞻理由标签上的短句（不含分值）：从 lookahead_reason 的几句里取一个要点。
 
     前瞻为正时依次取：出现率上升最多的高分筹码、锁定的两个流派、进入的流派、之后更常出现的职业（职业分值累加）、
@@ -550,6 +553,8 @@ def lookahead_short(sc: Scorer, name: str, owned: tuple) -> str:
     之后更常出现的职业。
     本局不再出现的高分筹码里分值最高的是本次的另一个候选时写「放弃本次的X」（不写「X不再出现」），
     不是本次候选的照旧写「X等不再出现」（「等」只算不是本次候选的）。整个短句不超过 SHORT_LIMIT 个字。
+    skip_lock：说明里没写「选择后锁定……」那一句时（lookahead_reason 的 skip_lock）为真，短句也不取锁定、不再出现的流派，
+    和悬停时看到的说明对得上。
     """
     owned = tuple(n for n in owned if n in sc.db.chips)
     if (name, owned) not in sc.memo.lookahead_keys:
@@ -562,7 +567,7 @@ def lookahead_short(sc: Scorer, name: str, owned: tuple) -> str:
         cname, q0, q1 = item
         return f"{cname} {q0:.0%}→{q1:.0%}"
 
-    lost, locked = keys.get("lost"), keys.get("locked")
+    lost, locked = keys.get("lost"), (None if skip_lock else keys.get("locked"))
     here = keys.get("lost_here") or ()
     lost_text = ""
     if lost and lost[0] in here:

@@ -29,14 +29,18 @@ class VisionAssets:
         self._bar = None
         # stars：角色编号 → 各皮肤的 Q 版头像（BGRA）
         self._photos: dict = {}
+        # stars：角色编号 → 和 _photos 一一对应的造型名（文件名里角色编号后面那一段，没有时为 base）：对局报告里写最像的是哪一套
+        self._photo_skins: dict = {}
         # stars：(角色编号, 缩放, 是否伸缩) → 每套皮肤各角度各压缩的脸部模板
         self._faces: dict = {}
         # stars：缩放 → 全部角色不转不压的脸部模板（队友用）
         self._still: dict = {}
         # stars：归一化后的角色名 → 角色编号
         self._hero_index = None
-        # stars：全部角色编号
+        # stars：全部角色编号（资料里的，加上识别图片的最新清单里资料还没有的新角色）
         self._hero_ids = None
+        # stars：识别图片的最新清单里资料还没有的新角色（编号 → 名字）
+        self._new_heroes = None
         # hero：角色照模板
         self._templates = None
         # hero：粗筛缩放 → 缩放后的脸部模板
@@ -64,8 +68,9 @@ class VisionAssets:
         清空和另一个识别线程读写缓存互斥：不清到「刚存好、还没取出来」的中间。
         """
         with self.lock:
-            self._bar = self._hero_index = self._hero_ids = None
+            self._bar = self._hero_index = self._hero_ids = self._new_heroes = None
             self._photos.clear()
+            self._photo_skins.clear()
             self._faces.clear()
             self._still.clear()
             self._templates = None

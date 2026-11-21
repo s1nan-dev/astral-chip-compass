@@ -28,6 +28,7 @@ import os
 import sys
 import time
 import unittest
+from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -963,6 +964,118 @@ class SfwCoverTest(unittest.TestCase):
         code, out = self.run_main()
         self.assertEqual(code, 1)
         self.assertIn("普通版或健全版的角色照一张都没有", out)
+
+
+class RemoteManifestTest(unittest.TestCase):
+    """make_assets_manifest.py 的 --remote/--serial：出的最新清单程序认（advisor.assets.parse_remote）、没有 stars 类和随发行版
+    附带的项、heroes 写全部角色；序号不给、不是正整数、角色名太长时不写；写出来程序核不过时删掉。"""
+
+    HEROES = ((101, "苍鲤"), (102, "短名"))
+    NAMES = {"heroes": ("UT_Hero_RolePhoto_101.png",), "profiles": ("UT_Hero_ProfilePhoto_101.png",),
+             "chips": ("UT_Relic_10001.png",), "achieve": ("UT_Achieve_1000_Settlement.png",),
+             "stars": ("star_bar.png",)}
+
+    def setUp(self):
+        self.root = sandbox.temp_dir(self)
+        self.assets = self.root / "assets"
+        self.data = self.root / "data"
+        self.data.mkdir()
+        self.files: dict[tuple[str, str], bytes] = {}
+        for kind, names in self.NAMES.items():
+            (self.assets / kind).mkdir(parents=True)
+            for name in names:
+                data = (kind + name).encode()
+                (self.assets / kind / name).write_bytes(data)
+                self.files[(kind, name)] = data
+        (self.data / make_assets_manifest.HEROES).write_text(
+            json.dumps([{"id": i, "name": n} for i, n in self.HEROES]), encoding="utf-8")
+        patcher = mock.patch.object(make_assets_manifest, "MIRRORED", ())
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def latest_path(self) -> Path:
+        return self.root / "out" / "assets-latest.json"
+
+    def found(self) -> dict:
+        return {name.replace("_", " "): {"url": "https://patchwiki.biligame.com/images/starengine/thumb/" + name,
+                                         "size": len(data), "sha1": hashlib.sha1(data).hexdigest()}
+                for (_, name), data in self.files.items()}
+
+    def run_main(self, found, *argv: str) -> tuple[int, str]:
+        mam = make_assets_manifest
+        stream = io.TextIOWrapper(io.BytesIO(), encoding="utf-8")
+        self.asked = None
+
+        def query(titles, fetch, api):
+            self.asked = sorted(titles)
+            if isinstance(found, BaseException):
+                raise found
+            return found
+
+        with mock.patch.object(mam.paths, "assets_dir",
+                               side_effect=lambda kind="": self.assets / kind if kind else self.assets), \
+                mock.patch.object(mam.paths, "data_dir", return_value=self.data), \
+                mock.patch.object(mam, "_Fetcher", return_value=mock.Mock()), \
+                mock.patch.object(mam, "query_imageinfo", side_effect=query), \
+                mock.patch.object(sys, "argv", ["make_assets_manifest.py", *argv]), \
+                mock.patch.object(sys, "stdout", stream):
+            code = mam.main()
+        stream.flush()
+        return code, stream.buffer.getvalue().decode("utf-8")
+
+    def test_writes_remote_manifest(self):
+        """项和自带清单的一样，去掉 stars 类和随发行版附带的；heroes 是 data/heroes.json 的全部角色；UTF-8、不带 BOM；
+        写完照程序认清单的规矩核得过；不写 data 下的清单。"""
+        code, out = self.run_main(self.found(), "--remote", str(self.latest_path()), "--serial", "12")
+        self.assertEqual(code, 0, out)
+        data = self.latest_path().read_bytes()
+        self.assertFalse(data.startswith(b"\xef\xbb\xbf"))
+        remote = assets.parse_remote(data)
+        self.assertEqual((remote.serial, remote.generated), (12, date.today().isoformat()))
+        self.assertEqual({item.name for item in remote.items},
+                         {"heroes/UT_Hero_RolePhoto_101.png", "profiles/UT_Hero_ProfilePhoto_101.png",
+                          "chips/UT_Relic_10001.png", "achieve/UT_Achieve_1000_Settlement.png"})
+        self.assertEqual(remote.heroes,
+                         {i: assets.NewHero(i, name, make_assets_manifest.VERSION) for i, name in self.HEROES})
+        self.assertIn("最新清单 4 项（不含 stars 类和随发行版附带的 1 项）、角色 2 个，序号 12", out)
+        self.assertIn("核对通过", out)
+        self.assertFalse((self.data / assets.MANIFEST).exists())
+
+    def test_serial_required(self):
+        """不给序号、序号不是正整数时不写；--serial 不配 --remote 也是参数不对；这时都不问接口。"""
+        cases = ((["--remote", str(self.latest_path())], "没给 --serial"),
+                 (["--remote", str(self.latest_path()), "--serial", "0"], "要是正整数"),
+                 (["--serial", "5"], "只和 --remote 一起用"))
+        for argv, words in cases:
+            with self.subTest(argv=argv):
+                code, out = self.run_main(AssertionError("不该问接口"), *argv)
+                self.assertEqual(code, 1)
+                self.assertIn(words, out)
+                self.assertIsNone(self.asked)
+                self.assertFalse(self.latest_path().exists())
+
+    def test_long_hero_name_stops(self):
+        """角色名超过 12 个字：报出来、退出码 1、不写、也不问接口（最新清单里写不下，程序会丢掉这一项）。"""
+        (self.data / make_assets_manifest.HEROES).write_text(
+            json.dumps([{"id": 101, "name": "一" * 13}]), encoding="utf-8")
+        code, out = self.run_main(AssertionError("不该问接口"), "--remote", str(self.latest_path()), "--serial", "3")
+        self.assertEqual(code, 1)
+        self.assertIn("超过 12 个字", out)
+        self.assertIsNone(self.asked)
+        self.assertFalse(self.latest_path().exists())
+
+    def test_rejected_document_deleted(self):
+        """要写的程序核对不过（核不过、是以后的格式）：报出来、退出码 1，不写，同名的旧文件也删掉（发出去的清单一定是程序
+        认得的，也不会错拿旧的那份去传）。"""
+        for error in (assets._RemoteBad("某项不对"), assets._RemoteLater("以后的格式")):
+            with self.subTest(error=type(error).__name__):
+                self.latest_path().parent.mkdir(parents=True, exist_ok=True)
+                self.latest_path().write_bytes(b"old")
+                with mock.patch.object(make_assets_manifest, "parse_remote", side_effect=error):
+                    code, out = self.run_main(self.found(), "--remote", str(self.latest_path()), "--serial", "3")
+                self.assertEqual(code, 1)
+                self.assertIn(f"核对不过（{error}）", out)
+                self.assertFalse(self.latest_path().exists())
 
 
 class CheckDataNoAssertTest(unittest.TestCase):

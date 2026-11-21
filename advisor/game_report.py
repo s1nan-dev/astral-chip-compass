@@ -16,8 +16,26 @@ cap_rejected），用来核对局里认的地图认错了几次、难度凭什�
 存成 null、报告其余部分照收，所以这里照它的规矩清理，不让整块被丢掉。
 
 同一版外层还多了认出了三选一、程序却放弃等待、没给推荐的那几次（unadvised）：取这一局、时刻不早于 since 的
-unadvised 记录，按日志里的先后最多 50 项。每一项只带服务那边写了的六个键，不合格的一项丢掉（不让整块变成 null）；
+unadvised 记录，按日志里的先后最多 50 项。每一项只带服务那边写了的键，不合格的一项丢掉（不让整块变成 null）；
 一项都没有时写空数组。
+
+第 4 版：每次三选一的队友里角色为 null 的那一项另带这一行最像谁（guess、score、margin，从 offer 记录顶层的
+teammate_guesses 取），unadvised 的每一项另带 hero_guess、hero_score（原因里有 hero 时左下立绘最像谁、相似度）；
+一局一次推荐都没给（一条 offer 记录都没有、却认出过三选一）时也拼一份，offers 是空列表、unadvised 照实带，要有这一局的
+结束才拼（见 _unadvised_only）。别的字段和第 3 版一样。
+
+第 4 版另带做统计要的几项（都是可选的：旧记录没有的不带或写 null；推荐日志的 offer 记录、对局结束记录顶层的 report_info，
+见 logbook 和 Session.report_info）：
+- 每局（外层，取这一局最后一条带着这一项的记录）：images 识别图片的情况（清单版本、应有几张、本机有几张、缺的文件名，这次
+  运行里从 wiki、备用地址下成几张、失败几张）、watch 从第几轮看起、是不是开局以后才看到的、lang 游戏语言、teammate_reads
+  队友各行第一次读到的轮次和读了几次才采用、errors 这一局程序记了几次错和异常的类名、window 游戏窗口的分辨率档位和窗口化
+  还是全屏（window_tier，不写精确像素）、perf 每帧识别平均几毫秒、慢的帧和界面卡住的次数；end_reason 没认到结束（end 为
+  null）时的原因（_end_reason：程序退出、游戏窗口没了、下一局已经开始，分不出时 null）。
+- 每次（offers 的每一项）：t 离这一局第一次读到对局画面几秒、chip_scores 三张候选的名称匹配程度、shown 推荐有没有真的显示在
+  悬浮窗上、shop 筹码商店来的那一次的价格和这次进商店买的第几个；state 里另有 after_reroll（这一组是不是刷新出来的）、
+  self_row（认不出自己是哪一行时的比对）；队友认不出的那一项另带最像的那套造型、第二像的角色和造型、相似度。
+- 结算数据表上角色认不出的那一栏另带最像谁、相似度（guess、score）。
+不带名字、头像图、路径、报错原文、系统版本、精确像素、电脑型号。
 
 开关、本机编号、随机值、打开开关的时刻都在设置里，由界面那一层传进来：本模块不读设置文件，也不碰 Qt，一局结束和启动时
 各在后台线程里调用一次。
@@ -54,7 +72,7 @@ from pathlib import Path
 from . import errors, fileio, logbook, paths, schemes, update, winhttp
 from .version import VERSION
 
-SCHEMA = 3
+SCHEMA = 4
 URL = "https://report.astral-chip-compass.com/v1/report"
 URL_ENV = "ACC_REPORT_URL"
 KEEP = 50
@@ -89,6 +107,22 @@ MAX_TABLE_CHIPS = 40
 MAX_TABLE_BADGES = 8
 MAX_TABLE_BEST = 5
 MAX_TABLE_INTEGER = 1_000_000_000
+
+# 第 4 版另带的几项（见模块说明）的上限和取值
+MAX_MISSING = 30  # 识别图片缺的文件名最多带几张
+MAX_ERROR_KINDS = 10  # 异常的类名最多带几种（按次数多的）
+MAX_SECONDS = 24 * 3600  # 每次三选一离开始看的秒数上限，超出的写 null
+LANGS = frozenset({"hans", "hant", "other"})
+END_REASONS = frozenset({"quit", "game_closed", "next_game"})
+WINDOW_TIERS = ("small", "720p", "1080p", "1440p", "4k")
+WINDOW_MODES = frozenset({"windowed", "fullscreen"})
+# 游戏窗口客户区高度（物理像素）的档位：低于第一个数为 small，依次往上；按常见的 720、1080、1440、2160 取中间值分界
+WINDOW_BOUNDS = (600, 900, 1260, 1800)
+# 外层每局的几项：推荐日志 report_info 里的键 → 报告里的清理
+GAME_INFO_KEYS = ("images", "watch", "lang", "teammate_reads", "errors", "window", "perf")
+_FILE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9 _.()-]{0,119}\.png")
+_CLASS_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}")
+_SKIN = re.compile(r"[A-Za-z0-9_]{1,32}")
 
 CLIENTS = frozenset({"cn", "int", "taptap"})
 VIAS = frozenset({"panel", "supplement"})
@@ -188,6 +222,9 @@ def build(records: Iterable[dict], game: str, *, install: str, since: datetime |
           report_id: str | None = None) -> dict | None:
     """把推荐日志的记录拼成这一局（局号 game）的报告；这一局在 since（打开开关的时刻）以后没有三选一时为 None。
 
+    例外是这一局一条 offer 记录都没有（整局一次推荐都没给，since 以前有过的不算这种）、却有 since 以后的 unadvised：有结束
+    时照 _unadvised_only 拼一份 offers 为空列表的报告，没有结束时照旧为 None。
+
     报告编号先放 report_id（不给时留下占位），保存时由调用方填上。同一个 offer_id 的 offer、pick、feedback 各取最后
     一条。同一次三选一可能分在两局：改正角色以后同一 offer_id 又记了一条，推荐日志据此判了新的一局；这时只算在最后一条
     offer 的那一局，别的局不带它（不然会多出一份只有这次三选一、局面是改正以前的报告）。end 取这一局的 gameover 里，
@@ -205,14 +242,31 @@ def build(records: Iterable[dict], game: str, *, install: str, since: datetime |
     endings: list[dict] = []
     table: dict | None = None
     unadvised: list[dict] = []
+    # 这一局的 unadvised（时刻, 记录, 清理过的一项）：一条三选一都没有的局按时刻挑（_unadvised_only）
+    held: list[tuple[datetime | None, dict, dict]] = []
+    any_offer = False  # 这一局有没有 offer 记录（since 以前的、最后一条落在别的局的也算）
+    shown: set[str] = set()  # 推荐真的显示在了悬浮窗上的三选一编号（shown 记录）
+    stops: list[tuple[int, dict]] = []  # 这一局的 stop 记录（日志里的先后, 记录）
+    others: list[tuple[int, object]] = []  # 别的局的三选一、新一局、没给推荐的记录（日志里的先后, 线名）
     when = _local(since)
     for order, record in enumerate(records):
         if not isinstance(record, dict):
             continue
         kind = record.get("t")
+        if kind in ("offer", "newgame", "unadvised") and isinstance(record.get("game"), str) \
+                and record.get("game") != game:
+            others.append((order, record.get("lane")))
         if kind == "gameover":
             if record.get("game") == game:
                 endings.append(record)
+            continue
+        if kind == "shown":
+            if isinstance(record.get("offer_id"), str):
+                shown.add(record["offer_id"])
+            continue
+        if kind == "stop":
+            if record.get("game") == game:
+                stops.append((order, record))
             continue
         if kind == "table":
             # 只按局号挑，不按时刻：同一局读到几次时以最后一条为准
@@ -227,6 +281,7 @@ def build(records: Iterable[dict], game: str, *, install: str, since: datetime |
                     item = _unadvised_item(record)
                     if item is not None:
                         unadvised.append(item)
+                        held.append((moment, record, item))
             continue
         offer_id = record.get("offer_id")
         if not isinstance(offer_id, str) or not offer_id:
@@ -238,6 +293,8 @@ def build(records: Iterable[dict], game: str, *, install: str, since: datetime |
         elif kind == "source":
             sources[offer_id] = record  # 三选一关掉以后补准了来源：同一个 offer_id 以后一条为准
         elif kind == "offer":
+            if record.get("game") == game:
+                any_offer = True
             moment = _local(record.get("time"))
             if when is not None and (moment is None or moment < when):
                 continue
@@ -251,9 +308,14 @@ def build(records: Iterable[dict], game: str, *, install: str, since: datetime |
         first_seen[item[0]][0] or datetime.max, first_seen[item[0]][1]))
     items = []
     for offer_id, record in members:
-        item = _offer(record, picks.get(offer_id), feedbacks.get(offer_id), sources.get(offer_id))
+        # 只在这一局的那几条里取第一条（离开始看几秒按这次三选一第一次给推荐的那一刻）
+        first = next((r for _o, r in offers[offer_id] if r.get("game") == game), record)
+        item = _offer(record, picks.get(offer_id), feedbacks.get(offer_id), sources.get(offer_id),
+                      first=first, shown=offer_id in shown)
         if item is not None:
             items.append(item)
+    if not chosen and not any_offer:
+        return _unadvised_only(held, endings, table, install=install, report_id=report_id)
     if not items:
         return None
     if len(items) > MAX_OFFERS:
@@ -283,15 +345,93 @@ def build(records: Iterable[dict], game: str, *, install: str, since: datetime |
         "table": _table(table),
         "unadvised": unadvised,
     }
+    in_order = [chosen[offer_id] for offer_id in sorted(chosen, key=last_order.get)]
+    info = _game_info(in_order + ([ending] if ending is not None else []))
+    report.update(info)
+    if end is None:
+        # 只在没认到结束时带；旧版本记的局（没有 report_info）分不出原因时不带
+        lane = last.get("lane")
+        reason = _end_reason(last_order[max(chosen, key=last_order.get)], stops,
+                             [order for order, name in others if name == lane])
+        if reason is not None or info:
+            report["end_reason"] = reason
     return report
 
 
-def _offer(record: dict, pick: dict | None, feedback: dict | None, source_record: dict | None = None) -> dict | None:
+def _end_reason(after: int, stops: list[tuple[int, dict]], others: list[int]) -> str | None:
+    """没认到结束（end 为 null）时的原因：这一局最后一条三选一记录（日志里的先后 after）以后，先来的是哪一样：
+    这一局的 stop 记录（quit 程序退出、game_closed 游戏窗口没了）、同一条线上别的局的记录（next_game：下一局已经开始，
+    结束画面没认出来）。都没有（程序一直开着、记录到这里就断了，例如程序崩溃、电脑关机）时为 null。"""
+    events = [(order, record.get("why")) for order, record in stops
+              if order > after and record.get("why") in END_REASONS]
+    events += [(order, "next_game") for order in others if order > after]
+    return min(events)[1] if events else None
+
+
+def _game_info(records: list) -> dict:
+    """外层每局的几项（GAME_INFO_KEYS）：按先后，取最后一条带着这一项的记录的 report_info 里的那一项，各自清理。
+    一条带 report_info 的记录都没有（旧版本记的）时为空（这几项都不带）；有的时候每一项都在，取不到的写 null。"""
+    infos = [r.get("report_info") for r in records if isinstance(r, dict) and isinstance(r.get("report_info"), dict)]
+    if not infos:
+        return {}
+    out = {}
+    for key in GAME_INFO_KEYS:
+        raw = next((info[key] for info in reversed(infos) if key in info), None)
+        out[key] = _GAME_CLEAN[key](raw)
+    return out
+
+
+def _unadvised_only(held: list, endings: list[dict], table: dict | None, *, install: str,
+                    report_id: str | None) -> dict | None:
+    """这一局一条三选一都没有（整局一次推荐都没给）时的报告：offers 是空列表，unadvised 照实带；没有结束、或者一条能带的
+    unadvised 都没有时为 None（不凭不在对局里时偶然认成的三选一造出一局来发）。
+
+    end 取这一局的 gameover 里，按日志先后最后一条、前面有 unadvised 而且离其中最晚的那一条不超过 GAME_GAP 的（时刻读不出的
+    gameover、unadvised 都不算）；unadvised 只带时刻不晚于这条结束的（结束以后在大厅等画面上偶然认成的不算这一局），按日志
+    先后最多 MAX_UNADVISED 项。started 是头一条的时刻；版本、数据日期、客户端取带进来的最后一条 unadvised 记的（旧记录没有
+    时版本写当前这一版、另两项写 null）。"""
+    timed = [(moment, record, item) for moment, record, item in held if moment is not None]
+    for ending in reversed(endings):
+        end_moment = _local(ending.get("time"))
+        if end_moment is None:
+            continue
+        before = [entry for entry in timed if entry[0] <= end_moment]
+        if before and end_moment - max(entry[0] for entry in before) <= logbook.GAME_GAP:
+            break
+    else:
+        return None
+    if len(before) > MAX_UNADVISED:
+        _cut("unadvised")
+        before = before[:MAX_UNADVISED]
+    last = before[-1][1]
+    clients = [record.get("client") for _moment, record, _item in before
+               if isinstance(record.get("client"), str) and record["client"] in CLIENTS]
+    end = _end(ending)
+    return {
+        "schema": SCHEMA,
+        "report": report_id if _is_id(report_id) else "0" * 32,
+        "install": install,
+        "app": {"version": _version_text(last.get("v")), "data_date": _date_text(last.get("data_date"))},
+        "client": clients[-1] if clients else None,
+        "started": _utc(min(entry[0] for entry in before)),
+        "offers": [],
+        "end": end,
+        "result": None if end is None else _result(ending),
+        "table": _table(table),
+        "unadvised": [item for _moment, _record, item in before],
+        **_game_info([ending]),  # 每局的几项只有对局结束记录里的（没有三选一记录）
+    }
+
+
+def _offer(record: dict, pick: dict | None, feedback: dict | None, source_record: dict | None = None,
+           first: dict | None = None, shown: bool = False) -> dict | None:
     """一次三选一在报告里的样子：局面、推荐照白名单挑；方案写成分享码；选择、反馈各取最后一条。
 
     source_record 是那一次三选一补准了来源的 source 记录（没有时为 None）：两项都在白名单里时改掉报告里那次三选一的
-    来源和依据。"""
-    state = _state(record.get("state"))
+    来源和依据。
+    第 4 版另带的（记录顶层有 report_info 时才带，见模块说明）：t 取这一局里这次三选一的第一条记录（first）的，其余取
+    最后一条的；shown 是有没有这次三选一的 shown 记录。"""
+    state = _state(record.get("state"), record.get("teammate_guesses"))
     advice = _advice(record.get("advice"))
     if state is None or advice is None:
         return None
@@ -313,7 +453,7 @@ def _offer(record: dict, pick: dict | None, feedback: dict | None, source_record
     raw_advice = record.get("advice") if isinstance(record.get("advice"), dict) else {}
     via = pick.get("via") if isinstance(pick, dict) else None
     reason = feedback.get("reason") if isinstance(feedback, dict) else None
-    return {
+    item = {
         "state": state,
         "advice": advice,
         "scheme": _scheme_code(record.get("scheme") or raw_advice.get("scheme")),
@@ -322,6 +462,162 @@ def _offer(record: dict, pick: dict | None, feedback: dict | None, source_record
         "via": via if via in VIAS else None,
         "feedback": reason if reason in FEEDBACK_REASONS else None,
     }
+    info = record.get("report_info")
+    if isinstance(info, dict):
+        first_info = first.get("report_info") if isinstance(first, dict) else None
+        state["after_reroll"] = info.get("after_reroll") if isinstance(info.get("after_reroll"), bool) else None
+        self_row = _self_row(info.get("self_row"))
+        if self_row is not None:
+            state["self_row"] = self_row
+        item["t"] = _seconds((first_info if isinstance(first_info, dict) else info).get("t"))
+        item["chip_scores"] = _scores(info.get("chip_scores"))
+        item["shown"] = bool(shown)
+        if state.get("source") == "shop":
+            item["shop"] = _shop(info.get("shop"))
+    return item
+
+
+# ---------------------------------------------------------------- 第 4 版另带的几项（清理）
+
+
+def window_tier(height, full) -> dict:
+    """游戏窗口的档位：height 是客户区的高度（物理像素），按 WINDOW_BOUNDS 分成 small、720p、1080p、1440p、4k；full 为真时
+    是全屏（客户区盖满所在的屏幕），为假时是窗口化，不知道为 None。只写档位，不写精确像素。高度不是正数时档位为 None。"""
+    tier = None
+    if isinstance(height, (int, float)) and not isinstance(height, bool) and _finite(height) and height > 0:
+        tier = WINDOW_TIERS[sum(height >= bound for bound in WINDOW_BOUNDS)]
+    mode = None if full is None else ("fullscreen" if full else "windowed")
+    return {"tier": tier, "mode": mode}
+
+
+def _window(raw) -> dict | None:
+    if not isinstance(raw, dict):
+        return None
+    tier, mode = raw.get("tier"), raw.get("mode")
+    return {"tier": tier if isinstance(tier, str) and tier in WINDOW_TIERS else None,
+            "mode": mode if isinstance(mode, str) and mode in WINDOW_MODES else None}
+
+
+def _images(raw) -> dict | None:
+    """识别图片的情况：清单生成的日期（YYYY-MM-DD）、最新清单的序号、应有几张、本机有几张、缺的文件名（只收 .png 的文件名，
+    不带文件夹，最多 MAX_MISSING 张）、这次运行里从 wiki、备用地址下成几张、失败几张。"""
+    if not isinstance(raw, dict):
+        return None
+    missing = raw.get("missing")
+    names = [name for name in missing if isinstance(name, str) and _FILE_NAME.fullmatch(name)] \
+        if isinstance(missing, list) else None
+    return {
+        "manifest": _date_text(raw.get("manifest")),
+        "serial": _count(raw.get("serial")),
+        "expected": _count(raw.get("expected")),
+        "present": _count(raw.get("present")),
+        "missing": names[:MAX_MISSING] if names is not None else None,
+        "wiki": _count(raw.get("wiki")),
+        "mirror": _count(raw.get("mirror")),
+        "failed": _count(raw.get("failed")),
+    }
+
+
+def _watch(raw) -> dict | None:
+    if not isinstance(raw, dict):
+        return None
+    late = raw.get("late")
+    return {"round": _count(raw.get("round")), "late": late if isinstance(late, bool) else None}
+
+
+def _lang(raw) -> str | None:
+    return raw if isinstance(raw, str) and raw in LANGS else None
+
+
+def _teammate_reads(raw) -> list | None:
+    """队友各行认出来花了多久：每行一项 {row（玩家列表第几行，0～7）, first_round（第一次读到时的轮次）, reads（采用了的是读到
+    第几次时采用的，没采用的是读了几次）, adopted（采用了没有）}，最多 8 项；行号不对的项丢掉。"""
+    if not isinstance(raw, list):
+        return None
+    out = []
+    for item in raw[:8]:
+        if not isinstance(item, dict):
+            continue
+        row = item.get("row")
+        if isinstance(row, bool) or not isinstance(row, int) or not 0 <= row < 8:
+            continue
+        adopted = item.get("adopted")
+        out.append({"row": row, "first_round": _count(item.get("first_round")), "reads": _count(item.get("reads")),
+                    "adopted": adopted if isinstance(adopted, bool) else None})
+    return out
+
+
+def _errors(raw) -> dict | None:
+    """这一局程序记了几次错（count）和异常的类名各几次（kinds，只收标识符样子的类名，按次数多的最多 MAX_ERROR_KINDS 种）。
+    不带报错的原文和路径。"""
+    if not isinstance(raw, dict):
+        return None
+    kinds = raw.get("kinds")
+    pairs = sorted(((name, n) for name, n in kinds.items()
+                    if isinstance(name, str) and _CLASS_NAME.fullmatch(name) and _count(n)),
+                   key=lambda kv: (-kv[1], kv[0])) if isinstance(kinds, dict) else []
+    return {"count": _count(raw.get("count")), "kinds": dict(pairs[:MAX_ERROR_KINDS])}
+
+
+def _perf(raw) -> dict | None:
+    """识别跑得快不快：frames 这一局识别了几帧、frame_ms 平均每帧几毫秒（取整）、slow_frames 1 秒以上的帧数、ui_stalls 界面
+    卡住半秒以上的次数（门槛见 perfstats.SLOW_MS）。"""
+    if not isinstance(raw, dict):
+        return None
+    return {key: _count(raw.get(key)) for key in ("frames", "frame_ms", "slow_frames", "ui_stalls")}
+
+
+_GAME_CLEAN = {"images": _images, "watch": _watch, "lang": _lang, "teammate_reads": _teammate_reads,
+               "errors": _errors, "window": _window, "perf": _perf}
+
+
+def _skin(value) -> str | None:
+    return value if isinstance(value, str) and _SKIN.fullmatch(value) else None
+
+
+def _self_row(raw) -> dict | None:
+    """认不出自己是哪一行时的比对：guess、score、margin（自己的头像最像的那一行静止比对最像谁，同队友那一行的写法）、
+    guess_skin、second、second_skin、second_score（最像的那套造型、第二像的角色和造型、相似度）、self_score、self_margin
+    （自己的头像和那一行的相关度、比第二像的那一行高出多少）。不是对象时为 None。"""
+    if not isinstance(raw, dict):
+        return None
+    out = _guess(raw)
+    out.update(_more_guess(raw) if out["guess"] else
+               {"guess_skin": None, "second": None, "second_skin": None, "second_score": None})
+    out["self_score"] = _unit(raw.get("self_score"))
+    out["self_margin"] = _unit(raw.get("self_margin"))
+    return out
+
+
+def _more_guess(raw: dict) -> dict:
+    """最像的那套造型（guess_skin）、第二像的角色、它的造型和相似度：第二像的角色不是文字时后两项也写 null。"""
+    second = _text(raw.get("second"))
+    return {"guess_skin": _skin(raw.get("skin")), "second": second or None,
+            "second_skin": _skin(raw.get("second_skin")) if second else None,
+            "second_score": _unit(raw.get("second_score")) if second else None}
+
+
+def _seconds(value) -> int | None:
+    """离开始看几秒：0～MAX_SECONDS 的数取整，别的写 null。"""
+    number = _number_int(value)
+    if number is None or number < 0 or number > MAX_SECONDS:
+        return None
+    return int(round(number))
+
+
+def _scores(raw) -> list | None:
+    """三张候选的名称匹配程度：按画面上的先后，每项 0～1 的两位小数（读不出的写 null），最多 MAX_EVALS 项。"""
+    if not isinstance(raw, list):
+        return None
+    return [_unit(value) for value in raw[:MAX_EVALS]]
+
+
+def _shop(raw) -> dict | None:
+    """筹码商店来的那一次：price 购买窗上的价格（星币，读不出为 null）、buy 这次进商店买的第几个（相邻两次隔不到 20 秒算
+    同一次进商店，见 session.core.SHOP_VISIT_GAP_S）。没看到购买窗时为 null。"""
+    if not isinstance(raw, dict):
+        return None
+    return {"price": _count(raw.get("price")), "buy": _count(raw.get("buy"))}
 
 
 def _scheme_code(raw) -> str | None:
@@ -357,8 +653,8 @@ def _catalog_():
     return _catalog
 
 
-def _state(raw) -> dict | None:
-    """局面：只带格式里写了的字段，全句、资料、别的字段都不带。"""
+def _state(raw, guesses=None) -> dict | None:
+    """局面：只带格式里写了的字段，全句、资料、别的字段都不带。guesses 是 offer 记录顶层的 teammate_guesses（见 _teammates）。"""
     if not isinstance(raw, dict):
         return None
     out = {}
@@ -367,7 +663,7 @@ def _state(raw) -> dict | None:
             continue
         value = raw[key]
         if key == "teammates":
-            out[key] = _teammates(value)
+            out[key] = _teammates(value, guesses)
         elif key in STATE_LIST_FIELDS:
             texts = _text_list(value, MAX_ARRAY)
             out[key] = texts if texts is not None else None
@@ -414,12 +710,17 @@ def _source_by(value) -> str | None:
     return value if isinstance(value, str) and value in logbook.SOURCE_BYS else None
 
 
-def _teammates(raw) -> list:
-    """队友：最多 4 项，每项只有角色和是不是电脑；别的都不带。"""
+def _teammates(raw, guesses=None) -> list:
+    """队友：最多 4 项，每项有角色和是不是电脑；第 4 版起角色为 null 的那一项另有 guess、score、margin（这一行最像谁、
+    相似度、比第二像的高出多少，见 _guess），认出了角色的不带这三项。别的都不带。
+
+    guesses 是 offer 记录顶层的 teammate_guesses，按下标和 raw 对应；不是数组、长度和 raw 不一样（旧记录没有）时三项都是
+    null。"""
     if not isinstance(raw, list):
         return []
+    aligned = isinstance(guesses, list) and len(guesses) == len(raw)
     out = []
-    for item in raw[:MAX_TEAMMATES]:
+    for index, item in enumerate(raw[:MAX_TEAMMATES]):
         if not isinstance(item, dict):
             continue
         member = {}
@@ -427,8 +728,32 @@ def _teammates(raw) -> list:
             member["hero"] = _text(item.get("hero"))
         if "bot" in item:
             member["bot"] = item.get("bot") if isinstance(item.get("bot"), bool) else None
+        if "hero" in member and member["hero"] is None:
+            raw_guess = guesses[index] if aligned else None
+            member.update(_guess(raw_guess))
+            # 第 4 版后来另记的最像的那套造型、第二像的角色：推荐日志里记了才带（早先记的没有这几项）
+            if member["guess"] and isinstance(raw_guess, dict) and any(
+                    key in raw_guess for key in ("skin", "second", "second_skin", "second_score")):
+                member.update(_more_guess(raw_guess))
         out.append(member)
     return out
+
+
+def _guess(raw) -> dict:
+    """认不出的队友那一行最像谁：{guess, score, margin}。guess 是文字才写，score、margin 写成 0～1 的两位小数（超出的
+    夹到两端），guess 为 null 或数不合格时写 null。"""
+    guess = _text(raw.get("guess")) if isinstance(raw, dict) else None
+    if not guess:
+        return {"guess": None, "score": None, "margin": None}
+    return {"guess": guess, "score": _unit(raw.get("score")), "margin": _unit(raw.get("margin"))}
+
+
+def _unit(value) -> float | None:
+    """相似度这类 0～1 的数：两位小数，超出的夹到 0 或 1；布尔值、NaN、Infinity、不是数的写 null。"""
+    number = _number_int(value)
+    if number is None:
+        return None
+    return round(min(1.0, max(0.0, float(number))), 2)
 
 
 def _advice(raw) -> dict | None:
@@ -542,11 +867,13 @@ def _tendency(raw) -> list | None:
 
 
 def _unadvised_item(raw: dict) -> dict | None:
-    """推荐日志里的一条 unadvised → 报告里的一项：只带服务那边写了的六个键。
+    """推荐日志里的一条 unadvised → 报告里的一项：只带服务那边写了的八个键（第 3 版的六个，第 4 版另加 hero_guess、
+    hero_score）。
 
     reasons 只留 UNADVISED_REASONS 里的那几种、不重复、最多三项，一项都不剩时这一项不要（返回 None）：服务那边
     reasons 不合格会让整个 unadvised 存成 null，宁可少这一项。round、star 不是 0～10 亿的整数写 null；advised 不是
-    布尔值写 False；source 不在 SOURCES 里写 null；pick 不是文字写 null。
+    布尔值写 False；source 不在 SOURCES 里写 null；pick 不是文字写 null。hero_guess 只在 reasons 里有 hero、是文字时写，
+    hero_score 只在 hero_guess 写了时写成 0～1 的两位小数（同队友的 score），别的写 null；旧记录没有这两项时写 null。
     """
     reasons: list[str] = []
     values = raw.get("reasons")
@@ -559,6 +886,7 @@ def _unadvised_item(raw: dict) -> dict | None:
         return None
     source = raw.get("source")
     advised = raw.get("advised")
+    guess = _text(raw.get("hero_guess")) if "hero" in reasons else None
     return {
         "round": _count(raw.get("round")),
         "reasons": reasons,
@@ -566,6 +894,8 @@ def _unadvised_item(raw: dict) -> dict | None:
         "star": _count(raw.get("star")),
         "source": source if isinstance(source, str) and source in logbook.SOURCES else None,
         "pick": _text(raw.get("pick")),
+        "hero_guess": guess or None,
+        "hero_score": _unit(raw.get("hero_score")) if guess else None,
     }
 
 
@@ -671,11 +1001,17 @@ def _table_players(raw) -> list | None:
 
 def _table_player(item: dict, seat: int) -> dict:
     """数据表的一栏：只带格式里写了的字段，名字、等级这些多出来的键都不带。"""
+    hero = _text(item.get("hero"))
+    # 第 4 版：角色认不出的那一栏另带最像谁、相似度（推荐日志里记了才带）
+    named = _text(item.get("guess")) or None
+    guess = {"guess": named, "score": _unit(item.get("score")) if named else None} \
+        if hero is None and "guess" in item else {}
     return {
         "seat": seat,
         "self": item.get("self") if isinstance(item.get("self"), bool) else None,
         "bot": item.get("bot") if isinstance(item.get("bot"), bool) else None,
-        "hero": _text(item.get("hero")),
+        "hero": hero,
+        **guess,
         "kills": _count(item.get("kills")),
         "downs": _count(item.get("downs")),
         "damage_dealt": _count(item.get("damage_dealt")),
@@ -919,7 +1255,7 @@ def backfill(*, install: str, secret: str, since: datetime | None, enabled: Call
              now: datetime | None = None) -> list[Path]:
     """启动时调用：补拼中途没拼过的局（例如关了程序），返回补拼了哪几份。
 
-    条件：这一局在推荐日志里有 since 以后的三选一、index.json 里没有、最后一条记录离现在超过 logbook.GAME_GAP
+    条件：这一局在推荐日志里有 since 以后的三选一（或者一条三选一都没有、有 since 以后的 unadvised，见 _games）、index.json 里没有、最后一条记录离现在超过 logbook.GAME_GAP
     （不到的可能还会接着打：程序重启后会接上没打完的那一局）、在最近 KEEP_DAYS 天里。有 gameover 的照样带上（end 取
     紧跟在这一局最后一次三选一后面、不超过 GAME_GAP 的最后一条），也照样要等 GAME_GAP（见 _games）。
     读日志从哪开始：这次补拼看到的界线（现在 − GAME_GAP）再往前 GAME_GAP 和 since、KEEP_DAYS 天前三者里最晚的那个；
@@ -978,9 +1314,13 @@ def _games(records: Iterable[dict], since: datetime | None) -> dict[str, datetim
     一局只有在有 offer_id 的最后一条 offer 落在它时才列出来：同一次三选一分在两局时，前一局不列（它没有别的三选一，
     拼出来也只有改正以前的那一条）。
     记了对局结束的局也要等 GAME_GAP：误认的结束（例如房间画面）以后撤销了新一局，这一局还会接着打，程序重启后也会接上
-    它；这时拼了、发了，真正结束时用同一个编号重拼的那份会被收数据的服务当作重复的丢掉。"""
+    它；这时拼了、发了，真正结束时用同一个编号重拼的那份会被收数据的服务当作重复的丢掉。
+    一条 offer 都没有、有 since 以后的 unadvised 的局也列出来（整局一次推荐都没给的局），unadvised 的时刻同样算进「最后
+    一条」；这种局没有对局结束时 build 交 None，照旧不补拼。"""
     when = _local(since)
     last_offers: dict[str, str] = {}  # offer_id → 最后一条 offer 的局号
+    offer_games: set[str] = set()  # 有 offer 记录的局（不论时刻）
+    unadvised_games: set[str] = set()  # 有 since 以后的 unadvised 的局
     last: dict[str, datetime | None] = {}
     for record in records:
         if not isinstance(record, dict):
@@ -990,18 +1330,24 @@ def _games(records: Iterable[dict], since: datetime | None) -> dict[str, datetim
             continue
         kind = record.get("t")
         if kind == "offer":
+            offer_games.add(game)
             moment = _local(record.get("time"))
             if when is not None and (moment is None or moment < when):
                 continue
             offer_id = record.get("offer_id")
             if isinstance(offer_id, str) and offer_id:
                 last_offers[offer_id] = game
-        if kind not in ("offer", "gameover", "newgame"):
+        elif kind == "unadvised":
+            moment = _local(record.get("time"))
+            if moment is not None and (when is None or moment >= when):
+                unadvised_games.add(game)
+        if kind not in ("offer", "gameover", "newgame", "unadvised"):
             continue
         moment = _local(record.get("time"))
         if moment is not None and (last.get(game) is None or moment > last[game]):
             last[game] = moment
-    return {game: last.get(game) for game in set(last_offers.values())}
+    # 有 offer 记录的局（since 以前的、最后一条落在别的局的也算）不因为有 unadvised 就列出来：build 不把它拼成没给推荐的局
+    return {game: last.get(game) for game in set(last_offers.values()) | (unadvised_games - offer_games)}
 
 
 def _write_report(path: Path, report: dict) -> None:

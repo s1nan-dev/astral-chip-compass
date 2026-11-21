@@ -14,6 +14,10 @@ R2 上的东西（存储桶 BUCKET，公开地址 PUBLIC_BASE）：
                             地址里带着内容的 SHA-1，同一个地址的内容永远不变，缓存同发行包。这几张要在建 GitHub 发布页之前
                             就传好：新版本发出去以后玩家一打开就要下
   latest.json               程序查更新先读它，不缓存。各项见 latest_manifest()
+  assets-latest.json        识别图片的最新清单（游戏出了新造型、随程序带的清单里没有的图），程序检查更新时取，不缓存。
+                            由 tools/make_assets_manifest.py --remote 生成，带 --assets-latest 传；先照程序认清单的规矩
+                            （advisor.assets.parse_remote）核一遍，再核序号：备用地址上现在那份的序号不比新的小就不传
+                            （程序收到比存着的小的会整份不用）
 程序能连上 GitHub 时以 GitHub 上那一版的版本号和 SHA-256 为准：两边对不上时只认 GitHub 的、只从 GitHub 下载，R2 上的
 这一份就用不上了；文件清单也以 GitHub 上附件的 digest 为准，对不上时只下整包。所以先在 GitHub 上发布这一版（附件
 ACC-<版本>.zip 和 ACC-<版本>.files.json），再照下面的顺序运行本脚本（不带 --assets-only）：第 1 步核对 GitHub 上最新的
@@ -58,8 +62,13 @@ CRLF、LF 都行，空行、首尾空白、开头的 BOM、# 开头的说明行�
                                                           版本号）
   .venv\\Scripts\\python tools\\upload_r2.py --notes 说明.txt --dry-run   先试运行：核对 GitHub、列出要传的东西，不连 R2
   .venv\\Scripts\\python tools\\upload_r2.py --notes 说明.txt             真传（图片也再传一遍、核对一遍）
+  .venv\\Scripts\\python tools\\upload_r2.py --assets-latest 最新清单.json --dry-run
+                                                         游戏出了新造型以后：只传识别图片的最新清单，先试运行
+  .venv\\Scripts\\python tools\\upload_r2.py --assets-latest 最新清单.json
   --assets-only         只做第 2 步：不核对 GitHub，不传发行包、文件清单、ACC-latest.zip、改动说明和 latest.json；不需要 --zip，
                         不读版本号
+  --assets-latest 路径  只传识别图片的最新清单（assets-latest.json）：不核对 GitHub，不传别的；和 --assets-only 不能一起用。
+                        试运行只核对本地文件、列出要做的事，不连 R2、也不读备用地址上那份的序号
   --manifest 路径       识别图片的清单，默认 data\\assets_manifest.json；只取其中 mirror 为 true 的项
   --assets-dir 路径     本地图片所在的文件夹，默认项目根目录下的 assets（图片在 <assets-dir>\\<dir>\\<file>）
   --zip 路径            发行包，默认 dist\\ACC-<版本>.zip（文件名必须是 ACC-<版本>.zip，版本号取 advisor/version.py）
@@ -98,7 +107,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]  # 项目根目录：开发目录里就是它（清单、图片都在这里）
 sys.path.insert(0, str(ROOT))
 
-from advisor import paths  # noqa: E402
+from advisor import assets, paths  # noqa: E402
 from advisor.update_files import DeltaError, manifest_name, parse_manifest  # noqa: E402
 from advisor.version import APP_NAME, SHORT_NAME, SOURCE_URL, VERSION, data_date  # noqa: E402
 
@@ -119,6 +128,8 @@ TIMEOUT = 60  # 秒：每次收发最多等多久（不是整个请求的总时�
 
 LATEST_ZIP_KEY = "ACC-latest.zip"  # 对外给的手动下载地址：名字写死，不跟着 SHORT_NAME 变
 LATEST_JSON_KEY = "latest.json"
+# 识别图片的最新清单（程序检查更新时取，advisor/update.py 的 ASSETS_LATEST 就是公开地址加上这个名字）
+ASSETS_LATEST_KEY = "assets-latest.json"
 ASSETS_MANIFEST = "assets_manifest.json"  # 识别图片的清单（data 下，由 tools/make_assets_manifest.py 生成）
 ASSETS_PREFIX = "assets/"  # 备用地址上的识别图片都在这一层下：assets/<dir>/<sha1>/<file>
 CACHE_RELEASE = "public, max-age=31536000, immutable"  # 一年：同一个版本号的包和它的文件清单永远不变
@@ -142,6 +153,8 @@ RANGE_PROBE = 1024  # 最后一步按段取发行包的前这么多字节，看�
 STEPS = ("核对 GitHub", "传备用地址上的识别图片", "传发行包", "从公开地址下回来核对", "传文件清单", "从公开地址读回文件清单核对",
          "传 ACC-latest.zip", "传改动说明", "传 latest.json", "从公开地址读回 latest.json 核对", "按段取发行包核对")
 ASSET_STEP = 2  # 「传备用地址上的识别图片」是第几步（--assets-only 只做这一步）
+# --assets-latest 的几步：和整套流程分开计（那固定是 STEPS 里的 11 步）
+LATEST_STEPS = ("核对备用地址上现在那份的序号", "传最新清单", "从公开地址读回核对")
 # 停下时还没传的文件对用户意味着什么
 NOT_YET = {LATEST_ZIP_KEY: "（R2 上的还是原来那一份，手动下载拿到的不是这一版）",
            LATEST_JSON_KEY: "（R2 上的还是原来那一份，程序查更新看不到这一版）"}
@@ -556,6 +569,29 @@ def _bytes_item(key: str, content_type: str, cache_control: str, data: bytes) ->
     return Item(key, content_type, cache_control, len(data), hashlib.sha256(data).hexdigest(), data=data)
 
 
+def check_assets_latest(data: bytes) -> tuple[str, object]:
+    """照程序认识别图片最新清单的规矩核对（advisor.assets.parse_remote）。交回 ("ok", 核对过的清单)、("bad", 哪里不对)、
+    ("later", 说明) 之一。核对不过时 parse_remote 抛 ValueError（的子类）；是以后的格式时抛另一类异常：那两个异常类是下载
+    模块内部的，这里不按名字认，parse_remote 抛出别的异常也算进 "later"。用到它的两处都把 "later" 当成不能传、不能比，
+    往不传的一边走。"""
+    try:
+        return "ok", assets.parse_remote(data)
+    except ValueError as e:
+        return "bad", str(e)
+    except Exception as e:  # noqa: BLE001
+        return "later", str(e) or type(e).__name__
+
+
+def _loose_serial(data: bytes) -> int | None:
+    """核对不过的最新清单里写的序号（整数）：读不出 JSON、没有序号、不是整数时为 None。"""
+    try:
+        document = json.loads(data.decode("utf-8-sig"))
+    except ValueError:
+        return None
+    serial = document.get("serial") if isinstance(document, dict) else None
+    return serial if isinstance(serial, int) and not isinstance(serial, bool) else None
+
+
 # ------------------------------------------------------------ 一次运行
 
 class Upload:
@@ -566,7 +602,8 @@ class Upload:
     def __init__(self, args: argparse.Namespace) -> None:
         self.args = args
         self.redact = Redactor()
-        self.step = 0  # 正在做第几步（STEPS，从 1 起）；0 是还在准备
+        self.step = 0  # 正在做第几步（self.steps，从 1 起）；0 是还在准备
+        self.steps: tuple[str, ...] = STEPS  # 这一种模式有几步（--assets-latest 另有一套，见 LATEST_STEPS）
         self.uploaded: list[str] = []
         self.attempted: str | None = None
         self.items: list[Item] = []
@@ -580,7 +617,7 @@ class Upload:
 
     def begin(self, step: int, text: str) -> None:
         self.step = step
-        self.say(f"第 {step}/{len(STEPS)} 步：{text}")
+        self.say(f"第 {step}/{len(self.steps)} 步：{text}")
 
     def public_url(self, key: str) -> str:
         return self.base + uri_encode(key, keep_slash=True)
@@ -588,6 +625,15 @@ class Upload:
     def run(self) -> int:
         try:
             self.prepare()
+            if self.args.assets_latest:
+                self.overview_latest()
+                if self.args.dry_run:
+                    self.show_latest_plan()
+                    self.say("试运行结束：R2 上什么都没动。去掉 --dry-run 就真传。")
+                    return 0
+                self.transfer_latest()
+                self.summary_latest()
+                return 0
             if self.args.assets_only:
                 self.overview_assets()
                 if self.args.dry_run:
@@ -619,11 +665,21 @@ class Upload:
 
     def prepare(self) -> None:
         """本地核对、算好要传的东西；最后读令牌（读到以后所有输出都换掉它）。出错抛 UploadError，这时什么都还没发。
-        --assets-only 只核对备用地址上的识别图片，不看版本号、发行包和改动说明。"""
+        --assets-only 只核对备用地址上的识别图片，不看版本号、发行包和改动说明；--assets-latest 只核对识别图片的最新清单。"""
+        if self.args.assets_latest and self.args.assets_only:
+            raise self.fail("--assets-latest 和 --assets-only 不能一起用：一个传识别图片的最新清单，一个传备用地址上的识别图片")
         self.base = public_base(self.args.public_base)
         self.github_api = check_url(self.args.github_api, "GitHub 的接口")
         self.assets_dir = Path(self.args.assets_dir) if self.args.assets_dir else ROOT / "assets"
         self.assets_path = Path(self.args.manifest) if self.args.manifest else ROOT / "data" / ASSETS_MANIFEST
+        if self.args.assets_latest:
+            self.assets = []
+            self.latest_item = self.read_assets_latest(Path(self.args.assets_latest))
+            self.items = [self.latest_item]
+            self.token = read_token(token_path(self.args.token_file))
+            self.redact.add(self.token)
+            self.endpoint = endpoint_base(self.token)
+            return
         self.assets = self.read_assets(self.assets_path)
         self.items = list(self.assets)
         if self.args.assets_only:
@@ -739,6 +795,25 @@ class Upload:
             return None, f"{label}：本地的 SHA-1 是 {have_sha1}，清单写的是 {sha1}"
         return Item(key, IMAGE_TYPE, CACHE_RELEASE, size, sha256, path=local, sha1=sha1), None
 
+    def read_assets_latest(self, path: Path) -> Item:
+        """读识别图片的最新清单（tools/make_assets_manifest.py --remote 生成的），照程序认清单的规矩核对（advisor.assets.
+        的 parse_remote）：核对不过的不传——程序会把整份不用，传上去等于没传，还可能是写错了。核对过了记下序号和项数。
+        原样的字节照传（不重新排版）。"""
+        try:
+            data = path.read_bytes()
+        except FileNotFoundError:
+            raise self.fail(f"找不到识别图片的最新清单：{path}") from None
+        except OSError as e:
+            raise self.fail(f"读不了识别图片的最新清单：{path}（{e.strerror or type(e).__name__}）") from None
+        kind, remote = check_assets_latest(data)
+        if kind == "later":
+            raise self.fail(f"识别图片的最新清单是以后的格式（format 比程序认的 {assets.REMOTE_FORMAT} 大）：这一版程序"
+                            "整份不用，不传")
+        if kind == "bad":
+            raise self.fail(f"识别图片的最新清单核对不过（{remote}），不传：先用 tools/make_assets_manifest.py --remote 重新生成")
+        self.serial, self.latest_items, self.latest_heroes = remote.serial, len(remote.items), len(remote.heroes)
+        return _bytes_item(ASSETS_LATEST_KEY, JSON_TYPE, CACHE_NONE, data)
+
     def overview(self) -> None:
         mode = "（试运行：只算、只打要做的事，不连 R2）" if self.args.dry_run else ""
         self.say(f"{APP_NAME} {self.version} → R2{mode}")
@@ -804,6 +879,24 @@ class Upload:
         self.say("要传的图片：")
         for number, item in enumerate(self.assets, 1):
             self.say(f"  {number}. {item.key}（{size_text(item.size)}）")
+
+    def overview_latest(self) -> None:
+        """--assets-latest 的概览：最新清单的项数、角色数、序号，不提发行包和 latest.json。"""
+        mode = "（试运行：只核对、只列出要做的事，不连 R2）" if self.args.dry_run else ""
+        self.say(f"{APP_NAME} 识别图片的最新清单 → R2{mode}")
+        self.say(f"  文件：{self.args.assets_latest}（{size_text(self.latest_item.size)}，"
+                 f"SHA-256 {self.latest_item.sha256}）")
+        self.say(f"  序号 {self.serial}：{self.latest_items} 项、{self.latest_heroes} 个角色")
+        self.say("  令牌文件：三项都在（内容不显示）")
+
+    def show_latest_plan(self) -> None:
+        """--assets-latest 的试运行：列出要做的三步，不读备用地址上那份的序号、不连 R2。"""
+        item = self.latest_item
+        self.say("要做的事：")
+        self.say(f"  1. 核对备用地址上现在那份的序号：新的 {self.serial} 要比它大（还没有那份时不比，照传；"
+                 "读不到、是以后的格式时不传）")
+        self.say(f"  2. 传 {item.key}（{size_text(item.size)}）  {item.describe()}")
+        self.say(f"  3. 从公开地址读回核对：{self.public_url(item.key)}")
 
     # -------------------------------------------------- 各步
 
@@ -888,6 +981,64 @@ class Upload:
         self.begin(ASSET_STEP, f"从公开地址读回备用地址上的识别图片，核对大小和 SHA-1（{len(self.assets)} 张）")
         for item in self.assets:
             self.verify_asset(item)
+
+    def transfer_latest(self) -> None:
+        """--assets-latest 的三步：核对备用地址上现在那份的序号 → 传 → 从公开地址读回核对。"""
+        self.steps = LATEST_STEPS
+        self.begin(1, "核对备用地址上现在那份的序号")
+        self.check_serial()
+        self.begin(2, f"传 {ASSETS_LATEST_KEY}（{size_text(self.latest_item.size)}）")
+        self.put(self.latest_item)
+        self.begin(3, f"从公开地址读回核对：{self.public_url(ASSETS_LATEST_KEY)}")
+        self.verify_latest()
+
+    def check_serial(self) -> None:
+        """序号只增不减：读备用地址上现在那份（和程序检查更新读的是同一个地址），新的没有比它大就不传——程序收到比存着的
+        小的整份不用，一样序号、内容不同的也不用。
+        - 那份没有（404，还没传过）：比不了，打一行说明、照传。
+        - 读不到（连不上、超时、别的 HTTP 状态）：不传。照传可能把更大的序号换成小的，玩家那边存着大序号的从此收不到
+          新的；过一会儿重新运行没有副作用。
+        - 是以后的格式（更新的程序版本里的工具传的）：不传。照传会把那份换成旧格式，认得新格式的程序版本拿到的是它们
+          不再用的格式、序号也可能比它们存着的小。
+        - 核对不过：照它写的序号比（读得出整数序号时）；读不出序号时打一行说明、照传（换掉一份程序整份不用的清单）。"""
+        url = self.public_url(ASSETS_LATEST_KEY)
+        request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+        try:
+            with _open(request, TIMEOUT) as response:
+                data = response.read(assets.REMOTE_LIMIT + 1)
+        except urllib.error.HTTPError as e:
+            e.close()
+            if e.code == 404:
+                self.say("  备用地址上还没有最新清单：比不了序号，照传。")
+                return
+            raise self.fail(f"读备用地址上现在那份最新清单：公开地址回 HTTP {e.code}：{url}。比不了序号，没传") from None
+        except NETWORK_ERRORS as e:
+            raise self.fail(f"读不到备用地址上现在那份最新清单（{_reason(e)}）：比不了序号，没传。过一会儿重新运行") \
+                from None
+        kind, old = check_assets_latest(data)
+        if kind == "later":
+            raise self.fail(f"备用地址上现在那份最新清单是以后的格式（{old}），是更新的程序版本里的工具传的：照传会把它换成"
+                            "旧格式，没传。用那个版本里的工具重新生成、上传")
+        if kind == "bad":
+            old_serial = _loose_serial(data)
+            if old_serial is None:
+                self.say(f"  没比序号：备用地址上现在那份最新清单核对不过（{old}），也读不出序号，照传。")
+                return
+            self.say(f"  备用地址上现在那份最新清单核对不过（{old}），照它写的序号 {old_serial} 比。")
+        else:
+            old_serial = old.serial
+        if self.serial <= old_serial:
+            raise self.fail(f"新的序号 {self.serial} 不比备用地址上现在那份（序号 {old_serial}）大：序号只能往上加，"
+                            "没有比它小的可回退，也没传。高过它的序号重新生成一份再传")
+        self.say(f"  序号比备用地址上现在那份（{old_serial}）大。")
+
+    def verify_latest(self) -> None:
+        """从公开地址读回刚传上去的最新清单，和传上去的字节一样才往下走。"""
+        data = self.fetch(self.public_url(ASSETS_LATEST_KEY), {}, "公开地址", assets.REMOTE_LIMIT)
+        if data != self.latest_item.data:
+            shown = data[:300].decode("utf-8", "replace")
+            raise self.fail(f"公开地址读回的 {ASSETS_LATEST_KEY} 和传上去的不一样，读回的是：{shown}")
+        self.say("  和传上去的一样。")
 
     def put(self, item: Item) -> None:
         """传一个文件（PUT），R2 回 2xx 才算传上去了。"""
@@ -1077,10 +1228,19 @@ class Upload:
         self.say(f"全部完成：{len(self.assets)} 张备用地址上的识别图片已经放到 R2 上。接下来在 GitHub 上建这一版的发布页，再照原来的"
                  "流程运行一次（不带 --assets-only）")
 
+    def summary_latest(self) -> None:
+        """--assets-latest 的收尾。"""
+        item = self.latest_item
+        self.say("传了这个：")
+        self.say(f"  {item.key}  {item.size:,} 字节  SHA-256 {item.sha256}")
+        self.say(f"      {self.public_url(item.key)}")
+        self.say(f"全部完成：识别图片的最新清单（序号 {self.serial}，{self.latest_items} 项、{self.latest_heroes} 个角色）"
+                 "已经放到 R2 上，玩家检查更新时取到")
+
     def report(self, reason: str) -> None:
         trial = "试运行" if self.args.dry_run else ""
         if self.step:
-            head = f"{trial}停在第 {self.step}/{len(STEPS)} 步（{STEPS[self.step - 1]}）：{reason}"
+            head = f"{trial}停在第 {self.step}/{len(self.steps)} 步（{self.steps[self.step - 1]}）：{reason}"
         else:
             head = f"{trial}还没开始传就停下了：{reason}"
         print(self.redact("\n".join([head, *self.state_lines()])), file=sys.stderr, flush=True)
@@ -1103,6 +1263,8 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     ap.add_argument("--no-auto", action="store_true", help="latest.json 的 auto 写 false：程序只提示、引导手动下载")
     ap.add_argument("--assets-only", action="store_true",
                     help="只传备用地址上的识别图片：不核对 GitHub，不传发行包、文件清单、ACC-latest.zip、改动说明和 latest.json")
+    ap.add_argument("--assets-latest", metavar="路径",
+                    help="只传识别图片的最新清单（assets-latest.json）：不核对 GitHub，不传别的；和 --assets-only 不能一起用")
     ap.add_argument("--manifest", metavar="路径",
                     help="识别图片的清单（默认 data\\assets_manifest.json），只取其中 mirror 为 true 的项")
     ap.add_argument("--assets-dir", metavar="路径",

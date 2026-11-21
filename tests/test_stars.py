@@ -27,6 +27,9 @@ GARDEN_HUD = "20261002_193639_hud_round11_2397x1798.jpg"  # 照在第 1 行，�
 KNOCKED_OUT = "20261002_193857_chips_panel_knocked_out_2397x1798.jpg"  # 照处于「昏迷」，头像上叠着「昏迷」字样
 TRANSFER = "20261002_214211_coin_transfer_real.jpg"  # 选转账对象：列表去掉了自己那一行，只剩三行队友
 BATTLE = "20261002_021351_battle_scene.png"  # 战斗画面，没有玩家列表
+# 米米默认皮肤当队友（列表第 2 行）：上一行的血量数字压在她的兔耳朵、皇冠上，不挖左上那一块时只有 0.49，
+# 挖掉后 0.61 以上才认出 108。和 DREAM_DIM 是同一张样本
+MIMI_TEAMMATE = DREAM_DIM
 # 斜着摆的皮肤：阿兰娜泳装在对局左下角是斜着摆的整张原画（约逆时针 17°）。样本是录像帧（3840×2160）里认角色看的左下角
 # 那一块（tests/data/hero，不随仓库发布），贴回同样大小的画面左下角再认：界面缩放按画面大小算
 ALANA_SWIMSUIT = "20261017_012808_f001000_alana_swimsuit_3840x2160.png"
@@ -396,6 +399,35 @@ class TeammatesTest(unittest.TestCase):
         self.assertTrue(_covered_by_band(gray, 10, 20, 50, 20))
         self.assertFalse(_covered_by_band(gray, 10, 60, 50, 20))
         self.assertTrue(_covered_by_band(gray, 10, -50, 50, 20))  # 整块在画面外
+
+
+class MateFaceSkipTest(unittest.TestCase):
+    """队友比对用的脸部模板：左上那一块（上一行的血量数字压在这里）从掩码里去掉，其余照比。"""
+
+    def test_still_masks_skip_top_left(self):
+        stars_module.reset_cache()
+        faces = stars_module._still_faces(0.1)
+        if not faces:
+            self.skipTest("没有 Q 版头像（assets\\profiles 第一次运行拾星助手时下载）")
+        width, height = stars_module.MATE_FACE_SKIP
+        for hid, _tpl, mask in faces:
+            h, w = mask.shape
+            with self.subTest(hero=hid):
+                self.assertEqual(int(mask[: round(h * height), : round(w * width)].max(initial=0)), 0)
+                self.assertTrue(mask.any())  # 左上以外还留着要比的部分
+
+
+@unittest.skipUnless(samples.samples_ok(MIMI_TEAMMATE), samples.samples_reason(MIMI_TEAMMATE))
+class MimiTeammateTest(_FreshCache):
+    """米米默认皮肤当队友：上一行的血量数字压在兔耳朵和皇冠上，挖掉模板左上那一块以后才认得出来。"""
+
+    def test_default_skin_recognized(self):
+        got = read_players(load(MIMI_TEAMMATE), None, names=False)
+        self.assertIsNotNone(got)
+        row = got.rows[1]
+        self.assertTrue(row.visible)
+        self.assertEqual((row.hero_id, row.best_id), (108, 108))
+        self.assertGreaterEqual(row.score, stars_module.MATE_MIN)
 
 
 @unittest.skipUnless(samples.samples_ok(HUD), samples.samples_reason(HUD))

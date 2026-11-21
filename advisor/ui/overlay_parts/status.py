@@ -35,6 +35,7 @@ from .wording import (
     MAP_AUTO,
     MAP_PLACE,
     MAP_SOURCE_TIP,
+    NEW_HERO,
     PAUSED,
     PAUSED_MIN_TIP,
     PAUSED_TIP,
@@ -366,6 +367,8 @@ def hero_pill(view, db, *, hero_needed: bool, live: bool) -> tuple[list, str, st
         else:
             segs, tone = [(lang.t("角色 "), C.DIM_COLOR), (lang.t("待识别"), C.DIM_COLOR)], "muted"
         tip = HERO_PAUSED_TIP if hero_needed else HERO_PENDING_TIP
+        if isinstance(getattr(view, "new_hero", None), str) and view.new_hero:
+            tip = NEW_HERO  # 立绘认出的是新角色：资料里没有她，选别的角色也算不对
     return segs, tone, tip
 
 

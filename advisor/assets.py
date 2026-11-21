@@ -27,6 +27,16 @@ BWIKI 上只有整张卡面原画、没有角色照的皮肤，和 BWIKI 的角�
   use_cropper(crop, load=)       → 接上从卡面现裁角色照的函数（crop(卡面的字节, 裁法) → 角色照的字节；或 load() → 这个函数，
                                    第一次要裁图时才调用）
   note_crop(name, card, crop, size) → 记下现裁的角色照是哪张卡面按哪份裁法裁的（开发用的取图工具裁好以后调用）
+  fetch_remote_manifest(stop)    → 取识别图片的最新清单、核对、更新的才存下（REMOTE_SAVED 等结果，见「最新清单」）
+  load_manifest()                → 要用的清单：自带的（load_bundled），官方仓库的版本再和存着的最新清单合起来
+  new_heroes()                   → 存着的最新清单里的新角色（{编号: NewHero}）
+  use_hero_ids(ids, load=)       → 登记这台程序认识的角色编号：最新清单多出来的角色照、Q 版头像只下认识的
+
+最新清单：游戏出了新造型、新角色时，随程序带的清单（data/assets_manifest.json）里没有这几张图，不更新程序就认不出。备用
+地址上另放一份完整的最新清单（update.ASSETS_LATEST），官方仓库的版本取回来存在个人目录（REMOTE_FILE，几个版本共用），
+和自带的合起来用（_merge），多出来的图照 missing()、download() 下。这份清单决定程序去哪下东西、把什么文件写进识别图片的
+文件夹：核对很严（parse_remote：只许那几类、合各类命名的 .png 文件名、只许 BWIKI 的图床和备用地址上的地址），哪一条不过
+整份不用、记一条错误记录，照自带的清单走，别的功能不受影响；读存着的那份时再核一遍。
 
 下载规矩：
 - 带写明本工具名称、源代码的地址和用途的 User-Agent（不冒充浏览器，也不用别的办法绕过站点防护）；系统或环境变量设了代理时
@@ -99,7 +109,7 @@ from dataclasses import dataclass, field
 from datetime import date, timezone
 from typing import Callable, Iterable
 
-from . import clock, fileio, paths, update, winhttp
+from . import clock, errors, fileio, paths, update, winhttp
 from .version import SOURCE_URL, VERSION
 
 MANIFEST = "assets_manifest.json"
@@ -217,6 +227,19 @@ class Manifest:
 
 
 def load_manifest() -> Manifest:
+    """要用的清单：随程序带的 data/assets_manifest.json（load_bundled），官方仓库的版本（update.USE_MIRROR 为真，每次读时
+    看）再和个人目录里存着的最新清单（fetch_remote_manifest 取回、存下的）合起来（_merge：同名的项换成最新清单里的，自带的
+    项一张不少，最新清单多出来的项排在后面）。存着的最新清单每次读都重读、再核一遍（不缓存：取到新的以后下一次 missing()
+    就看得到）；没有、读不出、核对不过、是以后的格式时只用自带的。复刻的改版不读最新清单（它在官方的备用地址上，见
+    fetch_remote_manifest）。"""
+    manifest = load_bundled()
+    if not update.USE_MIRROR:
+        return manifest
+    remote = _stored_remote()
+    return manifest if remote is None else _merge(manifest, remote)
+
+
+def load_bundled() -> Manifest:
     """读 data/assets_manifest.json；没有清单时返回空清单（开发目录里图片本来就齐）。不是官方仓库的版本
     （update.USE_MIRROR 为假，每次读时看）换掉带 mirror 的项：复刻的改版不碰官方的备用地址，带 fallback 的照 fallback 下
     （同一个本地文件，字段换成 fallback 里的），不带的去掉（见模块说明）。"""
@@ -245,6 +268,526 @@ def _crop_field(value) -> tuple:
     """清单项的 crop（JSON 里是 6 个数的列表）换成元组（清单项不可变）。写坏了（不是列表）的照样当成要现裁的一项，裁的
     时候按裁法不对算这一张失败：当成普通的图片的话，会把整张卡面当角色照存下来。"""
     return tuple(value) if isinstance(value, (list, tuple)) else (value,)
+
+
+# ---------------------------------------------------------------- 联网的最新清单
+
+# 个人目录（paths.download_dir() 这一层，几个版本共用）里存着的最新清单：取回的原样字节，核对过才存
+REMOTE_FILE = "manifest-remote.json"
+# 同一层：存着的最新清单是哪个 ETag（下次请求带 If-None-Match，没变时省下正文），连同那份清单的 SHA-256：对不上（清单被
+# 别的版本换过、改过）时不带，整份重取
+REMOTE_ETAG_FILE = "manifest-remote-etag.json"
+REMOTE_FORMAT = 1  # 这一版认得的最新清单的格式；比它大的是以后的格式：不用，也不算错
+REMOTE_LIMIT = 2 * 1024 * 1024  # 最新清单整份最多多少字节（现在一百多 KB）
+REMOTE_MAX_ITEMS = 3000  # items 最多多少项（现在四百项上下）
+REMOTE_MAX_HEROES = 1000  # heroes 最多多少项
+REMOTE_MAX_SIZE = 8 * 1024 * 1024  # 一张图片（或卡面）最大多少字节（现在最大的卡面不到 1 MB）
+# 最新清单里只许这几类（stars 随发行版附带，bundled 的项不许有）
+REMOTE_DIRS = ("heroes", "profiles", "chips", "achieve")
+# 各类的文件名：识别按文件名在文件夹里找（vision/hero.py、stars.py、chip_panel.py、result_table.py），只许这样的名字，只许
+# .png，没有路径分隔符、「..」、盘符。角色编号不许以 0 开头：「0101」和「101」会被识别当成同一个角色
+_REMOTE_FILES = {
+    "heroes": re.compile(r"UT_Hero_RolePhoto_[1-9][0-9]{0,5}(?:_[A-Za-z0-9]{1,16}){0,3}\.png"),
+    "profiles": re.compile(r"UT_Hero_ProfilePhoto_[1-9][0-9]{0,5}(?:_[A-Za-z0-9]{1,16}){0,3}\.png"),
+    "chips": re.compile(r"UT_Relic(?:Base)?_[A-Za-z0-9]{1,32}\.png"),
+    "achieve": re.compile(r"UT_Achieve_[1-9][0-9]{0,5}_Settlement\.png"),
+}
+_HERO_ID = re.compile(r"UT_Hero_(?:RolePhoto|ProfilePhoto)_([0-9]+)")  # 角色照、Q 版头像文件名里的角色编号
+_SHA1_HEX = re.compile(r"[0-9a-f]{40}")
+# wiki 上的文件页名（问接口时用，见 query_imageinfo）：字母数字开头，只有字母数字、空格、「_」「.」「-」，.png 结尾；不许
+# 「|」（接口里分隔几个文件页）这类有特殊意思的字符
+_TITLE = re.compile(r"[A-Za-z0-9][A-Za-z0-9 _.-]{0,195}\.png")
+# 地址前缀后面的部分：几段，每段字母数字和「_」「~」「-」开头、只有这几样和「.」，.png 结尾。没有「%」（百分号编码的
+# 「/」「\」「.」）、「?」「#」「@」「:」，也没有空段、「.」「..」这样的段
+_URL_REST = re.compile(r"(?:[A-Za-z0-9_~-][A-Za-z0-9._~-]*/)*[A-Za-z0-9_~-][A-Za-z0-9._~-]*\.png")
+WIKI_IMAGES = "https://patchwiki.biligame.com/images/starengine/"  # BWIKI 的图床：最新清单里 wiki 上的图片只许在它下面
+_VERSION3 = re.compile(r"[0-9]{1,9}\.[0-9]{1,9}\.[0-9]{1,9}")  # 新角色的 since：数字.数字.数字
+NEW_HERO_NAME_MAX = 12  # 新角色的名字最多几个字
+
+# fetch_remote_manifest 的结果（给调用方记录、决定要不要接着查缺图）
+REMOTE_SAVED = "saved"  # 取到了更新的一份，存下了：接着查缺图（missing）、下载
+REMOTE_UNCHANGED = "unchanged"  # 和存着的一样（或服务器回「没变」）
+REMOTE_SKIPPED = "skipped"  # 不是官方仓库的版本（update.USE_MIRROR 为假）：不取
+REMOTE_FAILED = "failed"  # 没取到（连不上、HTTP 出错）或存不进：照旧用存着的、自带的，下次检查更新时再取
+REMOTE_CANCELLED = "cancelled"  # 取的时候停止标志置位了：没存
+REMOTE_REJECTED = "rejected"  # 取到了、核对不过（或序号比存着的小、序号一样内容不同）：不用、不存，记了一条错误记录
+REMOTE_FUTURE = "future"  # 以后的格式（format 比 REMOTE_FORMAT 大；或存着的是以后的版本写的）：不用、不动，不算错
+
+# 读写最新清单和它的 ETag 记录时拿着：取（后台线程）、读（load_manifest，别的线程）、几个线程同时取时，比序号、写盘不交错；
+# Windows 上替换文件时别的线程正开着它会失败。只包读写文件、比对，联网不在锁里
+_remote_lock = threading.Lock()
+
+
+@dataclass(frozen=True)
+class NewHero:
+    """最新清单里的新角色（这一版的资料里可能还没有）：编号、名字、哪一版起有。"""
+
+    id: int
+    name: str
+    since: str
+
+
+@dataclass(frozen=True)
+class RemoteManifest:
+    """核对过的最新清单。raw 是解析出来的整份 JSON（比内容一不一样用：序号一样、内容不同的不存）。"""
+
+    serial: int
+    generated: str
+    items: tuple[AssetItem, ...]
+    heroes: dict[int, NewHero]
+    raw: object = field(compare=False, repr=False)
+
+
+class _RemoteBad(ValueError):
+    """最新清单核对不过：str(e) 是哪里不对（写进错误记录）。"""
+
+
+class _RemoteLater(Exception):
+    """最新清单是以后的格式（format 比 REMOTE_FORMAT 大）：这一版不用，不算错。"""
+
+
+def _int(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _shown(value) -> str:
+    """错误记录里写的值：repr，太长的截断。"""
+    text = repr(value)
+    return text if len(text) <= 80 else text[:77] + "..."
+
+
+def _no_constant(name: str):
+    raise ValueError(f"JSON 里不许有 {name}")
+
+
+def _url_ok(value, prefix: str) -> bool:
+    """value 是 prefix 下面的一张 .png 的地址：只用 ASCII 的可打印字符，没有空白、反斜杠；以 prefix 一字不差开头（大小写不同、
+    主机名后面带「@」或端口、换成相像的主机名的都不算）；后面的部分照 _URL_REST（没有「%」「?」「#」「:」，没有空段、
+    「.」「..」这样的段：取图时这样的段会被折算掉，「前缀/../别处」就跑出了前缀）；拆开以后协议、主机名和 prefix 的一样，
+    没有用户名、端口、查询串和片段。"""
+    if not (isinstance(value, str) and len(value) <= 2048 and value.isascii() and value.isprintable()
+            and not any(ch.isspace() or ch == "\\" for ch in value) and value.startswith(prefix)):
+        return False
+    rest = value[len(prefix):]
+    if not _URL_REST.fullmatch(rest) or any(part in (".", "..") for part in rest.split("/")):
+        return False
+    try:
+        parts, want = urllib.parse.urlsplit(value), urllib.parse.urlsplit(prefix)
+        port = parts.port
+    except ValueError:
+        return False
+    return (parts.scheme == want.scheme == "https" and parts.netloc == want.netloc and parts.username is None
+            and parts.password is None and port is None and not parts.query and not parts.fragment)
+
+
+def _mirror_images() -> str:
+    """最新清单里备用地址上的图片只许在它下面（用到时才取 update.MIRROR_BASE：测试可以换）。"""
+    return update.MIRROR_BASE + "assets/"
+
+
+def _check_crop(value, kind: str) -> tuple:
+    """最新清单项（或它的 fallback）的 crop：只许角色照（从卡面现裁的是角色照），6 个有限的数（同 _usable_crop）。比
+    _crop_field 严：自带清单里写坏的照样当成要现裁的一项、裁的时候算失败；最新清单里写坏的整份不用。"""
+    if kind != "heroes":
+        raise _RemoteBad("只有角色照能带 crop")
+    if not (isinstance(value, list) and len(value) == 6 and all(_finite(v) for v in value)):
+        raise _RemoteBad(f"crop 不是 6 个数：{_shown(value)}")
+    return tuple(value)
+
+
+def _finite(value) -> bool:
+    """_number，另把大得换不成小数的整数（JSON 里写几百位的数）算作不合：math.isfinite 遇到它抛 OverflowError。"""
+    try:
+        return _number(value)
+    except OverflowError:
+        return False
+
+
+def _check_common(entry: dict, kind: str, prefix: str) -> dict:
+    """清单项和它的 fallback 都有的几样：title（可以没有）、url（在 prefix 下面）、size、sha1、crop（可以没有）；api 不许有。
+    返回 AssetItem 用的这几个字段。"""
+    if "api" in entry:
+        raise _RemoteBad("不许带 api（只从 BWIKI 问接口）")
+    title = entry.get("title", "")
+    if title != "" and not (isinstance(title, str) and _TITLE.fullmatch(title)):
+        raise _RemoteBad(f"title 不对：{_shown(title)}")
+    url = entry.get("url")
+    if not _url_ok(url, prefix):
+        raise _RemoteBad(f"地址不在 {prefix} 下面，或写法不对：{_shown(url)}")
+    size = entry.get("size")
+    if not (_int(size) and 1 <= size <= REMOTE_MAX_SIZE):
+        raise _RemoteBad(f"size 不在 1～{REMOTE_MAX_SIZE} 字节：{_shown(size)}")
+    sha1 = entry.get("sha1")
+    if not (isinstance(sha1, str) and _SHA1_HEX.fullmatch(sha1)):
+        raise _RemoteBad(f"sha1 不是 40 位小写十六进制：{_shown(sha1)}")
+    crop = _check_crop(entry["crop"], kind) if "crop" in entry else None
+    return {"title": title, "url": url, "size": size, "sha1": sha1, "crop": crop}
+
+
+def _remote_item(entry) -> AssetItem:
+    """最新清单里的一项 → AssetItem；哪里不对抛 _RemoteBad（整份不用）。
+
+    规矩：dir 只许 REMOTE_DIRS；file 照这一类的命名（_REMOTE_FILES）；bundled、api 不许有；mirror 是真假（可以不写），带
+    mirror 的地址在备用地址（_mirror_images）下面，不带的在 BWIKI 的图床（WIKI_IMAGES）下面，两样对不上的不认（mirror 决定
+    下载出错时问不问 wiki 的接口、算不算进 wiki 的限流）；fallback（复刻的改版用，可以没有）是对象，地址只许在 BWIKI 的
+    图床下面，其余同清单项。
+    不认识的键不管（AssetItem 里没有的字段读进来也用不上，以后的清单加了说明性的键，这一版照常用）；改了意思的会换 format。"""
+    if not isinstance(entry, dict):
+        raise _RemoteBad("不是对象")
+    kind = entry.get("dir")
+    if kind not in REMOTE_DIRS:
+        raise _RemoteBad(f"dir 不对：{_shown(kind)}")
+    name = entry.get("file")
+    if not (isinstance(name, str) and _REMOTE_FILES[kind].fullmatch(name)):
+        raise _RemoteBad(f"file 不合 {kind} 的命名：{_shown(name)}")
+    if "bundled" in entry:
+        raise _RemoteBad("不许带 bundled")
+    mirror = entry.get("mirror", False)
+    if not isinstance(mirror, bool):
+        raise _RemoteBad(f"mirror 不是真假：{_shown(mirror)}")
+    fields = _check_common(entry, kind, _mirror_images() if mirror else WIKI_IMAGES)
+    if "fallback" in entry:
+        fallback = entry["fallback"]
+        if not isinstance(fallback, dict):
+            raise _RemoteBad("fallback 不是对象")
+        try:
+            _check_common(fallback, kind, WIKI_IMAGES)
+        except _RemoteBad as e:
+            raise _RemoteBad(f"fallback 的 {e}") from None
+    return AssetItem(kind, name, mirror=mirror, **fields)
+
+
+def _new_hero(entry) -> NewHero | None:
+    """最新清单 heroes 里的一项；不合的（id 不是正整数、name 不是 1～NEW_HERO_NAME_MAX 个字、since 不是数字.数字.数字）为
+    None，只丢这一项。"""
+    if not isinstance(entry, dict):
+        return None
+    hero_id, name, since = entry.get("id"), entry.get("name"), entry.get("since")
+    if not (_int(hero_id) and 1 <= hero_id <= 999_999):
+        return None
+    if not (isinstance(name, str) and 1 <= len(name) <= NEW_HERO_NAME_MAX and name.isprintable()
+            and name.strip() == name):
+        return None
+    if not (isinstance(since, str) and _VERSION3.fullmatch(since)):
+        return None
+    return NewHero(hero_id, name, since)
+
+
+def _key(item: AssetItem) -> tuple[str, str]:
+    """合并、查重时的名字：文件名不分大小写（Windows 上只差大小写的是同一个文件，两项写同一个文件会来回重下）。"""
+    return item.dir, item.file.casefold()
+
+
+def parse_remote(data: bytes) -> RemoteManifest:
+    """核对最新清单的字节，交回 RemoteManifest。哪一条不过抛 _RemoteBad（str 是哪里不对），整份不用；format 比
+    REMOTE_FORMAT 大时抛 _RemoteLater。
+
+    整份不超过 REMOTE_LIMIT 字节；是 UTF-8 的 JSON（NaN、Infinity 不认，开头不许有 BOM）；顶层是对象；format 是 1；serial 是
+    正整数；generated 是文字（可以没有）；items 是列表、不超过 REMOTE_MAX_ITEMS 项，每一项照 _remote_item，文件名不分大小写
+    不许重复；heroes（可以没有）是列表、不超过 REMOTE_MAX_HEROES 项，不合的项丢掉（_new_hero），编号重复的留第一个。
+    顶层不认识的键不管。
+
+    核对时没料到的出错（类型、算术、嵌套太深）同样按核对不过算：这份清单来自网络、个人目录里的文件，读坏了只是不用它，
+    不能让取清单的线程、读清单的 missing() 出错。"""
+    try:
+        return _parse_remote(data)
+    except (_RemoteBad, _RemoteLater):
+        raise
+    except (TypeError, ArithmeticError, RecursionError) as e:
+        raise _RemoteBad(f"核对时出错（{type(e).__name__}）") from None
+
+
+def _parse_remote(data: bytes) -> RemoteManifest:
+    """parse_remote 的核对本身（见它的说明）。"""
+    if len(data) > REMOTE_LIMIT:
+        raise _RemoteBad(f"超过 {REMOTE_LIMIT} 字节")
+    try:
+        raw = json.loads(data.decode("utf-8"), parse_constant=_no_constant)
+    except UnicodeDecodeError:
+        raise _RemoteBad("不是 UTF-8 的文字") from None
+    except (ValueError, RecursionError) as e:  # 不是 JSON、开头带 BOM、嵌套太深
+        raise _RemoteBad(f"不是 JSON（{type(e).__name__}）") from None
+    if not isinstance(raw, dict):
+        raise _RemoteBad("顶层不是对象")
+    fmt = raw.get("format")
+    if not (_int(fmt) and fmt >= 1):
+        raise _RemoteBad(f"format 不对：{_shown(fmt)}")
+    if fmt > REMOTE_FORMAT:
+        raise _RemoteLater(fmt)
+    serial = raw.get("serial")
+    if not (_int(serial) and serial >= 1):
+        raise _RemoteBad(f"serial 不是正整数：{_shown(serial)}")
+    generated = raw.get("generated", "")
+    if not (isinstance(generated, str) and len(generated) <= 40):
+        raise _RemoteBad(f"generated 不对：{_shown(generated)}")
+    entries = raw.get("items")
+    if not isinstance(entries, list):
+        raise _RemoteBad("items 不是列表")
+    if len(entries) > REMOTE_MAX_ITEMS:
+        raise _RemoteBad(f"items 超过 {REMOTE_MAX_ITEMS} 项（{len(entries)} 项）")
+    items: list[AssetItem] = []
+    seen: set[tuple[str, str]] = set()
+    for index, entry in enumerate(entries, 1):
+        try:
+            item = _remote_item(entry)
+        except _RemoteBad as e:
+            label = entry.get("file") if isinstance(entry, dict) else None
+            raise _RemoteBad(f"items 第 {index} 项（{_shown(label)}）：{e}") from None
+        if _key(item) in seen:
+            raise _RemoteBad(f"items 第 {index} 项（{item.name}）和前面的重名")
+        seen.add(_key(item))
+        items.append(item)
+    heroes: dict[int, NewHero] = {}
+    if "heroes" in raw:
+        listed = raw["heroes"]
+        if not isinstance(listed, list) or len(listed) > REMOTE_MAX_HEROES:
+            raise _RemoteBad(f"heroes 不是列表，或超过 {REMOTE_MAX_HEROES} 项")
+        for entry in listed:
+            hero = _new_hero(entry)
+            if hero is not None:
+                heroes.setdefault(hero.id, hero)
+    return RemoteManifest(serial, generated, tuple(items), heroes, raw)
+
+
+def _remote_path():
+    return paths.download_dir() / REMOTE_FILE
+
+
+def _etag_path():
+    return paths.download_dir() / REMOTE_ETAG_FILE
+
+
+def _read_remote() -> tuple[bytes | None, RemoteManifest | None, bool]:
+    """存着的最新清单：（原样的字节, 核对过的 RemoteManifest, 是不是以后的格式）。没有、读不出时字节为 None；读得出、核对不过
+    （别的版本写的、被改过）时 RemoteManifest 为 None，当没有。在 _remote_lock 里调用。"""
+    try:
+        data = _remote_path().read_bytes()
+    except OSError:
+        return None, None, False
+    try:
+        return data, parse_remote(data), False
+    except _RemoteLater:
+        return data, None, True
+    except _RemoteBad:
+        return data, None, False
+
+
+def _stored_remote() -> RemoteManifest | None:
+    """存着的、核对过的最新清单；没有、核对不过、是以后的格式时为 None。"""
+    with _remote_lock:
+        return _read_remote()[1]
+
+
+def new_heroes() -> dict[int, NewHero]:
+    """存着的最新清单里的新角色：{编号: NewHero}（名字、哪一版起有）。没有最新清单、复刻的改版（不读最新清单）时为空。"""
+    if not update.USE_MIRROR:
+        return {}
+    remote = _stored_remote()
+    return dict(remote.heroes) if remote is not None else {}
+
+
+_ETAG = re.compile(r'(?:W/)?"[\x21\x23-\x7e]{1,200}"')  # ETag：带引号的可见 ASCII（不许换行：要原样写进请求头）
+
+
+def _stored_etag(data: bytes | None) -> str | None:
+    """下次请求带的 If-None-Match：ETag 记录里记的那份清单（SHA-256）就是现在存着的 data 时才用，记录读不出、对不上时为
+    None（整份重取）。在 _remote_lock 里调用。"""
+    if data is None:
+        return None
+    try:
+        record = json.loads(_etag_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(record, dict):
+        return None
+    etag = record.get("etag")
+    if not (isinstance(etag, str) and _ETAG.fullmatch(etag)):
+        return None
+    return etag if record.get("sha256") == hashlib.sha256(data).hexdigest() else None
+
+
+def _write_etag(data: bytes, etag: str | None) -> None:
+    """记下存着的清单 data 的 ETag（没有、写法不对时删掉记录）。写不进、删不掉时就算了：下次整份重取（对不上 SHA-256 的
+    记录不用）。在 _remote_lock 里调用。"""
+    try:
+        if etag is None or not _ETAG.fullmatch(etag):
+            _etag_path().unlink(missing_ok=True)
+        else:
+            record = {"etag": etag, "sha256": hashlib.sha256(data).hexdigest()}
+            fileio.write_text(_etag_path(), json.dumps(record), suffix=".part")
+    except OSError:
+        pass
+
+
+def _save_remote(data: bytes, etag: str | None) -> bool:
+    """存下核对过的最新清单（原样的字节）：临时文件、刷盘、整份替换（fileio.write_bytes），断电、写一半时旧的要么完整、要么是
+    新的；再记下它的 ETag。返回存进去了没有：写不进不算错，下次再取。在 _remote_lock 里调用。"""
+    try:
+        fileio.write_bytes(_remote_path(), data, suffix=".part")
+    except OSError:
+        return False
+    _write_etag(data, etag)
+    return True
+
+
+def _reject_remote(title: str, detail: str) -> str:
+    """最新清单不用：记一条错误记录，交回 REMOTE_REJECTED。"""
+    errors.log_error(title, f"{update.ASSETS_LATEST}\n{detail}")
+    return REMOTE_REJECTED
+
+
+class _TooBig(Exception):
+    """收到的正文超过 REMOTE_LIMIT。"""
+
+
+def fetch_remote_manifest(stop=None, *, session=None) -> str:
+    """从备用地址取识别图片的最新清单（update.ASSETS_LATEST），核对、和存着的比序号，更新的才存进个人目录（REMOTE_FILE）。
+    交回 REMOTE_SAVED、REMOTE_UNCHANGED、REMOTE_SKIPPED、REMOTE_FAILED、REMOTE_CANCELLED、REMOTE_REJECTED、REMOTE_FUTURE
+    之一（见各自的说明）；是 REMOTE_SAVED 时调用方接着查缺图（missing() 已经照合好的清单算）、下载。不抛异常。
+
+    - 只在官方仓库的版本（update.USE_MIRROR 为真）取。
+    - 请求只发一个：用 _KeepAlive（同下载图片：系统的证书和代理，带 USER_AGENT，超时 TIMEOUT，停止标志置位时收手）；
+      不跟重定向（只认备用地址本身的回话）；正文最多收 REMOTE_LIMIT 字节，多了按核对不过算。取不到就算了，不重试：下次
+      检查更新时再取。备用地址不是 wiki，不受 wiki 的被拦、冷却那一套管。
+    - 存着的清单记了 ETag 的带 If-None-Match，回 304 算没变。
+    - 核对见 parse_remote；不过的整份不用、不存，记一条错误记录。以后的格式不用、不记。
+    - 存着一份时：取到的序号比它小的不存，序号一样、内容不一样的也不存（各记一条错误记录）；序号一样、内容一样的不重写。
+      存着的是以后的格式（更新的版本写的）时不动它。
+    - 停止标志置位以后不再存。
+
+    session：只给测试用（有 stream(req, sink, timeout, stop, head=, limit=, redirects=) 和 close() 的对象，同
+    winhttp.Session）；不给时新建一个、用完关掉。在后台线程里调用；和 load_manifest（别的线程）同时调用不打架
+    （_remote_lock）。"""
+    if not update.USE_MIRROR:
+        return REMOTE_SKIPPED
+    with _remote_lock:
+        stored_data, stored, _ = _read_remote()
+        etag = _stored_etag(stored_data) if stored is not None else None
+    url = update.ASSETS_LATEST
+    headers = {"User-Agent": USER_AGENT}
+    if etag:
+        headers["If-None-Match"] = etag
+    parts: list[bytes] = []
+    got = {"size": 0, "etag": None}
+
+    def head(status, reply) -> None:
+        got["etag"] = _header(reply, "ETag").strip() or None
+
+    def sink(chunk: bytes) -> None:
+        got["size"] += len(chunk)
+        if got["size"] > REMOTE_LIMIT:
+            raise _TooBig
+        parts.append(chunk)
+
+    own = session is None
+    try:
+        if own:
+            session = _KeepAlive()
+        try:
+            session.stream(urllib.request.Request(url, headers=headers), sink, TIMEOUT, stop, head=head,
+                           limit=REMOTE_LIMIT, redirects=False)
+        finally:
+            if own:
+                session.close()
+    except (_TooBig, winhttp.TooLong):
+        return _reject_remote("识别图片的最新清单不对，没有用它（拾星助手仍在运行）", f"超过 {REMOTE_LIMIT} 字节")
+    except (winhttp.Stopped, _Stopped):
+        return REMOTE_CANCELLED
+    except urllib.error.HTTPError as e:
+        e.close()
+        return REMOTE_UNCHANGED if e.code == 304 and etag else REMOTE_FAILED
+    except (urllib.error.URLError, OSError, http.client.HTTPException):
+        return REMOTE_FAILED
+    if _stopped(stop):
+        return REMOTE_CANCELLED
+    data = b"".join(parts)
+    try:
+        remote = parse_remote(data)
+    except _RemoteLater:
+        return REMOTE_FUTURE
+    except _RemoteBad as e:
+        return _reject_remote("识别图片的最新清单不对，没有用它（拾星助手仍在运行）", str(e))
+    with _remote_lock:
+        stored_data, stored, later = _read_remote()  # 再读一次：别的线程可能刚存了一份
+        if later:
+            return REMOTE_FUTURE
+        if stored is not None:
+            if remote.serial < stored.serial:
+                return _reject_remote("识别图片的最新清单比已经存着的旧，没有用它（拾星助手仍在运行）",
+                                      f"取到的序号 {remote.serial}，存着的序号 {stored.serial}")
+            if remote.serial == stored.serial:
+                if remote.raw != stored.raw:
+                    return _reject_remote("识别图片的最新清单和已经存着的序号一样、内容不一样，没有用它（拾星助手仍在运行）",
+                                          f"序号 {remote.serial}")
+                if got["etag"] != _stored_etag(stored_data):
+                    _write_etag(stored_data, got["etag"])  # 内容没变、ETag 换了：记下新的，下次省正文
+                return REMOTE_UNCHANGED
+        return REMOTE_SAVED if _save_remote(data, got["etag"]) else REMOTE_FAILED
+
+
+# 联网的清单带来的角色照、Q 版头像，角色编号这台程序认不认识（见 use_hero_ids）
+_hero_ids: frozenset[int] | None = None
+_hero_ids_load: Callable[[], Iterable[int] | None] | None = None
+_hero_ids_lock = threading.Lock()
+
+
+def use_hero_ids(ids: Iterable[int] | None = None, *, load: Callable[[], Iterable[int] | None] | None = None) -> None:
+    """登记这台程序认识的角色编号（资料里有的）：最新清单多出来的角色照、Q 版头像，编号既不在这里、也不在最新清单的
+    heroes 里的不下（认出来也对不上角色）。本模块在底层、不导入资料，由上层登记（同 use_cropper）；load 是交回编号的函数，
+    第一次合并清单时才调用、只调用一次，出错、交回的不是编号的集合时按没登记算。没登记时都下。ids、load 都不给时取消登记。"""
+    global _hero_ids, _hero_ids_load
+    with _hero_ids_lock:
+        _hero_ids = None if ids is None else frozenset(ids)
+        _hero_ids_load = load
+
+
+def _known_hero_ids() -> frozenset[int] | None:
+    """登记的角色编号；没登记、load 出错时为 None（都下）。"""
+    global _hero_ids, _hero_ids_load
+    with _hero_ids_lock:
+        if _hero_ids_load is not None:
+            load, _hero_ids_load = _hero_ids_load, None
+            try:
+                found = load()
+                _hero_ids = None if found is None else frozenset(int(v) for v in found)
+            except Exception:  # noqa: BLE001  登记不上只是新角色的图照下，不让读清单出错
+                _hero_ids = None
+        return _hero_ids
+
+
+def _hero_of(item: AssetItem) -> int | None:
+    """角色照、Q 版头像文件名里的角色编号；别的类为 None。"""
+    if item.dir not in ("heroes", "profiles"):
+        return None
+    m = _HERO_ID.match(item.file)
+    return int(m.group(1)) if m else None
+
+
+def _merge(bundled: Manifest, remote: RemoteManifest) -> Manifest:
+    """自带的清单和最新清单合起来：按（dir, 文件名，不分大小写）对，同名的项换成最新清单里的（在原来的位置），自带清单里有、
+    最新清单里没有的照旧留着（最新清单不能让程序少下图）；最新清单多出来的项照它的先后排在后面，其中角色照、Q 版头像的角色
+    编号这台程序不认识的（登记了编号，又不在最新清单的 heroes 里，见 use_hero_ids）不要。随发行版附带的（bundled）不换。"""
+    by_key = {_key(item): item for item in remote.items}
+    used: set[tuple[str, str]] = set()
+    items = []
+    for item in bundled.items:
+        key = _key(item)
+        if not item.bundled and key in by_key:
+            items.append(by_key[key])
+            used.add(key)
+        else:
+            items.append(item)
+    known = _known_hero_ids()
+    if known is not None:
+        known = known | set(remote.heroes)
+    for item in remote.items:
+        if _key(item) in used:
+            continue
+        hero = _hero_of(item)
+        if known is not None and hero is not None and hero not in known:
+            continue
+        items.append(item)
+    return Manifest(items, bundled.generated, bundled.source)
 
 
 def _sha1(data: bytes) -> str:
@@ -1677,6 +2220,7 @@ def download(
         _note_failed(deferred(failed))
         return ok, failed
     finally:
+        _note_run(todo, ok, failed)
         if stats is not None:
             try:
                 stats.update({
@@ -1693,3 +2237,60 @@ def download(
                 })
             except Exception:  # noqa: BLE001  统计不能影响下载
                 pass
+
+
+# ---------------------------------------------------------------- 给对局报告的识别图片情况
+
+# 这次运行里下载成了几张（从 wiki、从备用地址）、失败了几张（被拦暂停、取消的不算失败：没试完）
+_run_lock = threading.Lock()
+_run = {"wiki": 0, "mirror": 0, "failed": 0}
+# report_status 的结果留这么久（秒）：每次三选一都要一份，不每次都把几百张图片的文件大小查一遍
+STATUS_KEEP_S = 120.0
+STATUS_MISSING_MAX = 30  # 缺的图片最多列这么多张的文件名
+_status_cache: tuple[float, dict] | None = None
+
+
+def _note_run(todo: list[AssetItem], ok: list[str], failed: list[tuple[str, str]]) -> None:
+    """一轮下载结束：按清单项的 mirror 数成功的从哪下的，失败的去掉暂停、取消的（没试完）；记进这次运行的计数，
+    并作废 report_status 留着的结果（缺的少了）。出错时只少这一轮的计数。"""
+    global _status_cache
+    try:
+        mirror = {item.name for item in todo if item.mirror}
+        bad = sum(1 for _name, reason in failed
+                  if not (is_paused(reason) or (isinstance(reason, str) and reason.startswith(CANCELLED))))
+        with _run_lock:
+            for name in ok:
+                _run["mirror" if name in mirror else "wiki"] += 1
+            _run["failed"] += bad
+            _status_cache = None
+    except Exception:  # noqa: BLE001  计数不能影响下载
+        pass
+
+
+def report_status(now: float | None = None) -> dict:
+    """对局报告里识别图片的情况（不带路径）：manifest 随程序带的清单生成的日期、serial 存着的最新清单的序号（没有时 None）、
+    expected 清单里要下载的图片张数（随发行版附带的不算）、present 本机有几张（文件在、大小对得上，见 is_present）、
+    missing 缺的那几张的文件名（最多 STATUS_MISSING_MAX 张，按清单的先后）、wiki、mirror、failed 这次运行里从 wiki、
+    从备用地址下载成的张数和失败的张数。结果留 STATUS_KEEP_S 秒（下载结束时作废）；三项计数每次现取。"""
+    global _status_cache
+    now = time.monotonic() if now is None else now
+    with _run_lock:
+        cached = _status_cache
+        run = dict(_run)
+    if cached is None or not 0 <= now - cached[0] < STATUS_KEEP_S:
+        manifest = load_manifest()
+        with _local_lock:
+            local = load_local()
+        items = [item for item in manifest.items if not item.bundled]
+        absent = [item for item in items if not is_present(item, local)]
+        remote = _stored_remote() if update.USE_MIRROR else None
+        cached = (now, {
+            "manifest": manifest.generated if isinstance(manifest.generated, str) else None,
+            "serial": remote.serial if remote is not None else None,
+            "expected": len(items),
+            "present": len(items) - len(absent),
+            "missing": [item.file for item in absent[:STATUS_MISSING_MAX]],
+        })
+        with _run_lock:
+            _status_cache = cached
+    return {**cached[1], "missing": list(cached[1]["missing"]), **run}

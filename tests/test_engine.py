@@ -490,9 +490,12 @@ class AdviceTest(Base):
 
     def test_second_school_locks_and_says_so(self):
         adv = self.run_case("邦妮", ["缓冲盾牌", "拳击手套-初级", "速度轮滑-初级"], owned=("标靶",))
-        text = self.by_name(adv)["缓冲盾牌"].lookahead_reason
+        e = self.by_name(adv)["缓冲盾牌"]
+        # 默认推荐里这张有「锁流派」一项：锁定的话写在它的说明里，前瞻不再重复（engine.parts.LOCK_REASON）
+        text = next(p.reason for p in e.parts if p.label == "锁流派")
         self.assertIn("选择后锁定「标记」「治愈」流派", text)
         self.assertIn("「星光」「充能」流派的筹码本局不再出现", text)
+        self.assertNotIn("选择后锁定", e.lookahead_reason)
 
     def test_locked_chips_not_repeated_as_zero_rate(self):
         # 选择后锁定流派、又有职业分值，前瞻为正：锁掉的流派里的高适配度筹码已写在「本局不再出现的高适配度筹码」里，
@@ -2811,12 +2814,14 @@ class HealKnifeTest(Base):
     def test_misaki_round5_keeps_first_choice(self):
         # 梦想号实机第 5 轮：预判分打折后医疗箱-紧急治疗不首推（打折的依据），紧急治疗仍有预判分。
         # 美咲的默认推荐没有固定档位，三个候选都按角色特性计算，首推是速度轮滑-中级（电流剑几乎并列第二：
-        # 她的推荐流派是治愈、标记，已有普通瞄具时再进充能，治愈就进不来了）
+        # 她的推荐流派是治愈、标记，已有普通瞄具时再进充能，治愈就进不来了）。紧急治疗另有「锁流派」那一笔
+        # （已有标记、拿治愈正好占满流派名额），单张分差得多时锁流派不改先后（rules.toml [synergy] lock_school 的依据）
         adv = self.run_case("美咲", ["电流剑", "医疗箱-紧急治疗", "速度轮滑-中级"], star=1, round=5, map="星趴·梦想号",
                             owned=("普通瞄具",), rerolls=3, probabilities=(60, 37, 3), left_rarity="蓝")
         self.assertEqual(adv.best, "速度轮滑-中级")
         kit = self.by_name(adv)["医疗箱-紧急治疗"]
         self.assertTrue(any(p.label == "组合" and p.score > 0 for p in kit.parts))
+        self.assertTrue(any(p.label == "锁流派" for p in kit.parts))
         self.assertGreater(self.by_name(adv)["速度轮滑-中级"].percent, kit.percent)
 
 
@@ -3665,18 +3670,18 @@ class TeammateNeedTest(Base):
         self.assertEqual(adv.reroll.p_better, scorer.reroll_p_better(self.LIFT_OFFER, fan.total))
         old = scorer.reroll_p_better(self.LIFT_OFFER, sat.total)
         self.assertEqual(adv.reroll.p_better, old)
-        self.assertEqual((ui_text.chance_text(old), ui_text.chance_text(adv.reroll.p_better)), ("85%", "85%"))
+        self.assertEqual((ui_text.chance_text(old), ui_text.chance_text(adv.reroll.p_better)), ("69%", "69%"))
         pills = ui_text.reroll_pills(adv.reroll, ui_text.best_chip(adv), st.rerolls)
         self.assertEqual([p.text for p in pills],
-                         ["预计优于手持风扇-大", "85% 概率刷出优于手持风扇-大的筹码", "留 2 次，多出 2 次不必留"])
+                         ["预计优于手持风扇-大", "69% 概率刷出优于手持风扇-大的筹码", "留 2 次，多出 2 次不必留"])
         for pill in pills[:2]:
             self.assertIn("「手持风扇-大」", pill.tip)
             self.assertNotIn("探天卫星", pill.tip)
         # 诊断包和命令行：比较对象就是候选里总分最高的（被提的那张），写「当前候选筹码最高总分」，概率和标签同一个数
         diag = ui_text.reroll_reason(adv.reroll, adv)
-        self.assertEqual(diag, "最多连续刷新 2 次时，出现总分高于当前候选筹码最高总分的筹码的概率：85%")
-        self.assertEqual(cli.reroll_p_text(adv, adv.reroll), "出现总分高于当前候选筹码最高总分的筹码的概率：85%")
-        self.assertIn("出现总分高于当前候选筹码最高总分的筹码的概率：85%", cli.render(db, adv))
+        self.assertEqual(diag, "最多连续刷新 2 次时，出现总分高于当前候选筹码最高总分的筹码的概率：69%")
+        self.assertEqual(cli.reroll_p_text(adv, adv.reroll), "出现总分高于当前候选筹码最高总分的筹码的概率：69%")
+        self.assertIn("出现总分高于当前候选筹码最高总分的筹码的概率：69%", cli.render(db, adv))
         data = cli.to_json(adv)
         self.assertEqual((data["top"], data["reroll"]["p_better"]), ("手持风扇-大", round(adv.reroll.p_better, 4)))
         # 推荐日志记的是整个 Advice（logbook.record_offer → diagnostics._jsonable）：top 和 p_better 同上
@@ -4591,7 +4596,12 @@ class FennyLiveReviewTest(PlayerBase):
         ("额外电池", "技能冷却缩短（多获得的名刀有限）"): {"美咲"},
         ("维生素药丸", "获得卡牌时获得治愈（自身获得卡牌少）"): {"阿尔"},
         ("维生素药丸", "获得卡牌时获得治愈（每回合 2 点）"): {"梅加斯"},
-        ("缓冲盾牌", "受击时获得治愈和星币（被攻击较少）"): {"梅加斯"},
+        ("缓冲盾牌", "受击时获得治愈和星币（被攻击较少）"): {"梅加斯", "南希露"},
+        ("优雅之羽", "条件攻击力加成（较少被攻击，难触发）"): {"南希露"},
+        ("大铁锚", "条件攻击力加成（较少被攻击，难触发）"): {"南希露"},
+        ("电击手套", "技能后范围伤害（身边常没有怪物）"): {"南希露"},
+        ("诅咒之剑", "击倒后攻击力提高（追击的击倒不计入）"): {"照"},
+        ("优雅之羽", "闪避后加攻（闪避失败代价高）"): {"照"},
         ("鹰眼瞄具", "只在战斗中加攻击力"): {"星魅琉华"},
         ("友情徽章", "转账、大碗炖肉时双方获得治愈"): {"璐璐"},
         ("小蛇玩偶", "受伤后减伤（被动常不再触发）"): {"璐璐"},
@@ -4867,10 +4877,11 @@ class KeepSchoolsTest(Base):
                 self.assertIsNone(BANNED_WORDING.search(part.reason + part.short))
                 self.assertEqual(self.normal_parts("南希露", chip), [])  # 难度未知
                 self.assertEqual(self.normal_parts("南希露", chip, difficulty_level=LEVEL_NIGHTMARE), [])  # 噩梦及以上
-        # 治愈来源、加生命值的筹码不扣；别的角色普通难度也不扣
+        # 治愈来源、加生命值的筹码不因普通难度扣分（缓冲盾牌另有「被攻击较少」的专属扣分，不分难度）；别的角色普通难度也不扣
         for chip in ("缓冲盾牌", "医疗箱-完备治疗", "夹心饼干-可口"):
             with self.subTest(chip=chip):
-                self.assertEqual(self.normal_parts("南希露", chip, difficulty=NORMAL), [])
+                self.assertEqual(self.normal_parts("南希露", chip, difficulty=NORMAL), self.normal_parts("南希露", chip))
+        self.assertEqual(self.normal_parts("南希露", "医疗箱-完备治疗", difficulty=NORMAL), [])
         self.assertEqual(self.normal_parts("美咲", "摩托头盔-高级", difficulty=NORMAL), [])
         # 困难及以上照旧有「难度」加分（生存类筹码、物理输出角色的头盔），普通难度没有
         hard = Scorer(self.db, State(hero="南希露")).parts("摩托头盔-高级", (), None)
@@ -5111,6 +5122,173 @@ class SchoolSkipTest(Base):
         self.assertEqual(knife_school_bonus(Scorer(skip, State(hero="美咲")), "美工刀-锋利"), school)
 
 
+class LockSchoolTest(Base):
+    """锁流派（rules.toml [synergy] lock_school，engine.parts.lock_school_part）：只有一个流派时，候选属于还没进入的
+    流派、拿了正好占满流派名额的一笔分。只看这次三选一的候选（parts() 和 pool_scores() 里没有这一项），只在默认推荐里算，
+    不为了锁流派牺牲要保的推荐流派。"""
+
+    POINTS = 6.5  # rules.toml [synergy] lock_school
+
+    def lock(self, hero, chip, owned=(), offer=None, **kw):
+        owned = tuple(owned)
+        kw.setdefault("round", 3)
+        kw.setdefault("rerolls", 2)
+        kw.setdefault("map", "星趴·梦想号")
+        st = State(hero=hero, owned=owned, **kw)
+        if offer is None:
+            offer = [chip]
+        adv = advise(self.db, st, list(offer))
+        return next((p for p in self.by_name(adv)[chip].parts if p.label == "锁流派"), None), adv
+
+    def test_bonnie_locks_charge(self):
+        # 邦妮只推荐标记（keep_schools 全保）：1 星已有标靶、候选是充能的能量回收，拿了锁定标记 + 充能
+        part, adv = self.lock("邦妮", "能量回收", owned=("标靶",), star=1,
+                              offer=["能量回收", "夹心饼干-一般", "摩托头盔-一般"])
+        self.assertEqual(self.db.rules["synergy"]["lock_school"], self.POINTS)
+        self.assertIsNotNone(part)
+        self.assertEqual(part.score, self.POINTS)
+        self.assertEqual(part.reason, "选择后锁定「标记」「充能」流派，「星光」「治愈」流派的筹码本局不再出现，"
+                                     "之后「标记」「充能」流派的筹码出现率提高")
+        # 前瞻说明不再重复「选择后锁定……」那一句（锁流派这一句已经说了）
+        self.assertNotIn("选择后锁定", self.by_name(adv)["能量回收"].lookahead_reason)
+        self.assertEqual(part.short, "能锁定目标流派")
+        self.assertLessEqual(len(part.short), SHORT_LIMIT)
+        self.assertIsNone(SCORE_WORDING.search(part.reason + part.short))
+        self.assertIsNone(BANNED_WORDING.search(part.reason + part.short))
+        # 这一张的分比改前高出一整笔，首推从刷新翻成它
+        self.assertEqual(adv.best, "能量回收")
+        self.assertAlmostEqual(self.by_name(adv)["能量回收"].total,
+                               self.by_name(adv)["能量回收"].immediate + self.by_name(adv)["能量回收"].lookahead)
+
+    def test_not_in_parts_or_pool_scores(self):
+        # 只给候选加：score()（筹码池的分值表也用这个）和 parts() 里没有这一项，刷新期望和高低不受影响
+        owned = ("标靶",)
+        st = State(hero="邦妮", star=1, round=3, owned=owned, rerolls=2, map="星趴·梦想号")
+        scorer = Scorer(self.db, st, offer=["能量回收"])
+        self.assertFalse(any(p.label == "锁流派" for p in scorer.parts("能量回收", owned, 3)))
+        base = scorer.score("能量回收", owned, 3)
+        adv = advise(self.db, st, ["能量回收", "夹心饼干-一般", "摩托头盔-一般"])
+        e = self.by_name(adv)["能量回收"]
+        self.assertAlmostEqual(e.immediate, base + self.POINTS)
+        # 刷新期望只按筹码池的分值算，和没有这一项时逐位相同
+        self.assertAlmostEqual(e.lookahead, scorer.lookahead("能量回收", owned), places=9)
+
+    def test_trigger_cases(self):
+        # 一个流派都没有：不知道锁哪个，不加
+        self.assertIsNone(self.lock("邦妮", "能量回收", offer=["能量回收", "夹心饼干-一般", "摩托头盔-一般"])[0])
+        # 已经占满两个流派：第三个流派本不该出现在候选里，也不加
+        self.assertIsNone(self.lock("邦妮", "能量回收", owned=("标靶", "银行卡-余额多"), offer=["能量回收"])[0])
+        # 不属于流派的筹码不加
+        self.assertIsNone(self.lock("邦妮", "拳击手套-初级", owned=("标靶",), offer=["拳击手套-初级"])[0])
+        # 属于已进入的流派不加
+        self.assertIsNone(self.lock("邦妮", "普通瞄具", owned=("标靶",), offer=["普通瞄具"])[0])
+        # 之后没有三选一（轮次走到进度上限）时记 0
+        part, _ = self.lock("邦妮", "能量回收", owned=("标靶",), star=1, round=17, progress=17, progress_cap=17,
+                            offer=["能量回收"])
+        self.assertIsNone(part)
+
+    def test_star_discount(self):
+        # 0～1 星全额、2 星减半、3 星为 0
+        self.assertEqual(self.lock("邦妮", "能量回收", owned=("标靶",), star=0)[0].score, self.POINTS)
+        self.assertEqual(self.lock("邦妮", "能量回收", owned=("标靶",), star=1)[0].score, self.POINTS)
+        self.assertEqual(self.lock("邦妮", "能量回收", owned=("标靶",), star=2)[0].score, self.POINTS / 2)
+        self.assertIsNone(self.lock("邦妮", "能量回收", owned=("标靶",), star=3)[0])
+
+    def test_picks_discount(self):
+        # 再乘 min(1, 剩余三选一次数 ÷ 3)：读到进度条、剩没几次时不整笔给
+        st = State(hero="邦妮", star=1, round=14, owned=("标靶",), rerolls=1, map="星趴·梦想号",
+                   progress=14, progress_cap=18)
+        sc = Scorer(self.db, st, offer=["能量回收"])
+        part = engine_parts.lock_school_part(sc, "能量回收", sc.known_owned)
+        self.assertLess(sc.picks.total, 3)
+        self.assertAlmostEqual(part.score, self.POINTS * sc.picks.total / 3)
+
+    def test_keep_schools_excluded(self):
+        # 不为了锁流派牺牲推荐流派：凛保标记、治愈，星光的筹码属于其他流派，选择后治愈本局进不来，扣分照旧、
+        # 没有锁流派那一笔
+        part, _ = self.lock("凛", "紫色飞星", owned=("标记喷罐",), offer=["紫色飞星"])
+        self.assertIsNone(part)
+        # 美咲的推荐流派是治愈、标记，已有标记时拿充能的电流剑会让治愈进不来：不加
+        part, _ = self.lock("美咲", "电流剑", owned=("普通瞄具",), offer=["电流剑"])
+        self.assertIsNone(part)
+        # 锁的是另一个推荐流派、两个都还在时不挡：阿兰娜只保治愈，标记是另一个推荐流派，照加
+        part, _ = self.lock("阿兰娜", "魔法箭袋", owned=("缓冲盾牌",), offer=["魔法箭袋"])
+        self.assertEqual(part.score, self.POINTS)
+
+    def test_school_skip_still_counts(self):
+        # school_skip 里的筹码（这张本身不加推荐流派的分）满足锁定条件时照给：这一项衡量的是「锁住」，不是这张本身
+        adv_with = advise(self.db, State(hero="阿兰娜", star=1, round=3, owned=("缓冲盾牌",), rerolls=2,
+                                         map="星趴·梦想号"), ["魔法箭袋", "夹心饼干-一般", "摩托头盔-一般"])
+        e = self.by_name(adv_with)["魔法箭袋"]
+        self.assertFalse(any(p.label == "推荐流派" for p in e.parts))
+        self.assertEqual(next(p.score for p in e.parts if p.label == "锁流派"), self.POINTS)
+        # school_skip 换成别的写法（仍含这一张）时同样照给
+        hs = dataclasses.replace(self.db.hero_synergy["阿兰娜"], school_skip=("魔法箭袋", "标靶"))
+        db = dataclasses.replace(self.db, hero_synergy={**self.db.hero_synergy, "阿兰娜": hs})
+        sc = Scorer(db, State(hero="阿兰娜", owned=("缓冲盾牌",), round=3, rerolls=2, map="星趴·梦想号"))
+        self.assertIsNotNone(engine_parts.lock_school_part(sc, "魔法箭袋", sc.known_owned))
+
+    def test_pref_schools_without_keep(self):
+        # 不保推荐流派时，推荐流派里的另一个流派也照加：阿兰娜的标记是推荐流派、不在要保的治愈里
+        hs = dataclasses.replace(self.db.hero_synergy["阿兰娜"], keep_schools=False)
+        db = dataclasses.replace(self.db, hero_synergy={**self.db.hero_synergy, "阿兰娜": hs})
+        sc = Scorer(db, State(hero="阿兰娜", owned=("缓冲盾牌",), round=3, rerolls=2, map="星趴·梦想号"))
+        self.assertEqual(engine_parts.lock_school_part(sc, "魔法箭袋", sc.known_owned).score, self.POINTS)
+
+    def test_scheme_unaffected(self):
+        from advisor.engine import Plan
+
+        plan = Plan(name="测试", hero="邦妮", tiers=(("标靶", "core"),))
+        adv = advise(self.db, State(hero="邦妮", star=1, round=3, owned=("标靶",), rerolls=2, map="星趴·梦想号"),
+                     ["能量回收", "夹心饼干-一般", "摩托头盔-一般"], scheme=plan)
+        self.assertFalse(any(p.label == "锁流派" for e in adv.evals for p in e.parts))
+
+    def test_wording_without_want(self):
+        # 角色没有推荐流派时也写全：锁定的两个流派之后都按同流派加权更常出现，和推荐流派无关。用测试里造的角色数据
+        hs = dataclasses.replace(self.db.hero_synergy["墨影"], schools=())
+        db = dataclasses.replace(self.db, hero_synergy={**self.db.hero_synergy, "墨影": hs})
+        sc = Scorer(db, State(hero="墨影", owned=("标靶",), round=3, rerolls=2, map="星趴·梦想号"))
+        part = engine_parts.lock_school_part(sc, "能量回收", sc.known_owned)
+        self.assertEqual(part.reason, "选择后锁定「标记」「充能」流派，「星光」「治愈」流派的筹码本局不再出现，"
+                                      "之后「标记」「充能」流派的筹码出现率提高")
+
+    def test_lookahead_skips_lock_sentence_only(self):
+        # 有锁流派那一项时前瞻只去掉「选择后锁定……」那一句，其余几句（例如放弃本次的哪张、出现率的变化）照写；
+        # 没有锁流派那一项（按方案推荐）时照旧写那一句
+        st = State(hero="邦妮", star=1, round=3, owned=("标靶",), rerolls=2, map="星趴·梦想号")
+        offer = ["能量回收", "夹心饼干-一般", "摩托头盔-一般"]
+        scorer = Scorer(self.db, st, offer=offer)
+        full = scorer.lookahead_reason("能量回收", ("标靶",))
+        short = scorer.lookahead_reason("能量回收", ("标靶",), skip_lock=True)
+        self.assertTrue(full.startswith("选择后锁定「标记」「充能」流派"))
+        self.assertNotIn("选择后锁定", short)
+        rest = "；".join(full.split("；")[1:])
+        self.assertEqual(short, rest)
+        from advisor.engine import Plan
+
+        plan = Plan(name="测试", hero="邦妮", tiers=(("标靶", "core"),))
+        adv = advise(self.db, st, offer, scheme=plan)
+        self.assertIn("选择后锁定", self.by_name(adv)["能量回收"].lookahead_reason)
+
+    def test_lookahead_short_matches_reason(self):
+        # 前瞻说明去掉了锁定那一句时，标签上的短句也不写「锁定……流派」，和悬停时的说明对得上
+        part, adv = self.lock("邦妮", "能量回收", owned=("标靶",), star=1,
+                              offer=["能量回收", "夹心饼干-一般", "摩托头盔-一般"])
+        self.assertIsNotNone(part)
+        e = self.by_name(adv)["能量回收"]
+        self.assertNotIn("选择后锁定", e.lookahead_reason)
+        self.assertNotIn("锁定", e.lookahead_short)
+
+    def test_lookahead_kept_when_lock_sentence_is_all(self):
+        # 前瞻只有锁定那一句时照留：去掉就整行不见了，前瞻分却照样算在总分里。梅加斯 0 星、已有大碗炖肉，候选手持风扇-大
+        part, adv = self.lock("梅加斯", "手持风扇-大", owned=("大碗炖肉",), star=0, offer=["手持风扇-大"])
+        self.assertIsNotNone(part)
+        e = self.by_name(adv)["手持风扇-大"]
+        self.assertNotEqual(e.lookahead, 0)
+        self.assertTrue(e.lookahead_reason.startswith("选择后锁定"))
+        self.assertTrue(e.lookahead_short.startswith("前瞻："))
+
+
 class NancyLiveReviewTest(Base):
     """南希露一局（魔法学院、普通，三名电脑队友）的 14 次三选一，局面取自推荐日志（offer_id 去掉日期的部分）。
     按南希露的推荐规则（不用玩家思路、推荐流派标记和治愈两个都尽量保住）重算的首推。"""
@@ -5124,8 +5302,9 @@ class NancyLiveReviewTest(Base):
         "203108-4": (dict(TASK5, rerolls=3, left_rarity="金"), ["大碗炖肉", "银行卡-余额多", "金色飞星"], REROLL),
         "203127-6": (dict(TASK5, rerolls=1, left_rarity="蓝"), ["医疗箱-紧急治疗", "银行卡-余额多", "会员推荐信"],
                      "医疗箱-紧急治疗"),
-        # 同一轮（剩 2 次刷新）：摩托头盔-中级按普通难度扣分，首推优雅之羽（物理输出的条件攻击力加成）
-        "203125-5": (dict(TASK5, rerolls=2, left_rarity="蓝"), ["能量回收", "摩托头盔-中级", "优雅之羽"], "优雅之羽"),
+        # 同一轮（剩 2 次刷新）：摩托头盔-中级按普通难度扣分；优雅之羽的条件攻击力加成要被攻击才兑现，南希露被攻击得少、
+        # 被抵掉，三张都不值，首推刷新
+        "203125-5": (dict(TASK5, rerolls=2, left_rarity="蓝"), ["能量回收", "摩托头盔-中级", "优雅之羽"], REROLL),
         # 第 10 轮金色美工刀：还没有治愈来源，仍首推刷新
         "203913-7": (dict(LATE, round=10, progress=10, rerolls=2, owned=("拳击手套-初级", "额外电池", "银行卡-余额多")),
                      ["美工刀-锋利", "银行卡-余额少", "友情徽章"], REROLL),

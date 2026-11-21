@@ -26,7 +26,7 @@ Session 记下的每一条（格式与 Session.recent_events 相同：time 精�
   「名字」）、read:coins 星币数（coins、reason 读不出的原因、text、score）、read:own_by_name 头像认不出时按本局记住的名字
   找自己那一行（row 为找到的行或 null，reason 为找不到或不读的原因；不写名字）、read:players 玩家列表和队友、
   read:template 保存角色模板、read:panel「查看筹码」面板（page 第几页、arrows 两端翻页箭头）、read:select_hidden
-  三选一被玩家隐藏（开始隐藏时一条，offer 是当时的候选）、read:screen 对局外的画面、read:mutators 畸变组件、
+  三选一被临时盖住（开始盖住时一条，offer 是当时的候选，by 为 hidden_ui 玩家点了「隐藏」或 esc_menu 按 Esc 打开了菜单）、read:screen 对局外的画面、read:mutators 畸变组件、
   read:hero_select 认出选角界面、read:difficulty 和 read:difficulty_cap 难度、read:victory 通关画面、read:game_over_banner
   打输时棋盘上的 GAME OVER 横幅、read:cue_unread 三选一的来源画面（升星横幅、购买窗）颜色像、一段里认了几次字都没
   认出来（cue 为 banner 或 shop，tries 为认了几次，一段只记一条，见 vision.pipeline.FrameProcessor._check_source_cues）、

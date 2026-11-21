@@ -9,7 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from PySide6.QtCore import QPoint  # noqa: E402
 from PySide6.QtGui import QTextDocument  # noqa: E402
-from PySide6.QtWidgets import QPushButton, QApplication, QToolTip  # noqa: E402
+from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QToolTip, QWidget  # noqa: E402
 from advisor.session.selection import HOLD_MAX_S  # noqa: E402
 from advisor.ui.screen import CaptureState  # noqa: E402
 from advisor.ui.winapi import GameProbe  # noqa: E402
@@ -101,6 +101,14 @@ def plain_html(text: str) -> str:
     doc = QTextDocument()
     doc.setHtml(text)
     return doc.toPlainText()
+
+
+def notice_titles(root, text: str) -> list[QLabel]:
+    """root 里原文是 text、显示着的提示块（notice_blocks：标题、正文拆成了几个标签）的标题标签（部件名 notice_<级别>，
+    悬停说明也在它上面）。同一条提示换了悬停说明时整块重建，换下来的那一块隐藏后等待删除：只取显示着的。"""
+    blocks = [b for b in root.findChildren(QWidget)
+              if b.property("noticeBlock") and b.property("noticeText") == text and b.isVisibleTo(root)]
+    return [next(lb for lb in b.findChildren(QLabel) if lb.objectName().startswith("notice_")) for b in blocks]
 
 
 def buttons(widget) -> list[QPushButton]:

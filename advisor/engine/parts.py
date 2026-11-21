@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from ..data import LEVEL_NIGHTMARE, NORMAL, TIER_LABEL, TIERS, Chip, Rule
+from ..data import LEVEL_NIGHTMARE, NORMAL, SCHOOLS, TIER_LABEL, TIERS, Chip, Rule
 from ..pool import expected_best, expected_max_with, owned_schools, player_pool
 from .advice_text import (SCHEME_TIER_WORD, SHORT_LIMIT, chance_text, fill_mates_short, free_short, mates_short,
                           origin_short, origin_text, shown_int)
@@ -58,6 +58,15 @@ KEEP_SCHOOLS_COUNT = {1: "一", 2: "两", 3: "三"}
 ADOPTED_LEFT_REASON = "已进入「{school}」流派，推荐流派{schools}只能再进入{n}个：「{school}」流派的筹码同样按推荐流派计算"
 ADOPTED_GONE_REASON = "已进入「{school}」流派，推荐流派{schools}的筹码本局不再出现：「{school}」流派的筹码同样按推荐流派计算"
 ADOPTED_SHORT = "推荐流派：{school}（已进入）"
+# 锁流派（rules.toml [synergy] lock_school）：只有一个流派时，再拿一张还没进入的流派、正好占满流派名额的筹码，
+# 锁定以后其余流派的筹码本局不再出现、剩下的两个流派按同流派加权更常出现。分项名「锁流派」，自己的一笔分，不进筹码池的分值表
+# （parts.lock_school_part 只给这次三选一的候选加，见 scorer.advise）。{schools} 是选择后占的两个流派（每个各加一对「」），
+# {locked} 是本局不再出现的其余流派（同上）。有这一项时前瞻说明不再重复「选择后锁定……」那一句（scorer.advise 传
+# lookahead_reason 的 skip_lock），两件事并在这一句里说
+LOCK_LABEL = "锁流派"
+LOCK_REASON = "选择后锁定{schools}流派，{locked}流派的筹码本局不再出现，之后{schools}流派的筹码出现率提高"
+LOCK_SHORT = "能锁定目标流派"
+LOCK_ORIGIN = "lock_school"
 SAME_MAP = object()  # parts() / score() 的 map_name 默认值：用 State.map
 ENDLESS_ORIGIN = "endless_cycle"  # 循环往复那一项的 Part.origin（前瞻按假设的局面重算这一项，见 endless_value）
 
@@ -87,7 +96,7 @@ class Part:
     """总分里的一项。reason 为空的项不出现在理由里；score 为 0 的项只作说明（例如职业倾向），不写分值。
 
     label 是分项的名称，可以直接显示（不含特性名）：基础分、成长分、角色分、标签分、关键词分、玩家思路、
-    角色专属规则、特性、其他特性、推荐流派、组合、队友、难度、收入折算、循环往复、职业倾向、未收录。
+    角色专属规则、特性、其他特性、推荐流派、锁流派、组合、队友、难度、收入折算、循环往复、职业倾向、未收录。
     origin 是内部记录（规则来自哪个特性、哪条组合规则、玩家思路的来源），不显示。
     short 是推荐卡片理由标签上的短句（例如「收入剩余 14 轮」）；
     为空时界面按 reason 的长度决定：不超过 SHORT_LIMIT 个字照写，超过时写分项名。整句 reason 不受影响（悬停、命令行、诊断包照用）。
@@ -320,6 +329,53 @@ def _keep_schools_part(sc: Scorer, name: str, owned: tuple) -> Part | None:
         reason = KEEP_SCHOOLS_GONE_REASON.format(enter=school, schools=quoted)
         short = KEEP_SCHOOLS_GONE_SHORT.format(names=names)
     return Part("推荐流派", sc.keep_penalty, reason, short=short)
+
+
+def lock_school_part(sc: Scorer, name: str, owned: tuple) -> Part | None:
+    """锁流派：已经进入一个流派时，再拿一张还没进入的流派、正好占满流派名额（[pool] max_schools）的筹码，
+    之后其余流派的筹码本局不再出现，想要的流派只剩两个、按同流派加权更常出现。分项名「锁流派」，分值
+    rules.toml [synergy] lock_school：0～1 星全额、2 星减半、3 星为 0（前期最值钱，之后升星和任务三选一次数少了，
+    且筹码池已经缩过一次），再乘 min(1, 剩余三选一次数 ÷ 3)（之后还有几次选择，锁定能兑现几次）。不满足时为 None。
+
+    条件：只在默认推荐（sc.plan 为 None）；已有的流派恰好一个；这张属于还没进入的流派，拿了以后正好占满；
+    选择后角色的推荐流派都还在（拿的是推荐流派之一，或者另一个名额留给推荐流派）：不为了锁流派牺牲推荐流派，
+    那样由 _keep_schools_part 扣分，两项互斥（不保推荐流派的角色没有要保的流派，锁哪个流派都行）；本次之后还有
+    筹码三选一。
+
+    这一笔衡量的是「锁住」，与这张本身的分无关：角色在 school_skip 里列出的筹码（这张本身不加推荐流派的分）
+    满足条件时照给。只看候选，不进筹码池的分值表（scorer.advise 只给本次三选一的候选加这一项）：
+    筹码池里每张还没进入的流派都加这一笔的话，刷新期望和前瞻的未来分布会一起抬高，锁定到底值不值就被冲淡了。
+    """
+    cfg = sc.db.rules["synergy"]
+    points = cfg.get("lock_school", 0)
+    if not points or sc.plan is not None:
+        return None
+    chip = sc.db.chips.get(name)
+    if chip is None or not chip.school:
+        return None
+    db = sc.db
+    limit = db.rules["pool"]["max_schools"]
+    before = owned_schools(db, owned)
+    if len(before) != 1 or chip.school in before:
+        return None
+    after = owned_schools(db, (*owned, name))
+    if len(after) != limit:
+        return None
+    if any(s not in after for s in sc.pref_schools):
+        return None
+    picks = sc.picks.total
+    if picks <= 0:
+        return None
+    star = max(0, min(3, sc.st.star))
+    factor = 1.0 if star <= 1 else (0.5 if star == 2 else 0.0)
+    score = points * factor * min(1.0, picks / 3)
+    if score < 0.5:
+        return None
+    locked = [s for s in SCHOOLS if s not in after]
+    quoted = "".join(f"「{s}」" for s in after)
+    gone = "".join(f"「{s}」" for s in locked)
+    reason = LOCK_REASON.format(schools=quoted, locked=gone)
+    return Part(LOCK_LABEL, score, reason, LOCK_ORIGIN, LOCK_SHORT)
 
 
 def _adopted_schools(sc: Scorer, owned: tuple) -> tuple[str, ...]:

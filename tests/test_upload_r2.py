@@ -1096,6 +1096,134 @@ class UploadFlowTest(unittest.TestCase):
                                        "/acc-update/latest.json"])
 
 
+    # -------------------------------------------------- 识别图片的最新清单（--assets-latest）
+
+    LATEST = upload_r2.ASSETS_LATEST_KEY
+
+    def latest_file(self, serial: int = 12, heroes=(), name: str | None = None) -> Path:
+        """写一份识别图片的最新清单（程序认这一份）：只写 format、serial、generated、items、heroes。"""
+        path = self.folder / (name or f"assets-latest-{serial}.json")
+        path.write_text(json.dumps({"format": 1, "serial": serial, "generated": "2030-01-02", "items": [],
+                                    "heroes": list(heroes)}, ensure_ascii=False), encoding="utf-8")
+        return path
+
+    def upload_latest(self, path: Path, *extra: str) -> tuple[int, str, str]:
+        return self.upload("--assets-latest", str(path), notes=False, zip_arg=False, *extra)
+
+    def test_assets_latest_upload(self):
+        """只传这份清单：先读备用地址上现在那份（还没有：404），再传，再读回来核对；请求头是 application/json、不缓存；
+        正文照原样传，不问 GitHub，不传发行包和 latest.json。"""
+        path = self.latest_file(heroes=[{"id": 130, "name": "苍鲤", "since": "1.2.0"}])
+        code, out, err = self.upload_latest(path)
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(self.cloud.log, [("GET", f"/pub/{self.LATEST}"), ("PUT", f"/acc-update/{self.LATEST}"),
+                                          ("GET", f"/pub/{self.LATEST}")])
+        self.assertEqual(self.cloud.problems, [])
+        headers = self.cloud.objects[self.LATEST][1]
+        self.assertEqual((headers.get("content-type"), headers.get("cache-control")), ("application/json", "no-cache"))
+        self.assertEqual(self.cloud.objects[self.LATEST][0], path.read_bytes())
+        self.assertEqual(sorted(self.cloud.objects), [self.LATEST])
+        for step in range(1, 4):
+            self.assertIn(f"第 {step}/3 步", out)
+        self.assertIn("备用地址上还没有最新清单：比不了序号，照传", out)
+        self.assertIn("和传上去的一样", out)
+        self.assertIn("序号 12，0 项、1 个角色", out.splitlines()[-1])
+
+    def test_assets_latest_serial_must_grow(self):
+        """备用地址上那份的序号不比新的小就不传（一样、更小都不传），一个上传请求都没发；大一点照传。"""
+        self.cloud.objects[self.LATEST] = (self.latest_file(serial=12, name="old.json").read_bytes(), {})
+        for serial in (12, 11):
+            with self.subTest(serial=serial):
+                self.cloud.log.clear()
+                code, out, err = self.upload_latest(self.latest_file(serial=serial))
+                self.assertEqual(code, 1)
+                self.assertEqual(self.puts(), [])
+                self.assertEqual(self.cloud.log, [("GET", f"/pub/{self.LATEST}")])
+                self.assertIn(f"新的序号 {serial} 不比备用地址上现在那份（序号 12）大", err)
+                self.assertIn("R2 上什么都没动。", err)
+        self.cloud.log.clear()
+        code, out, err = self.upload_latest(self.latest_file(serial=13))
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn("序号比备用地址上现在那份（12）大", out)
+        self.assertEqual(self.puts(), [f"/acc-update/{self.LATEST}"])
+
+    def test_assets_latest_remote_unreadable_or_later(self):
+        """备用地址上现在那份读不到（连不上、别的 HTTP 状态）、是以后的格式：比不了序号，不传、退出码 1。核对不过、但写着
+        整数序号的照它比；连序号都读不出的照传。"""
+        later = json.dumps({"format": 2, "serial": 1, "items": []}).encode()
+        self.cloud.objects[self.LATEST] = (later, {})
+        code, out, err = self.upload_latest(self.latest_file(serial=50))
+        self.assertEqual((code, self.puts()), (1, []))
+        self.assertIn("是以后的格式", err)
+        self.assertIn("R2 上什么都没动。", err)
+
+        real = upload_r2._open
+
+        def broken(request, timeout):
+            if request.get_method() == "GET" and request.full_url.endswith(self.LATEST):
+                raise urllib.error.URLError(TimeoutError())
+            return real(request, timeout)
+
+        with mock.patch.object(upload_r2, "_open", side_effect=broken):
+            code, out, err = self.upload_latest(self.latest_file(serial=50))
+        self.assertEqual((code, self.puts()), (1, []))
+        self.assertIn("读不到备用地址上现在那份最新清单", err)
+
+        self.cloud.objects[self.LATEST] = (json.dumps({"format": 1, "serial": 60, "items": "坏的"}).encode(), {})
+        code, out, err = self.upload_latest(self.latest_file(serial=50))
+        self.assertEqual((code, self.puts()), (1, []))
+        self.assertIn("不比备用地址上现在那份（序号 60）大", err)
+        code, out, err = self.upload_latest(self.latest_file(serial=61))
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn("照它写的序号 60 比", out)
+
+        self.cloud.log.clear()
+        self.cloud.objects[self.LATEST] = (b"not json", {})
+        code, out, err = self.upload_latest(self.latest_file(serial=2))
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn("也读不出序号，照传", out)
+        self.assertEqual(self.puts(), [f"/acc-update/{self.LATEST}"])
+
+    def test_assets_latest_local_problems(self):
+        """文件不在、不是程序认的清单、是以后的格式：一个请求都不发、退出码 1，说明为什么。"""
+        bad = self.folder / "bad.json"
+        bad.write_text("{}", encoding="utf-8")
+        future = self.folder / "future.json"
+        future.write_text(json.dumps({"format": 2, "serial": 1, "items": []}), encoding="utf-8")
+        for path, message in ((self.folder / "none.json", "找不到识别图片的最新清单"),
+                              (bad, "识别图片的最新清单核对不过"),
+                              (future, "是以后的格式")):
+            with self.subTest(path=path.name):
+                code, out, err = self.upload_latest(path)
+                self.assertEqual((code, self.cloud.log), (1, []))
+                self.assertIn(message, err)
+
+    def test_assets_latest_readback_mismatch(self):
+        """公开地址读回的清单和传上去的不一样：退出码 2，写明已经传上去的。"""
+        self.cloud.tamper[self.LATEST] = json.dumps({"format": 1, "serial": 1, "items": []}).encode()
+        code, out, err = self.upload_latest(self.latest_file())
+        self.assertEqual(code, 2)
+        self.assertIn("停在第 3/3 步（从公开地址读回核对）", err)
+        self.assertIn("和传上去的不一样", err)
+        self.assertIn(f"已经传上去的：{self.LATEST}", err)
+
+    def test_assets_latest_dry_run_sends_nothing(self):
+        """试运行只核对本地文件、列出三步，不读备用地址上那份、不连 R2。"""
+        path = self.latest_file()
+        code, out, err = self.upload_latest(path, "--dry-run")
+        self.assertEqual((code, self.cloud.log, err), (0, [], ""))
+        self.assertIn("试运行", out.splitlines()[0])
+        for text in ("序号 12", f"2. 传 {self.LATEST}（", "Content-Type: application/json；Cache-Control: no-cache",
+                     "3. 从公开地址读回核对", "试运行结束：R2 上什么都没动"):
+            self.assertIn(text, out)
+
+    def test_assets_latest_excludes_assets_only(self):
+        """和 --assets-only 一起用：参数不对，一个请求都不发。"""
+        code, out, err = self.upload_latest(self.latest_file(), "--assets-only")
+        self.assertEqual((code, self.cloud.log), (1, []))
+        self.assertIn("不能一起用", err)
+
+
 class AddressTest(unittest.TestCase):
     def test_same_as_program(self):
         """写死在脚本里的两个地址和程序查更新用的一样：公开地址就是程序的下载镜像（advisor/update.py 的 MIRROR_BASE），核对的
@@ -1104,6 +1232,8 @@ class AddressTest(unittest.TestCase):
         self.assertEqual(upload_r2.PUBLIC_BASE, update.MIRROR_BASE)
         self.assertEqual(upload_r2.GITHUB_API, update.GITHUB_API)
         self.assertEqual(upload_r2.SOURCE_URL, update.MIRROR_SOURCE)
+        # 识别图片的最新清单：程序检查更新时读的就是公开地址加这个名字
+        self.assertEqual(upload_r2.PUBLIC_BASE + upload_r2.ASSETS_LATEST_KEY, update.ASSETS_LATEST)
 
 
 if __name__ == "__main__":

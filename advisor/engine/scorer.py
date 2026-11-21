@@ -75,13 +75,13 @@ class Scorer(Context):
         """拿这个筹码对之后三选一的影响（lookahead.lookahead）。"""
         return lookahead.lookahead(self, name, owned)
 
-    def lookahead_reason(self, name: str, owned: tuple) -> str:
+    def lookahead_reason(self, name: str, owned: tuple, skip_lock: bool = False) -> str:
         """前瞻的说明（lookahead.lookahead_reason）。"""
-        return lookahead.lookahead_reason(self, name, owned)
+        return lookahead.lookahead_reason(self, name, owned, skip_lock)
 
-    def lookahead_short(self, name: str, owned: tuple) -> str:
+    def lookahead_short(self, name: str, owned: tuple, skip_lock: bool = False) -> str:
         """前瞻理由标签上的短句（lookahead.lookahead_short）。"""
-        return lookahead.lookahead_short(self, name, owned)
+        return lookahead.lookahead_short(self, name, owned, skip_lock)
 
     def tier_lookahead(self, name: str, owned: tuple) -> float:
         """档位前瞻：选了这张以后，方案里标了档位的筹码之后出现的机会怎么变（lookahead.tier_lookahead）。"""
@@ -187,8 +187,21 @@ def advise(db: DB, st: State, offer: list[str], rarity=None, scheme=None, cache=
         # 明细上逐条写出理由，按地图平均会得到「几分之几生效」的分项，写不成一句理由，也不该把可能不是本局的地图上才有的
         # 加减分算进眼前这张筹码；之后的三选一本来就从各张地图自己的筹码池里出，按地图分别算才和筹码池对得上
         chip_parts = scorer.parts(name, owned, st.round)
+        lock = None
+        if scorer.plan is None:
+            # 锁流派只给这次三选一的候选加：不进 parts() 和 pool_scores()，刷新期望、前瞻的未来分布都不跟着抬高
+            # （parts.lock_school_part）
+            lock = parts.lock_school_part(scorer, name, owned)
+            if lock is not None:
+                chip_parts.append(lock)
         immediate = sum(p.score for p in chip_parts)
         la = scorer.lookahead(name, owned)
+        # 有锁流派那一项时，它的说明已经写了锁定哪两个流派、哪些流派不再出现，前瞻不再重复那一句，短句也不取锁定的流派。
+        # 前瞻只有那一句时照留（去掉就整行不见了，前瞻分却照样算在总分里）
+        la_reason = scorer.lookahead_reason(name, owned, skip_lock=lock is not None)
+        skip_lock = lock is not None and bool(la_reason)
+        if lock is not None and not la_reason:
+            la_reason = scorer.lookahead_reason(name, owned)
         evals.append(
             ChipEval(
                 chip=db.chips[name],
@@ -196,10 +209,10 @@ def advise(db: DB, st: State, offer: list[str], rarity=None, scheme=None, cache=
                 official=sum(p.score for p in chip_parts if p.label in OFFICIAL_LABELS),
                 immediate=immediate,
                 lookahead=la,
-                lookahead_reason=scorer.lookahead_reason(name, owned),
+                lookahead_reason=la_reason,
                 total=immediate + la,
                 official_raw=scorer.official_raw(name, owned, st.round),
-                lookahead_short=scorer.lookahead_short(name, owned),
+                lookahead_short=scorer.lookahead_short(name, owned, skip_lock=skip_lock),
             )
         )
     if scorer.plan is not None:

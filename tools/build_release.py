@@ -340,7 +340,7 @@ USER_FILES = paths.USER_FILES
 # （advisor/paths.py 的 download_dir），个人目录用不了时才退回 app 文件夹的 assets 下：直接在发行版文件夹里运行过、又退回了的，
 # 这几个文件夹照样会出现，所以照旧列着，一张都不能进压缩包
 FORBIDDEN_DIRS = ("logs/", "reports/", "samples/", "docs/", "tests/", "tools/", ".tmp/", ".venv/", "mechanics/",
-                  "assets/heroes/", "assets/profiles/", "assets/chips/", "assets/skins/")
+                  "assets/heroes/", "assets/profiles/", "assets/chips/", "assets/achieve/", "assets/skins/")
 # state_key.txt：解锁记录的密钥文件（只在编译时用，见 STATE_KEY_FILE）
 FORBIDDEN_NAMES = ("overlay_err.txt", "state_key.txt")
 FORBIDDEN_NAME_PATTERNS = USER_FILES

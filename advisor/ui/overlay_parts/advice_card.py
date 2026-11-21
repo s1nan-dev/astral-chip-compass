@@ -76,6 +76,7 @@ from .wording import (
     FLASH_MS,
     HERO_PAUSED,
     LIVE_TIP,
+    NEW_HERO,
     PICKED_LABEL,
     PROMPT_HERO,
     QUESTION_LINE_MS,
@@ -597,11 +598,14 @@ class AdviceCard:
                 box.addWidget(_text_label(lang.t(f"⚠ {p}"), C.FONT_M, C.WARN_COLOR, wrap=True))
         return view
 
-    def hero_needed_view(self, offer) -> QWidget:
-        """三选一出现了，但角色待识别：推荐暂停，请用户选角色。候选筹码按稀有度着色列出。"""
+    def hero_needed_view(self, offer, new_hero: str | None = None) -> QWidget:
+        """三选一出现了，但角色待识别：推荐暂停，请用户选角色。候选筹码按稀有度着色列出。new_hero：立绘认出的是新角色
+        （资料里还没有她的推荐规则）时是她的名字，大字改写「这个角色是新出的，请更新拾星助手」（NEW_HERO），下面那行「选择
+        角色后立即计算推荐」（HERO_PAUSED）不显示：手动选别的角色算出来的推荐对她并不对，不引着玩家去选；角色下拉框照旧能选。"""
         view, box = _column_widget(4)
-        box.addWidget(_text_label(PROMPT_HERO, C.FONT_L, C.WARN_COLOR, wrap=True))
-        box.addWidget(_text_label(HERO_PAUSED, C.FONT_M, C.DIM_COLOR, wrap=True))
+        box.addWidget(_text_label(NEW_HERO if new_hero else PROMPT_HERO, C.FONT_L, C.WARN_COLOR, wrap=True))
+        if not new_hero:
+            box.addWidget(_text_label(HERO_PAUSED, C.FONT_M, C.DIM_COLOR, wrap=True))
         listed = [n for n in offer if n]
         if listed:
             segs = [(lang.t("候选筹码："), C.DIM_COLOR)]

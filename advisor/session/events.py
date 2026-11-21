@@ -109,9 +109,16 @@ class Event:
     # table：这一局结算数据表的内容（没有名字、没有等级；各项见 advisor/logbook.py 模块说明里的 table 记录）。
     # 只交给推荐日志，不写进最近事件和识别记录（名字本来就不在里面）
     record: dict | None = None
-    # unadvised：一次三选一认出来了、程序放弃等待、没给推荐的那一项（round、reasons、advised、star、source、pick，
-    # 见 SelectTracker._note_unadvised）。select_no 是那一次三选一；交给推荐日志和诊断包，悬浮窗上不显示
+    # unadvised：一次三选一认出来了、程序放弃等待、没给推荐的那一项（round、reasons、advised、star、source、pick、
+    # hero_guess、hero_score，见 SelectTracker._note_unadvised）。select_no 是那一次三选一；交给推荐日志和诊断包，悬浮窗上不显示
     unadvised: dict | None = None
+    # advice：和 state.teammates 一一对应，认出了角色的为 None，没认出的是这一行最近一次读到的最像谁
+    # （{guess, score, margin}，见 Session.teammate_guesses）。只交给推荐日志；不放进局面（State）：它不改推荐
+    teammate_guesses: list = field(default_factory=list)
+    # advice：只给对局报告的几项（这一局从第几轮看起、离那时几秒、游戏语言、队友认了几次、出了几次错、识别快慢、认不出自己
+    # 那一行时的比对、三张候选的名称匹配程度、筹码商店的价格等，见 Session.report_info）。只交给推荐日志；不放进局面：
+    # 它不改推荐
+    report_info: dict = field(default_factory=dict)
 
 
 def _jsonable(value):

@@ -15,6 +15,9 @@
 资料库里没有的皮肤（或角色）：用户手动指定角色、而立绘无法识别时，悬浮窗把这一帧左下角的立绘存成新模板
 （save_template，存到下载的识别图片的 heroes/user/，同角色照放在一起：发行版在个人目录里，换新版本照样沿用），之后一并比对。
 用户模板存的就是对局里的样子，不转。
+
+新角色：游戏出了这一版资料里还没有的角色时，识别图片的最新清单带来她的编号、名字和角色照（见 advisor/assets.py）。认出的
+是她时 HeroGuess.hero 仍为 None（资料里没有她的推荐规则），另在 new 里写她的名字，由记账提示更新拾星助手。
 """
 from __future__ import annotations
 
@@ -151,11 +154,23 @@ def _score(work: np.ndarray, face: np.ndarray, s: float) -> float:
 
 @dataclass
 class HeroGuess:
-    hero: str | None  # 有把握时是角色名，否则 None
-    best: str  # 最像的角色名
+    hero: str | None  # 有把握时是角色名，否则 None（新角色也是 None：资料里没有她，推荐用不上）
+    best: str  # 最像的角色名（资料里没有、最新清单里也没有的编号写编号）
     score: float  # 相关度 0~1
     runner_up: float  # 第二像的角色的相关度
     image: str  # 匹配上的角色照文件（能看出是哪套皮肤；用户模板以「user/」开头）
+    # 有把握地（条件同 hero）认出的是新角色时是她的名字，否则 None。新角色：识别图片的最新清单里有、这一版资料里还没有的
+    # 角色（new_heroes）
+    new: str | None = None
+    best_new: bool = False  # best 是新角色（不论有没有把握）
+
+
+def new_heroes(db: DB) -> dict[int, str]:
+    """识别图片的最新清单里、资料库 db 还没有的新角色：{编号: 名字}（stars.new_heroes 里再去掉编号、名字和 db 重了的）。"""
+    from .stars import new_heroes as listed
+
+    ids = {hero.id for hero in db.heroes.values()}
+    return {i: name for i, name in listed().items() if i not in ids and name not in db.heroes}
 
 
 def _region(frame) -> tuple[np.ndarray, float, float, float]:
@@ -225,9 +240,14 @@ def read_hero(img: np.ndarray, db: DB) -> HeroGuess | None:
     best_id, (best_score, best_file) = ranked[0]
     second = ranked[1][1][0] if len(ranked) > 1 else -1.0
     by_id = {hero.id: hero.name for hero in db.heroes.values()}
-    best_name = by_id.get(best_id, str(best_id))
-    sure = best_score >= MIN_SCORE and best_score - second >= MIN_MARGIN and best_id in by_id
-    return HeroGuess(best_name if sure else None, best_name, best_score, second, best_file)
+    # 资料里没有的编号：最新清单里有名字的（新角色）写名字，有把握时记进 new（hero 照旧为 None：没有她的推荐规则）
+    fresh = new_heroes(db) if best_id not in by_id else {}
+    best_name = by_id.get(best_id) or fresh.get(best_id) or str(best_id)
+    clear = best_score >= MIN_SCORE and best_score - second >= MIN_MARGIN
+    sure = clear and best_id in by_id
+    new = best_name if clear and best_id in fresh else None
+    return HeroGuess(best_name if sure else None, best_name, best_score, second, best_file,
+                     new=new, best_new=best_id in fresh)
 
 
 def user_patch(img: np.ndarray) -> np.ndarray | None:

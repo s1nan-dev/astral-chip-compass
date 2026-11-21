@@ -140,6 +140,8 @@ MIRROR_BASE = "https://dl.astral-chip-compass.com/"
 MIRROR_SOURCE = "https://github.com/s1nan-dev/astral-chip-compass"
 LATEST_JSON = MIRROR_BASE + "latest.json"
 LATEST_ZIP = MIRROR_BASE + "ACC-latest.zip"  # 手动下载用：永远是最新那一版的副本
+# 识别图片的最新清单（advisor/assets.py 的 fetch_remote_manifest）：游戏出了新造型时只换它、补图，不用发新版本
+ASSETS_LATEST = MIRROR_BASE + "assets-latest.json"
 # GitHub 上仓库的地址 https://github.com/<owner>/<repo>：owner、repo 只认 GitHub 许可的字符（ASCII 字母、数字、-、_、.）
 _GITHUB_REPO = re.compile(r"https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)")
 

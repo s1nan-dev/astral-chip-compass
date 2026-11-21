@@ -28,7 +28,7 @@ from advisor.ui.text import tip_html, DIM_COLOR, tip_lines, option_views, tip_pa
 from advisor.ui.widgets import chip_icon, TaggedText, FlowLayout, Pill, MapPill, ChipGrid, Separator  # noqa: E402
 from tests.support import sandbox  # noqa: E402
 from tests.support.fakes import FakeLogbook  # noqa: E402
-from tests.support.overlay_cases import APP, ERR_SHOWN_DEV, FakeWatcher, PROJECT, SCORE_WORDS, buttons, capture_state, close_tips, flat, frame, plain_html, probe, qt_lines, qt_tip, score_marks, shown, tip_score_marks, tip_text
+from tests.support.overlay_cases import APP, ERR_SHOWN_DEV, FakeWatcher, PROJECT, SCORE_WORDS, buttons, capture_state, close_tips, flat, frame, notice_titles, plain_html, probe, qt_lines, qt_tip, score_marks, shown, tip_score_marks, tip_text
 
 
 FONT_TIERS = {FONT_XL, FONT_L, FONT_M, FONT_S}  # 字号只用 4 档
@@ -517,7 +517,7 @@ class TipWidthTest(unittest.TestCase):
         # 点名的两处：推荐卡片的 LIVE_TIP、截取方式提示的悬停说明（两段）
         self.assertEqual(w.body.toolTip(), tip_paragraphs_html(LIVE_TIP))
         self.assertEqual(tip_text(w.body.toolTip()), LIVE_TIP)
-        notice = next(lb for lb in w.recog_top.findChildren(QLabel) if lb.text() == CAPTURE_NOTICE["failed"])
+        notice = notice_titles(w.recog_top, CAPTURE_NOTICE["failed"])[0]
         self.assertEqual(tip_text(notice.toolTip()), CAPTURE_TIP["failed"].format(
             code="0x887A0005", err_file=ERR_SHOWN_DEV) + "\n" + CAPTURE_SCREEN_TIP)
         for tip in (RUNNING_TIP, PAUSED_MIN_TIP, PAUSED_TIP):

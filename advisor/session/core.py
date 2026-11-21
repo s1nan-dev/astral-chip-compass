@@ -11,11 +11,13 @@ import copy
 import difflib
 import re
 import time
+import traceback
 import unicodedata
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 from typing import NamedTuple
 
+from .. import errors, perfstats
 from ..data import DB, DIFFICULTIES, EXTREME, HARD, LEVEL_NORMAL, NORMAL
 from ..engine import default_rerolls, endless_wait, plan_of
 from ..engine.context import TOP_STAR
@@ -56,6 +58,9 @@ GAIN_GRACE = 2  # 星数增加后，再在对局画面上读到几次新的星�
 # 点了「离开」的购买窗算到之后的三选一头上（例如点了离开、7 秒以后自己升星：那一次另有横幅，横幅优先）
 SOURCE_CUE_S = 6.0
 MATE_CONFIRM = 2  # 同一行认成同一个队友角色几次才采用
+# 对局报告：筹码商店来的三选一，离上一次商店来的那一次关掉不到这么多秒时算同一次进商店接着买（买完回到购买窗再点「购买！」
+# 只要几秒；两次进商店之间隔着掷骰、走格子，远不止这么久）
+SHOP_VISIT_GAP_S = 20.0
 FOREIGN_CONFIRM = 2  # 连续几次三选一类画面读不到简体或繁体的标题，才提示游戏语言
 HANT_CONFIRM = 2  # 连续几次三选一完整识别读到繁体标题，才记下这次运行里游戏是繁体中文
 HERO_SELECT_LOG_S = 30.0  # 识别记录：一直停在选角界面时（每 hud_ms 认一次），隔这么久才再记一条
@@ -166,6 +171,7 @@ class Session:
         # 认出来以后一直为真（界面是简体时悬浮窗据此提示一次可以换界面语言）
         self.hant_game = False
         self._hant_votes = 0
+        self._lang_seen = False  # 这次运行里三选一完整识别读到过标题（简体或繁体）：对局报告据此写游戏语言
         # 连着一阵子（[map_detect] quiet_ms，只算看着画面的时间）看不到对局里的读数：多半是中途退出以后认不出主菜单（弹窗挡住了
         # 等；认得出时由主菜单结束这一局），或停在别的认不出的画面上，这一局的状态一直留着。识别流程置上
         # （vision.pipeline.FrameProcessor._count_quiet），又读到对局里的东西时清掉；不写进设置文件。悬浮窗上对局中先不显示的
@@ -358,12 +364,13 @@ class Session:
         """用户手动选角色。之后自动识别不再改它，直到 release_hero()、新的一局或关掉程序。
 
         立绘无法识别、或识别结果和手动指定的不同时，请 FrameProcessor 把这一局的立绘存成这个角色的模板（template_wanted）。
+        立绘认出的是新角色（game.new_hero）时不存：那是她的立绘，存成别的角色的模板以后，她的立绘和那个角色就分不开了。
         """
         hero = self.db.resolve_hero(name).name
         self._edits += 1
         self.settings.hero = hero
         self.game.hero_locked = True
-        self.game.template_wanted = hero if self.game.seen_hero != hero else None
+        self.game.template_wanted = hero if self.game.seen_hero != hero and self.game.new_hero is None else None
         self.save()
 
     def release_hero(self) -> None:
@@ -844,6 +851,11 @@ class Session:
         pending, self.game._out_pending = self.game._out_pending, None
         if pending is not None:
             self.pending._next_difficulty, self.pending._next_map = pending[2], pending[3]
+        if self.game._watch is None:
+            # 对局报告：这一局从什么时候、第几轮看起，和那一刻错误记录、识别耗时的累计（之后相减算这一局的）
+            self.game._watch = (self._clock(), rnd if rnd is not None else self.settings.round)
+            self.game._err_base = errors.tally()
+            self.game._perf_base = perfstats.totals()
         if not self.game._in_game_seen:
             self.game._in_game_seen = True
             if not self.game.game_over and (self.pending._next_difficulty or self.pending._next_map):
@@ -1004,8 +1016,27 @@ class Session:
         return self.judge.round_drop_pending
 
     def on_hero(self, guess) -> Event | None:
-        """喂入一次角色识别结果（advisor.vision.hero.HeroGuess）。没把握的结果、本局已结束后读到的不起作用。"""
+        """喂入一次角色识别结果（advisor.vision.hero.HeroGuess）。没把握的结果、本局已结束后读到的不起作用。
+
+        不论有没有把握，先记下这一次最像谁、相似度（game._hero_seen；资料库里没有的名字记 None，新角色记她的名字）：没给推荐的
+        那一次原因里有「角色还没认出来」时记进那一项。
+
+        有把握地认出了新角色（guess.new：识别图片的最新清单里有、资料里还没有）、这一局还没认出过资料里的角色时，记进
+        game.new_hero（悬浮窗据此提示更新拾星助手）；角色照旧待识别，不给推荐（没有她的推荐规则）。"""
+        best = getattr(guess, "best", None)
+        score = getattr(guess, "score", None)
+        new = getattr(guess, "new", None)
+        new = new if isinstance(new, str) and new and new not in self.db.heroes else None
+        best_new = getattr(guess, "best_new", False) is True and isinstance(best, str) and best not in self.db.heroes
+        self.game._hero_seen = (best if isinstance(best, str) and (best in self.db.heroes or best_new) else None,
+                                float(score) if _finite_number(score) else None)
         hero = getattr(guess, "hero", None)
+        if hero is None and new is not None and not self.game.game_over and self.game.seen_hero is None:
+            self.game.template_wanted = None  # 手动指定了角色时也不把她的立绘存成那个角色的模板（见 set_hero）
+            if self.game.new_hero == new:
+                return None
+            self.game.new_hero = new
+            return self._event("status")
         if hero is None or self.game.game_over:
             return None
         if self.game.template_wanted == hero:
@@ -1013,6 +1044,7 @@ class Session:
         if self.game.seen_hero is None:
             self.game.seen_hero = hero
             self.game._hero_votes = None
+            self.game.new_hero = None  # 认出了资料里的角色：先前认成新角色的那几次不算
             if self.game.hero_locked or hero == self.settings.hero:
                 return self._event("status")
             self.settings.hero = hero
@@ -1465,19 +1497,42 @@ class Session:
             self.player_name = max(self._name_votes.items(), key=lambda kv: kv[1])[0]
 
     def on_teammates(self, rows) -> Event | None:
-        """喂入一次队友识别结果：玩家列表上除自己以外的各行，[{row, hero（角色名或 None）, bot（True / False / None）}]。
+        """喂入一次队友识别结果：玩家列表上除自己以外的各行，[{row, hero（角色名或 None）, bot（True / False / None）,
+        best（最像的角色名或 None）, score, margin, new}]，后四项可以没有。new 为真时 best 是新角色（识别图片的最新清单里有、
+        资料里还没有，见 vision.hero.new_heroes）的名字：照资料里的角色一样采用、记下，队友那一项写她的名字（推荐里按没有
+        规则的队友算）。
 
         队友不能和自己同角色，彼此也不重复。同一行认成同一个角色 MATE_CONFIRM 次才采用；电脑与否按读到的名字多数决。
+        每一行最近一次的 best、score、margin 另记下（_mate_guess，不论采用没有：最像的可能正是自己的角色或别的队友已经占了的），
+        不进 teammates、不发事件，只交给推荐日志（teammate_guesses）。
         本局已结束后读到的不起作用（不记进这一局）。
         """
         if self.game.game_over:
             return None
         own = self.settings.hero if self.hero_source != "pending" else None
+        g = self.game
         for r in rows:
             row = int(r.get("row", 0))
-            self.game._mate_rows.add(row)
+            g._mate_rows.add(row)
+            if row not in g._mate_first:
+                g._mate_first[row] = self.settings.round  # 对局报告：这一行第一次读到是第几轮
+            if row not in g._mate_took:
+                g._mate_reads[row] = g._mate_reads.get(row, 0) + 1
+            best, score, margin = r.get("best"), r.get("score"), r.get("margin")
+            # 新角色：资料里没有、识别标了 new 的名字（只认 best 那一个）
+            new = best if r.get("new") is True and isinstance(best, str) and best and best not in self.db.heroes else None
+            if isinstance(best, str) and (best in self.db.heroes or best == new):
+                g._mate_guess[row] = (best, float(score) if _finite_number(score) else None,
+                                      float(margin) if _finite_number(margin) else None)
+                if any(key in r for key in ("skin", "second", "second_skin", "second_score")):
+                    g._mate_extra[row] = self._guess_extra(r)
+                else:
+                    g._mate_extra.pop(row, None)
+            else:
+                g._mate_guess[row] = (None, None, None)
+                g._mate_extra.pop(row, None)
             hero = r.get("hero")
-            if hero and hero != own and hero in self.db.heroes:
+            if hero and hero != own and (hero in self.db.heroes or hero == new):
                 votes = self.game._mate_votes.setdefault(row, {})
                 votes[hero] = votes.get(hero, 0) + 1
             if r.get("bot") is not None:
@@ -1491,8 +1546,13 @@ class Session:
             if n >= MATE_CONFIRM and (hero not in taken or n > taken[hero][1]):
                 taken[hero] = (row, n)
         by_row = {row: hero for hero, (row, _) in taken.items()}
+        for row in by_row:
+            if row not in g._mate_took:
+                g._mate_took[row] = g._mate_reads.get(row, 0)  # 对局报告：读到第几次时采用的
+        # 采用的角色只有资料里的和新角色两种：资料里没有的就是新角色，另标 new（悬浮窗照写她的名字，见 wording.teammates_text）
         mates = [
-            {"row": row, "hero": by_row.get(row), "bot": self.game._mate_bots.get(row, False)}
+            {"row": row, "hero": by_row.get(row), "bot": self.game._mate_bots.get(row, False),
+             **({"new": True} if by_row.get(row) is not None and by_row[row] not in self.db.heroes else {})}
             for row in sorted(self.game._mate_rows)
         ]
         if mates == self.game.teammates:
@@ -1506,6 +1566,108 @@ class Session:
         if not self.game._mate_rows:
             return True
         return any(t["hero"] is None or t["row"] not in self.game._mate_bots for t in self.game.teammates)
+
+    def teammate_guesses(self) -> list:
+        """和 game.teammates（也就是局面里的 teammates）一一对应：认出了角色的那一项为 None，没认出的那一项是这一行最近一次
+        读到的 {guess（最像的角色名或 None）, score, margin}（一次都没读到最像谁时三项都是 None）。推荐事件带上它，推荐日志
+        记进 offer 记录顶层（不放进局面：读数每次都变，放进去同一个局面会一再重算推荐）。"""
+        out = []
+        for t in self.game.teammates:
+            if t.get("hero"):
+                out.append(None)
+                continue
+            guess, score, margin = self.game._mate_guess.get(t.get("row"), (None, None, None))
+            extra = self.game._mate_extra.get(t.get("row"), {}) if guess else {}
+            out.append({"guess": guess, "score": score, "margin": margin, **extra})
+        return out
+
+    def _guess_extra(self, r: dict) -> dict:
+        """玩家列表一行读数里只给对局报告的几项：最像的那套造型（skin）、第二像的角色（资料里的或识别标了的新角色以外的
+        写 None）、它的造型和相似度。造型名只收短的文字。"""
+        second = r.get("second")
+        second = second if isinstance(second, str) and second in self.db.heroes else None
+        return {"skin": _skin_text(r.get("skin")), "second": second,
+                "second_skin": _skin_text(r.get("second_skin")) if second else None,
+                "second_score": float(r["second_score"]) if second and _finite_number(r.get("second_score")) else None}
+
+    def on_self_row(self, info) -> Event | None:
+        """喂入一次玩家列表上认不认得出自己那一行（只给对局报告，不改推荐、不发事件）：认不出时 info 是 {self_score,
+        self_margin（自己的头像和最像的那一行的相关度、比第二像的那一行高出多少）, best, score, margin（那一行静止比对最像谁、
+        相似度、比第二像的高出多少）, skin, second…（见 _guess_extra）}，认出来时为 None（清掉之前记的）。本局已结束后不记。"""
+        if self.game.game_over:
+            return None
+        if not isinstance(info, dict):
+            self.game._self_guess = None
+            return None
+        best = info.get("best")
+        best = best if isinstance(best, str) and best in self.db.heroes else None
+        self.game._self_guess = {
+            "guess": best,
+            "score": float(info["score"]) if best and _finite_number(info.get("score")) else None,
+            "margin": float(info["margin"]) if best and _finite_number(info.get("margin")) else None,
+            **(self._guess_extra(info) if best else {}),
+            "self_score": float(info["self_score"]) if _finite_number(info.get("self_score")) else None,
+            "self_margin": float(info["self_margin"]) if _finite_number(info.get("self_margin")) else None,
+        }
+        return None
+
+    def report_info(self, seen=None) -> dict:
+        """对局报告要的、推荐日志另记的几项（_report_info）。只多记、不能挡住推荐和对局结束的记录：出错时记进错误记录
+        （同一个错只整条记一次，见 advisor/errors.py），交回空字典（这一次推荐日志不带这几项）。"""
+        try:
+            return self._report_info(seen)
+        except Exception:  # noqa: BLE001  报告用的几项出错不能影响推荐、记对局结束
+            errors.log_error("整理对局报告的统计项出错（拾星助手仍在运行）", traceback.format_exc(), append=True)
+            return {}
+
+    def _report_info(self, seen=None) -> dict:
+        """对局报告要的、推荐日志另记的几项（不进局面、不改推荐），交给推荐日志记进 offer 记录、对局结束记录的顶层
+        report_info。seen 是给推荐的那一帧三选一读数（推荐事件带上时给；对局结束时不给）。
+
+        每局的（以最后一次记下的为准）：watch 从第几轮看起（round）、是不是开局以后才看到的（late：这一局没有从开局看起，
+        见 whole_game）；lang 游戏语言（hans 简体、hant 繁体、other 读不到中文标题；还没读到过三选一标题时 None）；
+        teammate_reads 队友各行第一次读到的轮次、读了几次才采用；errors 这一局里（从第一次读到对局画面起）程序记了几次错、
+        各是什么异常（errors.tally 相减，只有类名）；perf 同一段时间里每帧识别的次数、总毫秒、1 秒以上的帧数，界面卡住半秒
+        以上的次数（perfstats.totals 相减）；self_row 认不出自己是哪一行时最近一次的比对（on_self_row，认出了没有）。
+        每次的（给了 seen 时）：t 离这一局第一次读到对局画面几秒；chip_scores 三张候选的名称匹配程度；shop 这一次是筹码商店
+        的购买窗打开的时：价格（读不出为 None）、这次进商店买的第几个。"""
+        g = self.game
+        out: dict = {}
+        if g._watch is not None:
+            out["watch"] = {"round": g._watch[1], "late": not g.whole_game}
+        if self._foreign >= FOREIGN_CONFIRM:
+            out["lang"] = "other"
+        elif self.hant_game:
+            out["lang"] = "hant"
+        elif self._lang_seen:
+            out["lang"] = "hans"
+        out["teammate_reads"] = [
+            {"row": row, "first_round": g._mate_first.get(row), "reads": g._mate_took.get(row, g._mate_reads.get(row)),
+             "adopted": row in g._mate_took}
+            for row in sorted(g._mate_rows)
+        ]
+        if g._err_base is not None:
+            total, kinds = errors.tally()
+            base_total, base_kinds = g._err_base
+            diff = {k: n - base_kinds.get(k, 0) for k, n in kinds.items() if n > base_kinds.get(k, 0)}
+            out["errors"] = {"count": max(0, total - base_total), "kinds": diff}
+        if g._perf_base is not None:
+            now = perfstats.totals()
+            frame = _minus(now.get("frame"), g._perf_base.get("frame"))
+            lag = _minus(now.get("ui_lag"), g._perf_base.get("ui_lag"))
+            out["perf"] = {"frames": frame[0], "frame_ms": frame[1], "slow_frames": frame[2], "ui_stalls": lag[2]}
+        if g._self_guess is not None and g.own_row is None:
+            out["self_row"] = dict(g._self_guess)
+        if seen is not None:
+            if g._watch is not None:
+                out["t"] = max(0.0, self._clock() - g._watch[0])
+            scores = getattr(seen, "name_scores", None)
+            if isinstance(scores, (list, tuple)):
+                out["chip_scores"] = [float(s) if _finite_number(s) else None for s in scores]
+            rec = self._current_rec()
+            if rec is not None and rec.get("shop") is not None:
+                out["shop"] = {"price": rec["shop"][0], "buy": rec.get("shop_buy")}
+        return out
 
     def on_mutators(self, names, pregame: bool = True) -> Event | None:
         """读到了畸变组件（选角前公布的画面）。pregame：在对局外读到的。
@@ -2197,9 +2359,16 @@ class Session:
             # 不久读到的横幅名次、购买窗（(价格,)）；source、by 最近一次定的来源和依据（_source_of）；row_up 读到过比记下的
             # 星数正好高一星的概率行（_source_of）；seen 出现以后读到过星数（_select_star_seen、_settle_sources）；settled 关掉
             # 以后补准的来源（_settle_sources）
+            # shop_buy 只给对局报告：看到了购买窗的这一次是这次进商店买的第几个（离上一次商店来的那次关掉不到
+            # SHOP_VISIT_GAP_S 时接着数，见 GameState._shop_last）；没看到购买窗为 None
+            last_shop = self.game._shop_last
+            buy = None
+            if shop is not None:
+                buy = last_shop[1] + 1 if last_shop is not None and self._clock() - last_shop[0] <= SHOP_VISIT_GAP_S else 1
             rec = {"no": self.select._select_no, "before": before, "clean": clean, "gain": gain is not None or rose,
                    "gain_to": gain["to"] if gain is not None else before if rose else None, "banner": banner,
-                   "shop": shop, "source": None, "by": None, "row_up": False, "seen": False, "settled": None}
+                   "shop": shop, "source": None, "by": None, "row_up": False, "seen": False, "settled": None,
+                   "shop_buy": buy}
             self.game._select_rec = rec
             self.game._source_books.append(rec)
             return
@@ -2236,6 +2405,9 @@ class Session:
         g = self.game
         g._select_star = None
         g._last_closed = (tuple(names), None) if names and any(names) else None
+        rec = self._current_rec()
+        if rec is not None and rec.get("shop_buy") is not None:
+            g._shop_last = (self._clock(), rec["shop_buy"])  # 对局报告：同一次进商店接着买的从这里数
         if picked and picked in self.db.chips and picked not in self.settings.owned:
             self.settings.owned.append(picked)
             g.chip_sources[picked] = "pick"
@@ -2278,6 +2450,7 @@ class Session:
         识别各算一票。"""
         if seen is None or getattr(seen, "reread", False):
             return
+        self._lang_seen = True
         if getattr(seen, "hant", False):
             self._hant_votes += 1
             if self._hant_votes >= HANT_CONFIRM and not self.hant_game:
@@ -2306,11 +2479,12 @@ class Session:
             self._push(ev)
         return newgame
 
-    def on_select_hidden(self) -> Event | None:
-        """这一帧没有三选一，但画面上认出了「您当前正处于隐藏UI状态」（玩家点了三选一界面上的「隐藏」）。识别流程在三选一
-        正要按关掉处理的那一帧（WatchHints.select_closing）看，认出时用它代替 on_frame(None)：当三选一还开着，不记下选中的、
-        不撤销，推荐留着（见 SelectTracker.hidden）。不发事件。"""
-        return self.select.hidden()
+    def on_select_hidden(self, by: str = "hidden_ui") -> Event | None:
+        """这一帧没有三选一，但画面上认出了「您当前正处于隐藏UI状态」（玩家点了三选一界面上的「隐藏」），或按 Esc 打开的
+        菜单（图鉴、设定、认输、关闭游戏；by 是认出的哪一种，"hidden_ui" 或 "esc_menu"）。识别流程在三选一正要按关掉处理的
+        那一帧（WatchHints.select_closing）看，认出时用它代替 on_frame(None)：当三选一还开着，不记下选中的、不撤销，推荐
+        留着（见 SelectTracker.hidden）。不发事件。"""
+        return self.select.hidden(by)
 
     def starts_another_select(self, seen) -> bool:
         """这一帧的三选一是不是紧接着出现的另一次（界面没关、候选换了，概率行换成概率表里的另一行，或者概率行没变、三张候选
@@ -2323,6 +2497,30 @@ class Session:
         """正在等候选筹码读全（三选一刚出现时有筹码没读出来、刷新动画的中间帧、只读到共同部分的筹码名，见
         SelectTracker.hold_frame）。悬浮窗在这期间接着截图（手动模式不跟随三选一时也是），最多 selection.HOLD_MAX_S。"""
         return self.select.holding
+
+
+_SKIN = re.compile(r"[A-Za-z0-9_]{1,32}")
+
+
+def _skin_text(value) -> str | None:
+    """造型名（Q 版头像文件名里角色编号后面那一段，见 vision.stars.photo_skin）：只收 1～32 个字母、数字、下划线，别的为 None。"""
+    return value if isinstance(value, str) and _SKIN.fullmatch(value) else None
+
+
+def _minus(now, base) -> tuple[int, int | None, int]:
+    """识别耗时的两份累计（perfstats.totals 的一项：次数, 总毫秒, 慢的次数）相减：（次数, 平均每次几毫秒（取整，一次都没有
+    时为 None）, 慢的次数）。缺的一份按 0 算；减出负数（不该有）时按 0。"""
+    n1, ms1, slow1 = now if now is not None else (0, 0.0, 0)
+    n0, ms0, slow0 = base if base is not None else (0, 0.0, 0)
+    n, ms, slow = max(0, n1 - n0), max(0.0, ms1 - ms0), max(0, slow1 - slow0)
+    return n, (round(ms / n) if n else None), slow
+
+
+def _finite_number(value) -> bool:
+    """是有限的数（布尔值不算）：识别给的相似度、领先多少，记下之前先看一眼。"""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    return value == value and value not in (float("inf"), float("-inf"))
 
 
 def _table_name_key(text) -> str:
@@ -2424,11 +2622,19 @@ def _table_record(session, reading) -> dict:
         mate = mates.get(c.seat - 1)
         own = own_row is not None and c.seat == own_row + 1
         stats = c.stats or {}
+        hero = own_hero if own else (mate.get("hero") if mate else None)
+        # 角色认不出的那一栏另带最像谁（只给对局报告）：自己那一栏按最近一次认立绘的结果，别的栏按玩家列表上同一行最近一次
+        # 读到的；都没有时不带
+        if hero is None:
+            guess, score = (game._hero_seen or (None, None)) if own else game._mate_guess.get(c.seat - 1, (None, None))[:2]
+        else:
+            guess = score = None
         players.append({
             "seat": c.seat,
             "self": None if own_seat is None else c.seat == own_seat,
             "bot": c.bot if c.bot is not None else game._mate_bots.get(c.seat - 1),
-            "hero": own_hero if own else (mate.get("hero") if mate else None),
+            "hero": hero,
+            **({"guess": guess, "score": score} if guess else {}),
             **{k: stats.get(k) for k in TABLE_STATS},
             "best": [k for k in TABLE_STATS if k in (c.best or ())],
             "coins_all": c.coins_all,

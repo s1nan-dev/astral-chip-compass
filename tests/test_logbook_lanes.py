@@ -106,6 +106,32 @@ class DefaultLaneTest(LaneTestBase):
         self.assertNotIn("owned_sources", offers[2])
         self.assertNotIn("owned_panel", offers[2])
 
+    def test_teammate_guesses_written_only_when_aligned(self):
+        """offer 记录顶层 teammate_guesses：和 state.teammates 一样长、至少有一项没认出的队友才写；guess 不是文字时两个数
+        也写 null，数不合格的写 null，不是对象的项写 null。没给、长度不对、全是认出了的队友时不写。"""
+        state = State(hero="芬妮", round=3, teammates=({"hero": "米米", "bot": True}, {"hero": None, "bot": False}))
+        self.later()
+        logbook.record_offer(state, {"best": "大背包"}, "o-1",
+                             teammate_guesses=[None, {"guess": "恋", "score": 0.834, "margin": 0.021}])
+        self.later()
+        logbook.record_offer(state, {"best": "大背包"}, "o-2",
+                             teammate_guesses=["别的", {"guess": "", "score": 0.5, "margin": float("nan")}])
+        self.later()
+        logbook.record_offer(state, {"best": "大背包"}, "o-3", teammate_guesses=[None])  # 长度不对
+        self.later()
+        logbook.record_offer(state, {"best": "大背包"}, "o-4", teammate_guesses=[None, None])  # 没有没认出的
+        self.later()
+        logbook.record_offer(state, {"best": "大背包"}, "o-5")
+        self.later()
+        logbook.record_offer(state, {"best": "大背包"}, "o-6",
+                             teammate_guesses=[None, {"guess": "恋", "score": True, "margin": "0.1"}])
+        offers = [r for r in self.records() if r["t"] == "offer"]
+        self.assertEqual(offers[0]["teammate_guesses"], [None, {"guess": "恋", "score": 0.834, "margin": 0.021}])
+        self.assertEqual(offers[1]["teammate_guesses"], [None, {"guess": None, "score": None, "margin": None}])
+        for record in offers[2:5]:
+            self.assertNotIn("teammate_guesses", record)
+        self.assertEqual(offers[5]["teammate_guesses"], [None, {"guess": "恋", "score": None, "margin": None}])
+
     def test_unadvised_cleaned(self):
         """unadvised 记录写之前清理：reasons 只留那三种、不重复；round、star 不是非负整数写 null；advised 不是布尔值写
         False；source 不在 SOURCES 里写 null；pick 不是文字写 null；一项原因都不剩时不记。"""
@@ -481,12 +507,11 @@ class HeldUnadvisedTest(LaneTestBase):
         self.assertEqual([(r["game"], r["select_no"]) for r in self.unadvised()], [(new, 1), (new, 2)])
 
     def test_game_unknown_when_other_records_come_first(self):
-        """定局号以前先来了新的一局、对局结束或数据表：挂着的不知道属于哪一局，game 写 null（时刻照记的时候的），
-        写在那一条前面；之后的照常写进当前这一局。"""
-        steps = (("new_game", logbook.new_game),
-                 ("record_game_over", lambda: logbook.record_game_over(why="检测到结算画面")),
-                 ("record_table", lambda: logbook.record_table(map="m", rounds=10)))
-        for name, step in steps:
+        """定局号以前先来了新的一局或数据表：挂着的不知道属于哪一局，game 写 null（时刻照记的时候的），写在那一条前面。
+        新的一局以后的照常写进这一局；数据表以后还是没有局号，接着挂着。"""
+        logbook.record_unadvised(9, round=7, reasons=["name"])
+        logbook.record_game_over(why="上次的结束")  # 日志里最后一条是对局结束：之后的都不接它
+        for name, step in (("new_game", logbook.new_game), ("record_table", lambda: logbook.record_table(map="m"))):
             with self.subTest(name):
                 logbook._reset_for_tests()
                 self.later(60)
@@ -499,7 +524,194 @@ class HeldUnadvisedTest(LaneTestBase):
                 self.assertEqual((records[-2]["game"], records[-2]["time"]), (None, held_at))
                 self.later()
                 logbook.record_unadvised(2, reasons=["hero"])
-                self.assertEqual(self.records()[-1]["game"], game)
+                if game is None:
+                    self.assertEqual(self.records()[-1]["t"], "table")  # 还没有局号：挂着
+                    self.assertEqual(len(logbook._PRIMARY.held), 1)
+                else:
+                    self.assertEqual(self.records()[-1]["game"], game)
+                logbook.new_game()  # 挂着的写成 null，不留给下一个子测试
+                logbook.record_game_over(why="收尾")  # 下一个子测试重启后不接这一局
+
+    def test_game_over_without_log_opens_game(self):
+        """中途打开、日志里没有接得上的局，整局一次推荐都没给就结束了：对局结束另开一个局号（按挂着的头一条的时刻），
+        挂着的照原来的时刻写进这一局、排在结束前面，对局结束也记在这一局；拼得出一份 offers 为空的报告。"""
+        self.later(60)
+        held_at = self.clock.isoformat(timespec="seconds")
+        logbook.record_unadvised(1, round=2, reasons=["hero"], hero_guess="米米", hero_score=0.7)
+        self.later(600)
+        logbook.record_unadvised(2, round=5, reasons=["hero"])
+        self.later(600)
+        game = logbook.record_game_over(why="检测到结算画面")
+        self.assertIsNotNone(game)
+        self.assertEqual(logbook.current_game(), game)
+        records = self.records()
+        self.assertEqual([(r["t"], r["game"]) for r in records],
+                         [("unadvised", game), ("unadvised", game), ("gameover", game)])
+        self.assertEqual(records[0]["time"], held_at)
+        self.assertEqual((records[0]["hero_guess"], records[0]["hero_score"]), ("米米", 0.7))
+        report = game_report.build(records, game, install="0" * 32)
+        self.assertEqual((report["offers"], len(report["unadvised"])), ([], 2))
+        self.assertIsNotNone(report["end"])
+        # 下次启动：最后一条是对局结束，不接这一局
+        logbook._reset_for_tests()
+        self.later(60)
+        self.assertIsNone(logbook.resumable())
+
+    def test_game_over_resumes_unfinished_game(self):
+        """上次运行打到第 3 轮没结束，重启后整局一次推荐都没给（第 5 轮起认不到角色）就结束了：轮次没变小、没隔太久，
+        算接上的那一局，挂着的和对局结束都写进它，这一局只有一份报告（带着上次的三选一和这次的 unadvised）。"""
+        old = self.offer(logbook, "芬妮", 3, ["大背包"], "p3")
+        logbook._reset_for_tests()
+        self.later(5 * 60)
+        logbook.record_unadvised(1, round=5, reasons=["hero"])
+        self.later(20 * 60)
+        self.assertEqual(logbook.record_game_over(why="检测到结算画面"), old)
+        records = self.records()
+        self.assertEqual({r["game"] for r in records}, {old})
+        report = game_report.build(records, old, install="0" * 32)
+        self.assertEqual((len(report["offers"]), len(report["unadvised"])), (1, 1))
+        self.assertIsNotNone(report["end"])
+        self.assertEqual(list(game_report._games(records, None)), [old])
+
+    def test_game_over_after_unfinished_game_is_new(self):
+        """上次运行打到第 8 轮没结束（之后关了程序、那一局再没接着打），重启后的一局一次推荐都没给就结束了：挂着的头一条
+        轮次比上次的小、或者离上次最后一次三选一超过 GAME_GAP 时，是新的一局，另开局号；上次那一局不多出这次的
+        unadvised、也不拿这次的结束。"""
+        for name, gap, rnd in (("轮次变小", 30 * 60, 2), ("隔得太久", 3 * 3600, 9)):
+            with self.subTest(name):
+                old = self.offer(logbook, "芬妮", 8, ["大背包"], f"p8-{name}")
+                logbook._reset_for_tests()
+                self.later(gap)
+                logbook.record_unadvised(1, round=rnd, reasons=["hero"])
+                self.later(600)
+                new = logbook.record_game_over(why="检测到结算画面")
+                self.assertNotEqual(new, old)
+                records = self.records()
+                self.assertEqual([(r["t"], r["game"]) for r in records[-2:]], [("unadvised", new), ("gameover", new)])
+                old_report = game_report.build(records, old, install="0" * 32)
+                self.assertEqual(old_report["unadvised"], [])
+                self.assertIsNone(old_report["end"])
+                self.assertEqual(game_report.build(records, new, install="0" * 32)["offers"], [])
+                self.later(3 * 3600)
+                logbook._reset_for_tests()
+
+    def test_next_game_after_opened_game_not_merged(self):
+        """对局结束时按挂着的另开了局号以后，下一局没判出新的一局（没有 new_game）：下一局的三选一轮次变小，照样判成新的
+        一局，不并进刚结束的那一局；轮次没变小（那次结束是误认的，这一局接着打）时算同一局，只有一份报告。"""
+        logbook.record_unadvised(1, round=6, reasons=["hero"])
+        self.later(600)
+        logbook.record_unadvised(2, round=12, reasons=["hero"])
+        self.later(600)
+        first = logbook.record_game_over(why="检测到结算画面")
+        self.later(300)
+        logbook.record_unadvised(1, round=1, reasons=["hero"])  # 下一局开头：先挂着，等判过再写
+        self.assertEqual(self.records()[-1]["t"], "gameover")
+        self.later(60)
+        second = logbook.record_offer(State(hero="芬妮", round=2, owned=()), {"best": "大背包"}, "n-1")
+        self.assertNotEqual(second, first)
+        records = self.records()
+        self.assertEqual([(r["t"], r["game"]) for r in records[-2:]], [("unadvised", second), ("offer", second)])
+        self.assertEqual(len(game_report.build(records, first, install="0" * 32)["unadvised"]), 2)
+        # 误认的结束：轮次接着往上走，算同一局
+        logbook._reset_for_tests()
+        self.later(5 * 3600)
+        logbook.record_unadvised(1, round=4, reasons=["hero"])
+        self.later(600)
+        game = logbook.record_game_over(why="检测到房间画面")
+        self.later(60)
+        logbook.record_unadvised(2, round=6, reasons=["hero"])
+        self.later(60)
+        self.assertEqual(logbook.record_offer(State(hero="芬妮", round=7, owned=()), {"best": "大背包"}, "n-2"), game)
+        self.later(600)
+        self.assertEqual(logbook.record_game_over(why="检测到结算画面"), game)
+        report = game_report.build(self.records(), game, install="0" * 32)
+        self.assertEqual((len(report["offers"]), len(report["unadvised"])), (1, 2))
+
+    def test_two_games_without_advice_not_merged(self):
+        """连着两局都一次推荐都没给（自己的角色一直认不出），中间没判出新的一局：第二局的挂着的轮次变小，另开局号，两局各一份
+        报告、各带自己的 unadvised；结束以后在大厅偶然认成的、之后开了新的一局的，不进任何一局。"""
+        logbook.record_unadvised(1, round=6, reasons=["hero"])
+        self.later(600)
+        first = logbook.record_game_over(why="检测到结算画面")
+        self.later(300)
+        logbook.record_unadvised(2, round=3, reasons=["hero"])
+        self.later(600)
+        second = logbook.record_game_over(why="检测到结算画面")
+        self.assertNotEqual(second, first)
+        records = self.records()
+        self.assertEqual([[u["round"] for u in game_report.build(records, g, install="0" * 32)["unadvised"]]
+                          for g in (first, second)], [[6], [3]])
+        self.later(60)
+        logbook.record_unadvised(3, reasons=["name"])  # 大厅里偶然认成的
+        logbook.new_game()
+        stray = [r for r in self.records() if r["t"] == "unadvised"][-1]
+        self.assertIsNone(stray["game"])
+
+    def test_later_offer_same_game_one_report(self):
+        """开局以后头几次认不到角色（没给推荐），过了几轮认到了、给了推荐：前面的 unadvised 和后来的三选一在同一局，
+        结束时只有一份报告、两样都带；中途打开（还没定局号）时同样并进头一次三选一判出的那一局。"""
+        for name, opening in (("开局时定了局号", logbook.new_game), ("中途打开", lambda: None)):
+            with self.subTest(name):
+                logbook._reset_for_tests()
+                self.later(3 * 3600)
+                opening()
+                self.later()
+                logbook.record_unadvised(1, round=1, reasons=["hero"])
+                self.later(60)
+                logbook.record_unadvised(2, round=2, reasons=["hero"])
+                self.later(60)
+                game = logbook.record_offer(State(hero="芬妮", round=3, owned=()), {"best": "大背包"}, f"q-{name}")
+                self.later(600)
+                self.assertEqual(logbook.record_game_over(why="检测到结算画面"), game)
+                records = [r for r in self.records() if r.get("game") == game]
+                self.assertEqual([r["t"] for r in records if r["t"] != "newgame"],
+                                 ["unadvised", "unadvised", "offer", "gameover"])
+                report = game_report.build(self.records(), game, install="0" * 32)
+                self.assertEqual((len(report["offers"]), len(report["unadvised"])), (1, 2))
+                self.assertEqual([g for g in game_report._games(self.records(), None) if g == game], [game])
+
+    def test_strays_after_end_no_new_report(self):
+        """一局结束以后（还没开下一局）在大厅等画面上偶然认成三选一：记在原来那一局，但不进那一局的报告（时刻在结束以后），
+        也不另造一局；没有结束信号就什么都不发。"""
+        game = logbook.new_game()
+        self.later()
+        logbook.record_unadvised(1, round=3, reasons=["name"])
+        self.later(600)
+        logbook.record_game_over(why="检测到结算画面")
+        self.later(60)
+        logbook.record_unadvised(2, round=None, reasons=["name"])
+        records = self.records()
+        self.assertEqual(game_report.build(records, game, install="0" * 32)["unadvised"][0]["round"], 3)
+        self.assertEqual(len(game_report.build(records, game, install="0" * 32)["unadvised"]), 1)
+        # 刚打开程序、日志里最后一条是对局结束：大厅里偶然认成的先挂着，开了新的一局时写成 null，不进任何一局的报告
+        logbook._reset_for_tests()
+        self.later(60)
+        logbook.record_unadvised(3, reasons=["hero"])
+        logbook.new_game()
+        stray = [r for r in self.records() if r["t"] == "unadvised"][-1]
+        self.assertIsNone(stray["game"])
+
+    def test_client_and_version_written(self):
+        """unadvised 记录另带版本、数据日期，给了认得的客户端才写 client。"""
+        logbook.new_game()
+        self.later()
+        logbook.record_unadvised(1, reasons=["name"], client="int")
+        self.later()
+        logbook.record_unadvised(2, reasons=["name"], client="别的")
+        first, second = self.unadvised()
+        self.assertEqual((first["client"], first["v"]), ("int", logbook.VERSION))
+        self.assertIn("data_date", first)
+        self.assertNotIn("client", second)
+
+    def test_hero_guess_only_with_hero_reason(self):
+        """hero_guess、hero_score 只在原因里有 hero 时写；hero_guess 不是文字时两项都是 null，hero_score 不是有限的数写 null。"""
+        logbook.new_game()
+        for n, (reasons, guess, score) in enumerate(((["hero"], "米米", 0.71), (["name"], "米米", 0.71),
+                                                     (["hero"], 5, 0.71), (["hero"], "恋", float("inf")))):
+            self.later()
+            logbook.record_unadvised(n, reasons=reasons, hero_guess=guess, hero_score=score)
+        self.assertEqual([(r["hero_guess"], r["hero_score"]) for r in self.unadvised()],
+                         [("米米", 0.71), (None, None), (None, None), ("恋", None)])
 
     def test_held_at_most_max(self):
         """挂着的最多 MAX_HELD_UNADVISED 条，多的丢掉（留先来的）。"""

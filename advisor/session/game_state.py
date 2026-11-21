@@ -36,6 +36,9 @@ class GameState:
     # 直到新的一局、交回自动识别或关掉程序；不存进 state.json，启动时一律重新识别
     hero_locked: bool = False
     _hero_votes: tuple[str, int] | None = None  # 认出的和这一局之前不同的角色（角色, 连续认出的次数）
+    # 立绘认出的是新角色（识别图片的最新清单里有、资料里还没有，见 vision.hero.HeroGuess.new）时是她的名字：这一局角色照旧
+    # 待识别、不给推荐，悬浮窗提示更新拾星助手。这一局后来认出了资料里的角色时清掉
+    new_hero: str | None = None
 
     # ---- 轮次、星数（读法见 NewGameJudge.read_round、read_star）
     # 还没采用的轮次读数：（读数, 连续读到的次数, 最近一次的时刻），见 NewGameJudge.pending_votes
@@ -148,12 +151,27 @@ class GameState:
     _last_panel_tab: tuple[int, int] | None = None  # 上一次提示「请点击自己的页签」时的（选中的, 自己的）
 
     # ---- 队友、畸变组件
-    # 队友（玩家列表上除自己以外的各行）：[{hero: 角色名或 None, bot: 是否电脑, row: 第几行}]
+    # 队友（玩家列表上除自己以外的各行）：[{hero: 角色名或 None, bot: 是否电脑, row: 第几行}]；hero 是新角色（识别图片的
+    # 最新清单里有、资料里还没有）时另有 new: True
     teammates: list[dict] = field(default_factory=list)
     _mate_votes: dict[int, dict[str, int]] = field(default_factory=dict)
     _mate_bots: dict[int, bool] = field(default_factory=dict)
     _mate_name_votes: dict[int, tuple[int, int]] = field(default_factory=dict)  # 行 →（名字像电脑的次数, 像真人的次数）
     _mate_rows: set[int] = field(default_factory=set)
+    # 每一行最近一次读到的（最像的角色名或 None, 相似度, 比第二像的高出多少），不论采用没有：只交给推荐日志
+    # （Session.teammate_guesses），不进 teammates、不改推荐
+    _mate_guess: dict[int, tuple] = field(default_factory=dict)
+    # 以下几项也只交给对局报告，不改推荐。每一行最近一次读到的最像的那套造型、第二像的角色和它的造型、相似度
+    # （{skin, second, second_skin, second_score}，和 _mate_guess 同时写）
+    _mate_extra: dict[int, dict] = field(default_factory=dict)
+    # 队友那一行认出来花了多久：行 → 第一次读到这一行时的轮次（没读出轮次为 None）；行 → 读了几次（采用以后不再数）；
+    # 行 → 读到第几次时采用了角色
+    _mate_first: dict[int, int | None] = field(default_factory=dict)
+    _mate_reads: dict[int, int] = field(default_factory=dict)
+    _mate_took: dict[int, int] = field(default_factory=dict)
+    # 知道自己是哪个角色、玩家列表上却认不出自己是哪一行时，最近一次的比对（{score, margin, best, ...}，见
+    # Session.on_self_row）；认出来以后清掉
+    _self_guess: dict | None = None
     mutators: list[str] = field(default_factory=list)  # 本局的畸变组件（对局外读到、留给下一局的见 PendingNextGame）
 
     # ---- 三选一的记账
@@ -189,6 +207,9 @@ class GameState:
     # 最近一次出现的三选一（刷新不算新的一次）认来源要的几项（dict，各项见 Session._select_opened）：出现之前的星数、收下的
     # 横幅和购买窗、定的来源和依据、关掉以后补准的来源等。同一组候选关了又出现时接着用（编号换成新的）
     _select_rec: dict | None = None
+    # 上一次筹码商店来的三选一关掉时的（Session 的时钟, 那是这次进商店买的第几个）：下一次商店来的三选一离它不到
+    # SHOP_VISIT_GAP_S 时算同一次进商店接着买（只给对局报告）
+    _shop_last: tuple[float, int] | None = None
     # 上一次对账（Session._settle_sources：关掉以后在对局画面上读到星数时补准来源）以来出现的各次三选一的记录，先后照出现的
     # 先后（和 _select_rec 是同一些 dict）
     _source_books: list[dict] = field(default_factory=list)
@@ -198,6 +219,9 @@ class GameState:
     _select_guard: bool = False  # 撤销「选角界面」的新一局后，回到对局画面之前不再看选角界面
     # 手动指定的角色和立绘识别结果不同（或立绘无法识别）时，把这一局的立绘存成这个角色的模板（资料库里没有的新皮肤下次就认得出）
     template_wanted: str | None = None
+    # 最近一次认立绘的（最像的角色名或 None, 相似度），不论有没有把握：没给推荐的那一次原因里有「角色还没认出来」时记进
+    # 那一项（SelectTracker._note_unadvised）
+    _hero_seen: tuple | None = None
 
     # ---- 本局难度
     # 本局难度的画面读数：依据（OUT_OF_GAME_LABEL 里除奖励画面以外的几种）→ 难度名，后读到的排在后面
@@ -206,6 +230,11 @@ class GameState:
     difficulty_evidence: dict[str, str] = field(default_factory=dict)
     # 本局还没有对局内的读数（轮次、星数、三选一）：第一次读到时用掉对局外读到的难度和地图（见 Session._entered_game）
     _in_game_seen: bool = False
+    # 这一局第一次读到对局里的画面时的（Session 的时钟, 当时的轮次或 None），以及那一刻程序里错误记录的次数（errors.tally）
+    # 和识别耗时的累计（perfstats.totals）：对局报告里写从第几轮看起、每次三选一离它几秒、这一局出了几次错、识别快不快
+    _watch: tuple | None = None
+    _err_base: tuple | None = None
+    _perf_base: dict | None = None
     # 最近一次记下的（difficulty_info, 冲突说明）：变了才记识别读数，胶囊上的写法变了才发 status
     _difficulty_key: tuple | None = None
 

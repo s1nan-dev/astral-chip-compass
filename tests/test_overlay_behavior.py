@@ -70,7 +70,8 @@ class FakeLogbook:
         self.game = previous
 
     def record_offer(self, state, advice, offer_id, client=None, map_source=None, source_by=None,
-                     difficulty_source=None, owned_sources=None, owned_panel=None):
+                     difficulty_source=None, owned_sources=None, owned_panel=None,
+                     teammate_guesses=None, report_info=None):
         self.offers.append((offer_id, tuple(e.chip.name for e in advice.evals), advice.best))
 
     def record_pick(self, offer_id, chosen, via=None):

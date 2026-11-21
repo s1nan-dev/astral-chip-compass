@@ -7,6 +7,9 @@
 要保的流派本局再也进不全的其他流派筹码扣分（parts._keep_schools_part；只保几个时没列出的推荐流派也算其他流派，扣分可按
 角色写 keep_schools_penalty），已进入其他流派、要保的流派已经进不全时，已进入的那个流派按推荐流派加分
 （parts._adopted_schools）。只用于默认推荐。
+锁流派分（parts.lock_school_part，rules.toml [synergy] lock_school）同样只用于默认推荐：已经进入一个流派、候选属于还没进入的
+流派、拿了正好占满流派名额时加分（选择后推荐流派都还在，不为了锁流派牺牲推荐流派），前期最值钱（2 星减半，3 星不加）。
+它只给这次三选一的候选加，不进筹码池的分值表：刷新期望和前瞻的未来分布照旧按没锁的筹码池算（scorer.advise）。
 地图待识别时，前瞻、刷新期望和剩余三选一次数按候选地图（State.map_candidates，没有就用全部现役地图）平均。
 普通难度（State.difficulty 为 NORMAL）时，前瞻、刷新期望、循环往复的稀有度概率用普通难度的概率表，
 进度上限取普通难度一列；困难及以上按困难及以上的概率表计算，进度上限在知道具体难度（State.difficulty_name：画面上读到的，
@@ -65,11 +68,12 @@ from .lookahead import (CLASS_SHIFT_REASON, CLASS_SHIFT_SHOP_REASON, CLASS_SHIFT
                         TIER_AHEAD_REASON, TIER_AHEAD_SHORT, TierAhead)
 from .parts import (ADOPTED_GONE_REASON, ADOPTED_LEFT_REASON, ADOPTED_SHORT, DEFAULT_SCHEME, EXEMPT_OWNED_NOTE,
                     EXTREME_SHORT, KEEP_SCHOOLS_COUNT, KEEP_SCHOOLS_GONE_REASON, KEEP_SCHOOLS_GONE_SHORT,
-                    KEEP_SCHOOLS_LEFT_REASON, KEEP_SCHOOLS_LEFT_SHORT, LATE_INCOME_NOTE, NIGHTMARE_REASON,
+                    KEEP_SCHOOLS_LEFT_REASON, KEEP_SCHOOLS_LEFT_SHORT, LATE_INCOME_NOTE, LOCK_LABEL, LOCK_ORIGIN,
+                    LOCK_REASON, LOCK_SHORT, NIGHTMARE_REASON,
                     NIGHTMARE_SHORT, OFFICIAL_LABELS, SCHEME_CORE_ORIGIN, SCHEME_LABEL, SCHEME_LOCK_ORIGIN,
                     SCHEME_LOCKED_ORIGIN, SCHEME_ORIGIN, SCHEME_TARGET_ORIGIN, SCHEME_TARGET_REASON, SCHEME_TARGET_SHORT,
                     SCHEME_TIER_KEY, SCHEME_TIER_ORIGINS, SCHEME_TIER_REASON, SCHEME_TIER_SHORT,
-                    UNKNOWN_DIFFICULTY_LEAD, UNKNOWN_DIFFICULTY_SUBJECT, Part, endless_wait)
+                    UNKNOWN_DIFFICULTY_LEAD, UNKNOWN_DIFFICULTY_SUBJECT, Part, endless_wait, lock_school_part)
 from .reroll import (BASIS_TIER, BASIS_UNMARKED, LEVEL_KEYS, REROLL_LEVEL_EVEN, VERDICT_BETTER, VERDICT_EVEN,
                      VERDICT_EVEN_BETTER, VERDICT_EVEN_WORSE, VERDICT_WORSE, RerollEval, RerollView, default_rerolls)
 from .scheme_rank import (LOSS_NOW, LOSS_ONE_LEFT, LOSS_TIP, LOST_CORE, LOST_FIRST, MOVE_AHEAD, MOVE_BEHIND, MOVE_LAST,

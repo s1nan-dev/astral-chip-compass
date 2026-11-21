@@ -19,7 +19,8 @@
             「查看筹码」面板另有办法认自己的页签（本局记住的行、own_row_by_name）。
   被挡住    三选一界面顶上的黑色标题带会盖住第一行的横条。按行距推算出被挡的那一行，
             自己的头像最像那一行、或哪一行都不够像时，返回 None，不猜。
-  队友      其余各行的头像不摇摆，和全部角色的 Q 版头像各比一次（不转角度、不压缩），取最像的角色；
+  队友      其余各行的头像不摇摆，和全部角色的 Q 版头像各比一次（不转角度、不压缩；模板左上被上一行
+            血量数字压住的一块不比），取最像的角色；
             横条上方的名字做文字识别，名字里有「Bot」的是电脑。
 
 长度单位 R = 参考截图（客户区 3840x2054）上的像素。窗口比例不固定：画面先按界面缩放（chip_select.ui_scale）
@@ -42,9 +43,9 @@ from ..data import _norm
 from . import io
 from . import templates
 from .anchors import (
-    ANGLES, FACE_OFFSET, FACE_SLACK, NAME_BOX, PHOTO_WIDTH, REF_WIDTH, ROW_PITCH, SQUASH, STAR_CENTERS, STAR_RADIUS,
-    STARS_FACE, STARS_REGION_DOWN, STARS_REGION_RIGHT, STARS_WORK_UNIT, STARS_WORK_WIDTH, WOBBLE_SQUASH,
-    WOBBLE_STRETCH,
+    ANGLES, FACE_OFFSET, FACE_SLACK, MATE_FACE_SKIP, NAME_BOX, PHOTO_WIDTH, REF_WIDTH, ROW_PITCH, SQUASH,
+    STAR_CENTERS, STAR_RADIUS, STARS_FACE, STARS_REGION_DOWN, STARS_REGION_RIGHT, STARS_WORK_UNIT,
+    STARS_WORK_WIDTH, WOBBLE_SQUASH, WOBBLE_STRETCH,
 )
 from .frame import Frame, as_frame
 
@@ -139,12 +140,21 @@ class Player:
     bot: bool | None = None  # 名字里有「Bot」；没读到名字时为 None
     stars: int | None = None
     own: bool = False  # 这一行是自己
+    # 以下只给对局报告（不影响认角色）：最像的那张头像是哪一套造型；第二像的角色（和最像的不是同一个角色）、它最像的那套
+    # 造型和相关度。没有候选时为 None
+    best_skin: str | None = None
+    second_id: int | None = None
+    second_skin: str | None = None
+    second_score: float | None = None
 
 
 @dataclass
 class Players:
     rows: list[Player]
     own_row: int | None  # 自己是第几行；不知道时为 None
+    # 知道自己是哪个角色、却认不出自己是哪一行时（own_row 为 None）：自己的头像和各行比，最像的那一行（row）、相关度
+    # （score）和比第二像的那一行高出多少（margin）；只给对局报告。认出了、不知道自己是谁、一行都没比上时为 None
+    self_match: dict | None = None
 
     @property
     def teammates(self) -> list[Player]:
@@ -430,11 +440,38 @@ def _hero_id(hero_key) -> int | None:
 
 
 def _all_hero_ids() -> tuple[int, ...]:
+    """队友头像拿来比的角色编号：资料里的，加上识别图片的最新清单里资料还没有的新角色（new_heroes）。"""
     ids = templates.assets._hero_ids
     if ids is None:
-        ids = tuple(int(h["id"]) for h in _heroes_raw() if "id" in h)
+        known = tuple(int(h["id"]) for h in _heroes_raw() if "id" in h)
+        ids = known + tuple(i for i in new_heroes() if i not in known)
         templates.assets._hero_ids = ids
     return ids
+
+
+def new_heroes() -> dict[int, str]:
+    """识别图片的最新清单里、这一版资料（data/heroes.json）还没有的新角色：{编号: 名字}。编号或名字（含别名、英文名、繁体名）
+    和资料里的角色重了的不算。没有最新清单、复刻的改版（不读最新清单，advisor/assets.py 的 new_heroes 为空）时为空。
+
+    读一次存进图片缓存（templates.assets._new_heroes）：最新清单带来新角色时会下她的图，下完重新加载图片（reload）时一并
+    重读。读不出时当没有：只是认不出新角色，不影响别的识别。"""
+    got = templates.assets._new_heroes
+    if got is None:
+        try:
+            from .. import assets as image_files  # 底层的下载模块（和这里的 templates.assets 不是一个东西）
+
+            listed = image_files.new_heroes()
+        except Exception:  # noqa: BLE001  读不出最新清单只是认不出新角色
+            listed = {}
+        raw = _heroes_raw()
+        ids = {int(h["id"]) for h in raw if "id" in h}
+        names = {_norm(name) for h in raw
+                 for name in (h.get("name"), h.get("en"), h.get("full_name"), h.get("hant"), h.get("hant_full_name"),
+                              *h.get("aliases", ())) if name}
+        got = {int(i): hero.name for i, hero in listed.items()
+               if int(i) not in ids and _norm(hero.name) not in names}
+        templates.assets._new_heroes = got
+    return dict(got)
 
 
 # Q 版头像的文件名：UT_Hero_ProfilePhoto_<角色编号>.png，或编号后面跟 _<皮肤>（_01、_Max、_01_sfw 等）
@@ -458,7 +495,7 @@ def _hero_photos(hero_id: int) -> list[np.ndarray]:
     with assets.lock:
         found = assets._photos.get(hero_id)
     if found is None:
-        seen, loaded = set(), []
+        seen, loaded, skins = set(), [], []
         for folder in photo_dirs():
             if not folder.is_dir():
                 continue
@@ -469,10 +506,29 @@ def _hero_photos(hero_id: int) -> list[np.ndarray]:
                 if img is not None and img.ndim == 3 and img.shape[2] == 4:
                     seen.add(f.name)
                     loaded.append(img)
+                    skins.append(photo_skin(f.name))
         found = loaded
         with assets.lock:
             assets._photos[hero_id] = found
+            assets._photo_skins[hero_id] = skins
     return found
+
+
+def photo_skin(name: str) -> str:
+    """Q 版头像的文件名 → 造型名：角色编号后面那一段（UT_Hero_ProfilePhoto_101_01.png 是 01）；没有这一段的是 base。"""
+    stem = name[:-4] if name.lower().endswith(".png") else name
+    parts = stem.split("_", 4)
+    return parts[4] if len(parts) > 4 and parts[4] else "base"
+
+
+def _hero_photo_skins(hero_id: int) -> list:
+    """和 _hero_photos(hero_id) 一一对应的造型名（photo_skin）；对不上（缓存是别处放进去的、长度不一样）时每一项都是 None。"""
+    photos = _hero_photos(hero_id)
+    with templates.assets.lock:
+        skins = templates.assets._photo_skins.get(hero_id)
+    if not isinstance(skins, list) or len(skins) != len(photos):
+        return [None] * len(photos)
+    return list(skins)
 
 
 def _face(photo: np.ndarray, f: float, angle: float = 0.0, squash: float = 1.0,
@@ -516,20 +572,36 @@ def _face_templates(hero_id: int, f: float, wobble: bool = False) -> list[list[t
     return got
 
 
+def _mate_face(photo: np.ndarray, f: float) -> tuple[np.ndarray, np.ndarray]:
+    """队友比对的模板：比对范围和 _face 一样，只把左上 MATE_FACE_SKIP 那一块从掩码里去掉——
+    上一行的血量数字压在这里，留着它会把长耳朵、高帽子的角色压到门槛以下。"""
+    gray, mask = _face(photo, f)
+    hh, ww = round(mask.shape[0] * MATE_FACE_SKIP[1]), round(mask.shape[1] * MATE_FACE_SKIP[0])
+    mask[:hh, :ww] = 0
+    return gray, mask
+
+
 def _still_faces(f: float) -> list[tuple[int, np.ndarray, np.ndarray]]:
-    """全部角色、全部皮肤不转不压的脸部模板（队友的头像不摇摆）。"""
+    """全部角色、全部皮肤不转不压的脸部模板（队友的头像不摇摆）。左上被上一行数字压住的一块不参与比对（_mate_face）。"""
     key = round(f, 4)
     assets = templates.assets
     with assets.lock:
         got = assets._still.get(key)
     if got is None:
         # 同 _face_templates：模板在锁外缩，存进去以后返回自己建的那一份，不再从表里取一次
-        got = [(hid, *_face(photo, f)) for hid in _all_hero_ids() for photo in _hero_photos(hid)]
+        got = [(hid, *_mate_face(photo, f)) for hid in _all_hero_ids() for photo in _hero_photos(hid)]
         with assets.lock:
             if len(assets._still) > 4:
                 assets._still.clear()
             assets._still[key] = got
     return got
+
+
+def _still_skins(count: int) -> list:
+    """和 _still_faces 一一对应的造型名（photo_skin）：按同样的先后（全部角色编号，各自的头像）排；长度和 count 对不上
+    （中途重建了缓存等）时每一项都是 None。只用于对局报告里写最像的是哪一套，不影响认角色。"""
+    skins = [skin for hid in _all_hero_ids() for skin in _hero_photo_skins(hid)]
+    return skins if len(skins) == count else [None] * count
 
 
 def _face_window(gray: np.ndarray, bar_x: float, bar_y: float, f: float) -> np.ndarray | None:
@@ -689,32 +761,42 @@ def read_players(frame_bgr: np.ndarray, own_hero=None, names: bool = True) -> Pl
         return None
     own_id = _hero_id(own_hero)
     own_row = None
+    self_match = None
     if own_id is not None:
         report = diagnose(frame, own_id)
         if report.result is not None and report.result.row is not None:
             own_row = report.result.row
         else:
-            index, _, _ = _pick_self(report.rows)
+            index, top_self, second_self = _pick_self(report.rows)
             own_row = index
+            scored = [i for i, r in enumerate(report.rows) if r.self_score is not None]
+            if index is None and scored:
+                where = max(scored, key=lambda i: report.rows[i].self_score)
+                # 只有一行比上时没有第二像的，margin 照 _pick_self 的口径按第二名 -1 算（夹到 1）
+                self_match = {"row": where, "score": round(top_self, 3),
+                              "margin": round(min(1.0, top_self - second_self), 3)}
     faces = _still_faces(lay.f)
+    skins = _still_skins(len(faces))
     players = []
     for i, (row, (bx, by)) in enumerate(zip(lay.rows, lay.anchors)):
-        best: dict[int, float] = {}
+        best: dict[int, tuple[float, str | None]] = {}
         win = _face_window(lay.gray, bx, by, lay.f) if row.visible else None
         if win is not None:
-            for hid, tpl, mask in faces:
+            for (hid, tpl, mask), skin in zip(faces, skins):
                 r = _match(win, tpl, mask)
                 if r is not None:
                     v = float(r.max())
-                    if v > best.get(hid, -1.0):
-                        best[hid] = v
-        ranked = sorted(best.items(), key=lambda kv: -kv[1])
-        top_id, top = ranked[0] if ranked else (None, -1.0)
-        second = ranked[1][1] if len(ranked) > 1 else -1.0
+                    if v > best.get(hid, (-1.0, None))[0]:
+                        best[hid] = (v, skin)
+        ranked = sorted(best.items(), key=lambda kv: -kv[1][0])
+        top_id, (top, top_skin) = ranked[0] if ranked else (None, (-1.0, None))
+        second_id, (second, second_skin) = ranked[1] if len(ranked) > 1 else (None, (-1.0, None))
         sure = top >= MATE_MIN and top - second >= MATE_MARGIN
         players.append(Player(
             row=i, visible=row.visible, hero_id=top_id if sure else None, best_id=top_id,
             score=round(top, 3), margin=round(top - second, 3), stars=row.stars, own=(i == own_row),
+            best_skin=top_skin, second_id=second_id, second_skin=second_skin,
+            second_score=round(second, 3) if second_id is not None else None,
         ))
     if own_row is None and own_id is not None:
         # 自己的头像摇摆着、按「自己」的方法没认出来：静止比对正好认成自己的那一行就是自己
@@ -722,9 +804,10 @@ def read_players(frame_bgr: np.ndarray, own_hero=None, names: bool = True) -> Pl
         if len(mine) == 1:
             own_row = mine[0].row
             mine[0].own = True
+            self_match = None
     if names:
         _read_names(frame, lay, players)
-    return Players(players, own_row)
+    return Players(players, own_row, self_match)
 
 
 def name_key(text: str) -> str:

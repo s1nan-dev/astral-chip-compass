@@ -63,6 +63,7 @@ USER_FILES = {
     "assets/heroes/hero.png": b"hero",
     "assets/profiles/profile.png": b"profile",
     "assets/chips/chip.png": b"chip",
+    "assets/achieve/achieve.png": b"achieve",
     "assets/skins/skin.png": b"skin",
     "assets/manifest-local.json": b"{}",
     "assets/download-cooldown.json": b"[]",

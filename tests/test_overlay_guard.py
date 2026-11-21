@@ -42,7 +42,7 @@ OVERLAY_MODULE = "advisor.ui.overlay"
 # 它要用 app 里的设置类，和外壳归在一起；lanes 是两张悬浮窗的协调器，和 app 一样负责接线，也归在外壳
 SHELL = {"app", "layout", "lane_settings", "lanes"}
 DISPATCH = {"dispatch"}  # 编排
-LOW = {"wording", "geometry", "factory", "option_widgets", "state"}  # 底层模块：部件都可以导入
+LOW = {"wording", "geometry", "factory", "option_widgets", "state", "notice_blocks"}  # 底层模块：部件都可以导入
 PARTS = {"advice_card", "background", "dialogs", "follow", "hotkeys", "notices", "ocr_check", "owned_card", "records",
          "reporting", "scheme_card", "status", "updates", "watcher"}
 INIT = {"__init__"}
@@ -59,7 +59,7 @@ PARENT_CALLS = {"parent", "parentWidget", "window", "nativeParentWidget", "topLe
 OWNER_ATTRS = {"__self__", "__closure__"}
 
 RULE_IMPORT = ("外壳以外的模块不导入悬浮窗本体（advisor.ui.overlay），也不导入外壳模块和别的部件模块，只导入底层模块"
-               "（wording、geometry、factory、option_widgets、state）和 advisor/ui 下悬浮窗以外的模块；要用别的部件的什么，"
+               "（wording、geometry、factory、option_widgets、state、notice_blocks）和 advisor/ui 下悬浮窗以外的模块；要用别的部件的什么，"
                "由外壳把那个方法当回调交进来")
 RULE_PRIVATE = ("外壳以外的模块不取别的对象的私有成员（x._名字，x 不是 self、cls、super()）：要用的改成公开的名字，"
                 "或者由外壳接成回调交进来")

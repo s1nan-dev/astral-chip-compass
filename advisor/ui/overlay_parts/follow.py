@@ -45,7 +45,7 @@ class WindowFollower:
                  fit_height, foreground_state, frame_geometry, move_window, window_width, window_height,
                  window_position, window_id, window_visible, screens, probe, watcher, hotkey_thread, native, make_timer,
                  flush_records, update_settings, cancel_settle, relayer, notice_platform, companion_activity,
-                 companion_rect, companion_fixed, yields, restack) -> None:
+                 companion_rect, companion_fixed, yields, restack, game_gone=None) -> None:
         # 服务：Session 和它的锁（记下的位置、识别记录）；只读的显示状态：三选一显示期间的状态（live）、一次性提示（message）
         self.session, self.lock, self.live, self.message = session, lock, live, message
         # 外壳的回调：一次性提示、等待提示、实际的截取方式、是不是手动模式、刷新、重算高度、六种前台状态
@@ -73,6 +73,8 @@ class WindowFollower:
         # 在前台的那张排到上面（restack，Lanes.restack）
         self.companion_rect, self.companion_fixed = companion_rect, companion_fixed
         self.yields, self.restack = yields, restack
+        # 看过游戏窗口、之后又找不到了（前台状态变成 nogame）时调用（对局报告：这一局可能是游戏关了才没等到结束）；不给时不调
+        self.game_gone = game_gone
         # 前台状态和窗口层次（window_plan）。activity 是前台状态判断的结果：game / own / background / minimized / nogame
         # （probe_state），None 为还没看过（测试、预览）；covered：其他程序在前台时别的窗口已经连续几次盖住悬浮窗；
         # layer：已经设好的层次（层次, 插在哪个窗口下面）
@@ -90,6 +92,8 @@ class WindowFollower:
         self.dragged = False
         # 位置：游戏窗口在屏幕上的位置（逻辑坐标），悬浮窗相对它的位置（比例和固定的角）
         self.game_rect: QRect | None = None
+        # 游戏窗口客户区（物理像素的 左, 上, 宽, 高），最近一次看到的；对局报告按它的高度定分辨率档位
+        self.game_client: tuple | None = None
         self.default_rel = valid_rel(anchor) or DEFAULT_REL  # rules.toml 的 [watch] overlay_anchor
         saved_rel = valid_rel(session.settings.window_rel)
         self.rel = saved_rel or self.default_rel
@@ -233,6 +237,8 @@ class WindowFollower:
         """游戏窗口的位置变了（移动、改大小、最小化后还原）：跟着移动。游戏窗口换了（游戏重启）时请后台识别下次取帧前
         再试一次直接截取（截取屏幕是因为出错、被拒绝等退回的，换了窗口可能就好了）。"""
         rect = logical_rect(info.rect) if info is not None and getattr(info, "rect", None) else None
+        if rect is not None:
+            self.game_client = tuple(info.rect)
         if rect != self.game_rect:
             before, self.game_rect = self.game_rect, rect
             if rect is not None:
@@ -304,6 +310,11 @@ class WindowFollower:
                  and self.message.text in _window_gone_texts())
         if state != before:
             self.activity = state
+            if state == "nogame" and before is not None and callable(self.game_gone):
+                try:
+                    self.game_gone()
+                except Exception:  # noqa: BLE001  对局报告的一条记录，出错不能影响跟随游戏窗口
+                    log_error("记下游戏窗口没了出错（拾星助手仍在运行）", traceback.format_exc(), append=True)
             if state in ("background", "minimized", "nogame"):
                 self.flush_records()  # 识别记录写盘（含刚记下的 pause）
             if state == "nogame":

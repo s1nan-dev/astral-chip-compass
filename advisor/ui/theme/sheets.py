@@ -63,6 +63,10 @@ QLabel#laneTag { color: $SUMMARY_COLOR; border: 1px solid $SUMMARY_COLOR; border
 #notice_warn { color: $ASK_COLOR; }
 #notice_info { color: $MSG_COLOR; }
 #notice_ok { color: $OK_COLOR; }
+QFrame[noticeBlock="true"] { background: $NOTICE_TINT; border: 1px solid $NOTICE_LINE; border-radius: ${CARD_RADIUS}px; }
+QFrame[noticeBlock="true"][level="warn"], QFrame[noticeBlock="true"][level="action"] { border-left: 3px solid $ASK_COLOR; }
+QFrame[noticeBlock="true"][level="ok"] { border-left: 3px solid $OK_COLOR; }
+QLabel#noticeBody { color: $NOTICE_BODY; }
 QComboBox, QLineEdit { background: $INPUT_BG; color: $INPUT_TEXT; border: 1px solid $INPUT_BORDER;
     border-radius: ${INPUT_RADIUS}px; padding: $INPUT_PADDING; }
 QComboBox:hover, QLineEdit:hover { border-color: $INPUT_HOVER_BORDER; }
@@ -95,11 +99,30 @@ QPushButton#iconText { font-size: ${FONT_S}pt; padding: ${TOOL_PAD_Y}px ${TOOL_P
 $FONT_RULES""")
 
 
+def _alpha(color, alpha: int) -> str:
+    """色号（"#rrggbb"、"rgba(r,g,b,a)" 或 (r, g, b, a)）换成同色、透明度为 alpha 的写法。"""
+    import re
+
+    if isinstance(color, tuple):
+        r, g, b = color[:3]
+    else:
+        nums = re.findall(r"\d+", color) if color.startswith("rgb") else None
+        if nums:
+            r, g, b = (int(n) for n in nums[:3])
+        else:
+            h = color.lstrip("#")[-6:]
+            r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f"rgba({r},{g},{b},{alpha})"
+
+
 def overlay_style(skin: Skin | None = None) -> str:
     """悬浮窗的样式表。"""
     skin = _skin(skin)
     o = skin.overlay
-    return OVERLAY_SHEET.substitute(_ns(skin, "overlay", TOOL_PAD_X=o.SCHEME_TOOL_PADDING[0],
+    # 信息栏分块、正文的颜色按提示文字的颜色调透明度：底色和框线是文字色的一层薄纱，深浅底上都看得出、又不抢字
+    msg = _ns(skin, "overlay")["MSG_COLOR"]
+    tint = {"NOTICE_TINT": _alpha(msg, 14), "NOTICE_LINE": _alpha(msg, 40), "NOTICE_BODY": _alpha(msg, 175)}
+    return OVERLAY_SHEET.substitute(_ns(skin, "overlay", **tint, TOOL_PAD_X=o.SCHEME_TOOL_PADDING[0],
                                         TOOL_PAD_Y=o.SCHEME_TOOL_PADDING[1],
                                         FONT_RULES=font_rule("#title, #cardTitle", "title", skin)
                                         + _extra(o.SHEET_EXTRA, skin)))

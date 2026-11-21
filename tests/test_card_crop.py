@@ -653,6 +653,7 @@ class CropDownloadTest(unittest.TestCase):
         from advisor.ui import services
 
         self.addCleanup(assets.use_cropper, assets._cropper, load=assets._cropper_load)
+        self.addCleanup(assets.use_hero_ids, assets._hero_ids, load=assets._hero_ids_load)  # 导入时也登记角色编号
         assets.use_cropper(None)
         loaded = services.Services.load(("assets",))
         self.assertIs(loaded.assets, assets)

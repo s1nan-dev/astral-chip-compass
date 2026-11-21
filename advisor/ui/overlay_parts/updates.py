@@ -5,7 +5,8 @@
 查、下载、备好在 advisor/update.py，换版本在 advisor/update_apply.py：只在发行版里调用（paths.is_frozen），开发版里不查、
 不下、不换，设置窗口的「检查更新」点了只说一句开发版不检查更新。两个模块用到时才导入（net、apply 为 None 时现取，写成
 普通的 from-import，打包时照样收进发行版）；测试换成假的。下载和备好只调 update.obtain：这一版有文件清单时它先比对本机的
-文件、只下变了的部分，走不通再改下整包，经 phase 告诉这边做到哪一步（_download）。
+文件、只下变了的部分，走不通再改下整包，经 phase 告诉这边做到哪一步（_download）。每次检查（自动的、手动的）同时让下载识别
+图片的那一边另取一次识别图片的最新清单（fetch_assets，见 _fetch_assets）。
 
 状态（state）：
 - idle 没事；checking 检查中；available 有新版本（release）；
@@ -160,7 +161,7 @@ class UpdateControl(QObject):
 
     def __init__(self, *, session, lock, run_background, later, refresh, update_settings, trace_user, quit_app,
                  playing=None, windows_open=None, hidden_lanes=None, open_url=None, frozen=None, root=None, net=None,
-                 apply=None):
+                 apply=None, fetch_assets=None):
         super().__init__()
         # 服务：Session 和它的锁（设置里的两项 update_auto、update_skipped，改了马上存）
         self.session, self.lock = session, lock
@@ -179,6 +180,9 @@ class UpdateControl(QObject):
         self.root = root or app_paths.program_folder
         # 查和下载（advisor/update.py）、换版本（advisor/update_apply.py）：None 时用到时才导入（net_module、apply_module）
         self.net, self.apply = net, apply
+        # 检查更新时顺带取识别图片的最新清单（Background.fetch_manifest：在界面线程里调用，它自己另起后台线程取，取到更新的一份
+        # 再补下缺的图片）。不给时不取
+        self.fetch_assets = fetch_assets
         self.state = "idle"
         self.release = None  # 认下的新版本（update.Release）：有新版本以后才有
         self.step = ""  # 下载中下到哪一步（STEPS）
@@ -369,6 +373,18 @@ class UpdateControl(QObject):
 
         self._changed()
         self.run_background(work)
+        self._fetch_assets()
+
+    def _fetch_assets(self) -> None:
+        """检查更新的同时取识别图片的最新清单（fetch_assets）：自动检查、设置窗口的「检查更新」都取（开发版不检查，也就不取）。
+        另起一个后台线程，不在检查的线程里接着取：检查的结果照常先交回，取清单要等到超时时也不拖它；取到以后接着下载的事都在
+        下载那一边（Background）。出错只记错误记录，不影响检查。"""
+        if self.fetch_assets is None:
+            return
+        try:
+            self.fetch_assets()
+        except Exception:  # noqa: BLE001
+            log_error("取识别图片的最新清单出错（拾星助手仍在运行）", traceback.format_exc(), append=True)
 
     def _on_checked(self, result, manual: bool) -> None:
         """检查的结果（界面线程）：有新版本时提示（已经下好、核对过的直接提示「重启更新」，要玩家点一下才换，_prepared）；
