@@ -984,7 +984,7 @@ class RowTest(unittest.TestCase):
         model.free_notice = "免费"
         rows = self.rows(model, OcrNote("running", left=8))
         self.assertEqual([k for k, *_ in rows], ["assets", "ocr_check", "free"])
-        self.assertEqual(model.area("ocr_check"), "global")
+        self.assertEqual(model.group("ocr_check"), "global")
         model.notices = {r[0]: r for r in rows}
         self.assertFalse(model.needs_action())
 

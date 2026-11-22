@@ -13,7 +13,7 @@ from pathlib import Path
 
 from . import paths
 
-VERSION = "1.3.0"
+VERSION = "1.3.1"
 APP_NAME = "拾星助手"  # 界面上的名字；也是发行版根目录启动程序的文件名（tools/build_release.py 的 LAUNCHER_EXE）
 FULL_NAME = "拾星助手（《星引擎Party/吉星派对》筹码推荐工具）"
 # 英文名：exe 版本信息里的产品名和文件说明；去掉空格是个人目录和发行版文件夹的名字（paths.FOLDER_NAME）

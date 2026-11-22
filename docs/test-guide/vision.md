@@ -643,7 +643,7 @@
   - `ApplyTest` 失败 → 量出来没先换线程数、设置里的键或类型不对、`STOPPED` 被计了次数。
   - `ProgressTest` 失败 → 每份活的算法和 `run` 的步骤对不上（多加、少加了一步，或者 `WARMUP_SHARES` 改了没有跟上），或 `_estimate_left` 的预算上限算错。
   - `NoticeTest` 失败 → 定时器（`_tick`、`dismiss`）排漏了或多排了，分档的边界（`FAIR_MS`、`POOR_MS`）改了，或者后台线程碰了 `later`、`refresh`（`QTimer` 只能在界面线程用）。
-  - `RowTest`、`OverlayRowTest` 失败 → 句子、级别、`NOTICE_AREA`、`NoticeModel.rows` 里的先后，或样式表的 `#notice_ok` 改了；有意改句子时这里的预期、使用说明、术语表一起改。
+  - `RowTest`、`OverlayRowTest` 失败 → 句子、级别、`NOTICE_GROUP`、`NoticeModel.rows` 里的先后，或样式表的 `#notice_ok` 改了；有意改句子时这里的预期、使用说明、术语表一起改。
   - `ReasonTextTest` 失败 → 查原因那边加了原因或修法，句子（`OCR_REASON_*`、`OCR_CHECK_YES_TIP`）或 `DECLINABLE` 没跟上；句子里的占位符和 `Reason.values` 的键对不上；繁体的叫法在 `data/zh_hant_extra.toml`。
 
 ## test_ocr_reason.py：结果差时查原因、比只用大核的收益、OcrCheck 点「是」/「否」

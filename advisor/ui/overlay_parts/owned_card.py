@@ -1,7 +1,7 @@
 """「已有筹码」卡片：卡片头的个数「6 个」、图标格子和筹码小卡片，以及补录行（等用户补录的那次三选一）和「能不经三选一获得
 筹码的来源」。
 
-OwnedCard：控件（owned_count、chip_grid、mini_box、补录行那一块）由搭界面时建好交给这里，这里按当前快照和状态填；改 Session、
+OwnedCard：控件（owned_count、chip_grid、mini_box）由搭界面时建好交给这里（补录行排在「提示」卡片里，见 missed_row），这里按当前快照和状态填；改 Session、
 记推荐日志、问未选择首推的原因经外壳给的回调。筹码图标用的 chip_tip 从 text 取；测试在它实际被调用的这个模块上替换。
 """
 from __future__ import annotations
@@ -17,10 +17,9 @@ from ..widgets import TaggedText
 from .factory import (
     WrapTaggedText,
     _button,
-    _clear_grid,
     _clear_layout,
-    _fill_grid,
     _own_style,
+    _rarity_text,
     _set_tip,
     _text_label,
 )
@@ -40,11 +39,10 @@ from .wording import (
 class OwnedCard:
     """「已有筹码」卡片的内容和状态。控件由搭界面（layout）建好交给这里。"""
 
-    def __init__(self, *, owned_count, chip_grid, mini_box, missed_label, missed_buttons, db, session, lock, live, say,
+    def __init__(self, *, owned_count, chip_grid, mini_box, db, session, lock, live, say,
                  flash, waiting_text, trace_user, refresh, card_width, remove_owned, set_pick, supplement):
-        # 控件：卡片头的个数「6 个」、图标格子、筹码小卡片的那一列，补录行的说法和按钮
+        # 控件：卡片头的个数「6 个」、图标格子、筹码小卡片的那一列
         self.owned_count, self.chip_grid, self.mini_box = owned_count, chip_grid, mini_box
-        self.missed_label, self.missed_buttons = missed_label, missed_buttons
         # 服务：资料库、Session 和它的锁；只读的显示状态：三选一显示期间的状态（live）
         self.db, self.session, self.lock, self.live = db, session, lock, live
         # 回调：一次性提示（say：留到被别的提示换掉；flash：显示 FLASH_MS 后自动收起，补录的结果用它）、等待提示、记识别记录、
@@ -55,7 +53,6 @@ class OwnedCard:
         self.card_width, self.remove_owned = card_width, remove_owned
         self.set_pick, self.supplement = set_pick, supplement
         self.owned_shown: tuple | None = None  # 图标格子和筹码小卡片当前显示的已有筹码（没变就不重建）
-        self.missed_shown: tuple | None = None  # 补录行当前列出的按钮（内容没变就不重建）
         self.missed_on = False
         # 等用户补录的那次三选一（和 session.missed_offer 同步）
         self.missed_offer: list[str | None] = []
@@ -103,7 +100,7 @@ class OwnedCard:
         box.setSpacing(2)
         top = QHBoxLayout()
         top.setSpacing(4)
-        name = _text_label(names.chip_name(chip), C.FONT_M, C.RARITY_COLOR.get(chip.rarity, C.TEXT_COLOR))
+        name = _text_label(names.chip_name(chip), C.FONT_M, _rarity_text(chip.rarity))
         remove = QPushButton("×")
         remove.setObjectName("remove")
         remove.setCursor(Qt.PointingHandCursor)
@@ -131,37 +128,30 @@ class OwnedCard:
     # ------------------------------------------------------------ 补录行
 
     def show_missed(self, visible: bool) -> None:
-        """补录行：上一次三选一的候选筹码做成按钮，点一下补录；无法识别的只显示原文；最后是「忽略」按钮。"""
-        if self.missed_kind == EV_PICK_REVERTED and self.missed_chip:
-            self.missed_label.setText(
-                lang.t(REVERTED_PROMPT.format(chip=names.chip_in(self.db, self.missed_chip))))
-        else:
-            self.missed_label.setText(lang.t(MISSED_PROMPT))
-        key = (tuple(self.missed_offer), tuple(self.missed_raw)) if visible else None
-        if key != self.missed_shown:
-            self.missed_shown = key
-            widgets: list = []
-            for i, name in enumerate(self.missed_offer if visible else []):
-                if name in self.db.chips:
-                    shown = names.chip_in(self.db, name)
-                    btn = _button(lang.t(shown), color=C.RARITY_COLOR.get(self.db.chips[name].rarity, C.TEXT_COLOR),
-                                  tip=lang.t(f"补录：{shown}"))
-                    btn.clicked.connect(lambda _=False, n=name: self.pick_missed(n))
-                    widgets.append(btn)
-                else:
-                    text = self.missed_raw[i] if i < len(self.missed_raw) and self.missed_raw[i] else ""
-                    label = QLabel(lang.t(f"「{text}」无法识别" if text else "未识别到文字"))
-                    label.setTextInteractionFlags(Qt.NoTextInteraction)  # 不接鼠标按下和拖动，按在文字上也能拖动悬浮窗
-                    _own_style(label, f"color:{C.CAPTION_COLOR}")
-                    widgets.append(label)
-            if visible:
-                skip = _button(lang.t(DISMISS), tip=lang.t("不补录，关闭本条提示"))
-                skip.clicked.connect(lambda: self.pick_missed(None))
-                widgets.append(skip)
-                _fill_grid(self.missed_buttons, widgets, self.card_width())
-            else:
-                _clear_grid(self.missed_buttons)
+        """补录行显示与否（这一轮刷新时定）；排成「提示」卡片里的一行见 missed_row。"""
         self.missed_on = visible
+
+    def missed_row(self) -> tuple | None:
+        """补录行（「提示」卡片里「已有筹码」的事，键 missed）：（键, 文字, 级别, 按钮）；不显示时为 None。文字是
+        MISSED_PROMPT，同一组候选再次出现、撤销了刚记下的筹码时是 REVERTED_PROMPT；上一次三选一的候选筹码做成按钮（字按稀有度
+        着色），点一下补录（pick_missed）；无法识别的只写原文（动作为 None）；最后是「关闭本条提示」（不补录）。⚠ 橙色。"""
+        if not self.missed_on:
+            return None
+        if self.missed_kind == EV_PICK_REVERTED and self.missed_chip:
+            text = REVERTED_PROMPT.format(chip=names.chip_in(self.db, self.missed_chip))
+        else:
+            text = MISSED_PROMPT
+        buttons = []
+        for i, name in enumerate(self.missed_offer):
+            if name in self.db.chips:
+                shown = names.chip_in(self.db, name)
+                buttons.append((shown, C.RARITY_COLOR.get(self.db.chips[name].rarity, C.TEXT_COLOR),
+                                ("pick_missed", name), f"补录：{shown}"))
+            else:
+                raw = self.missed_raw[i] if i < len(self.missed_raw) and self.missed_raw[i] else ""
+                buttons.append((f"「{raw}」无法识别" if raw else "未识别到文字", "", None, ""))
+        buttons.append((DISMISS, "", ("pick_missed", None), "不补录，关闭本条提示"))
+        return ("missed", text, "warn", buttons)
 
     def pick_missed(self, name: str | None) -> None:
         """补录漏掉的那次三选一。name 为 None 表示忽略。"""
@@ -187,9 +177,9 @@ class OwnedCard:
         self.refresh()
 
     def missed_buttons_text(self) -> list[str]:
-        """补录行里各个按钮（和标签）的文字，按排列顺序。"""
-        items = [self.missed_buttons.itemAt(i).widget() for i in range(self.missed_buttons.count())]
-        return [w.text() for w in items if w is not None]
+        """补录行里各个按钮（和标签）的文字，按排列顺序（显示时按界面语言转）。"""
+        row = self.missed_row()
+        return [lang.t(b[0]) for b in row[3]] if row is not None else []
 
     # ------------------------------------------------------------ 能不经三选一获得筹码的来源
 
@@ -209,4 +199,3 @@ class OwnedCard:
     def reset(self) -> None:
         """换皮肤：忘掉「内容没变就不重建」的记录，refresh 时重搭。"""
         self.owned_shown = None
-        self.missed_shown = None

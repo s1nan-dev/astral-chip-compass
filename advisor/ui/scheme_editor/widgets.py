@@ -453,6 +453,8 @@ class MapField(QWidget):
         self.combo = MapCombo(names, parent=self, display=display)
         self.combo.toggled.connect(self.toggled.emit)
         lay.addWidget(self.combo, 1)
+        # 只有一行高：和折成几行的说明并排时不跟着拉高（不然「适用地图」标签被拉成一大块，和别的字段标签不一样高）
+        self.setSizePolicy(self.sizePolicy().horizontalPolicy(), QSizePolicy.Fixed)
 
     def set_maps(self, names, keep_extra: bool = True) -> None:
         """见 MapCombo.set_maps。"""

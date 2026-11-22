@@ -16,6 +16,8 @@ _CW = dict(
     dark="#1d1d1f", white="#ffffff", lime="#a8f03c", lime_ink="#173300", yellow="#ffd21f", card="#ededed",
     teal="#25c5a0", slate="#7a7a84", panel="#3b3b42",
 )
+# 写在白色、浅灰底上的金、蓝筹码名（OverlayLook.CHIP_BUTTON_TEXT、RARITY_TEXT）：比 RARITY_COLOR 深一档，白底上对比度 4 以上
+_CW_DEEP = {"蓝": "#0a78c2", "金": "#b86e00"}
 
 
 def _classic_white() -> Skin:
@@ -53,12 +55,12 @@ def _classic_white() -> Skin:
         f"QLabel#laneTag {{ background: {p['ink']}; color: {p['pink_light']}; border: 1px solid {p['pink']}; "
         f"border-radius: 7px; padding: 0px 8px; font-weight: bold; }}\n"
         f"QLabel#cardTitle {{ padding: 4px 14px 7px 14px; font-size: 11pt; $TITLE_FONT }}\n"
-        f"QWidget#globalArea {{ background: {p['card']}; border-radius: 14px; }}\n"
         f"QWidget#bestBlock {{ background: rgba(255,255,255,190); border: 3px solid {p['orange']}; border-radius: 18px; }}\n"
         f"QLabel#ask, QLabel#notice_warn, QLabel#notice_action {{ background: {p['ink']}; color: {p['yellow']}; "
         f"border-radius: 12px; padding: 5px 10px; }}\n"
-        f"QLabel#ownedCount {{ background: {p['ink']}; border-radius: 9px; padding: 2px 12px; font-weight: bold; "
-        f"$NUMBER_FONT }}\n"
+        # 「已有筹码」的个数：字体、字号同旁边的区域名标签；黑色胶囊下沿让出标签投影那一截，和标签本体一样高
+        f"QLabel#ownedCount {{ background: {p['ink']}; border-radius: 9px; padding: 2px 12px; margin-bottom: 3px; "
+        f"font-size: 11pt; $TITLE_FONT }}\n"
         f"Pill, MapPill {{ font-weight: bold; }}\n"
         f"QComboBox {{ font-weight: bold; }}\n"
         f"QComboBox::drop-down {{ border: none; width: 24px; }}\n"
@@ -134,7 +136,7 @@ def _classic_white() -> Skin:
         f"QLabel#dim {{ color: {p['gray']}; font-size: 9pt; font-weight: bold; }}\n"
         f"QScrollArea#hintBox QLabel#dim {{ color: #d0d0d8; }}\n"
         f"QLabel#field {{ background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #ffc21f, stop:1 {p['orange']}); "
-        f"color: {p['white']}; border-radius: 10px; padding: 3px 10px; font-size: 10pt; $TITLE_FONT }}\n"
+        f"color: {p['ink']}; border-radius: 10px; padding: 3px 10px; font-size: 10pt; $TITLE_FONT }}\n"
         f"QLabel#defaultName {{ color: {p['pink']}; background: {p['ink']}; border-radius: 12px; padding: 3px 14px; "
         f"font-size: 11pt; $TITLE_FONT }}\n"
         f"QLabel#schoolPill {{ border: none; border-bottom: 2px solid {p['pink_dark']}; border-radius: 11px; "
@@ -166,6 +168,15 @@ def _classic_white() -> Skin:
             PANEL_ATTENTION_BORDER=p["yellow"], PANEL_OPAQUE_BG=p["panel"], WINDOW_ALPHA=SEE_THROUGH,
             CARD_BG="transparent", CARD_BORDER="transparent", CARD_RADIUS=22,
             MINI_BG=p["white"], MINI_BORDER="#d6d6d6", MINI_RADIUS=12, LABEL_COLOR=p["dark"],
+            # 补录行、地图发放的筹码按钮：粉色按钮上稀有度颜色的字看不清，换成白底、稀有度颜色的字和框
+            CHIP_BUTTON_BG=p["white"], CHIP_BUTTON_HOVER_BG="#f3f3f5",
+            CHIP_BUTTON_PADDING="3px 12px 2px 12px",  # 四边 2 像素的框比粉按钮（只有下沿 3）厚 1：下内边距少 1
+            # 浅底上的金、蓝太亮：补录行和地图发放的筹码按钮的字、筹码小卡片和候选筹码一行的筹码名换深一档（图标色环、铺色的名字按钮照旧）
+            CHIP_BUTTON_TEXT=_CW_DEEP, RARITY_TEXT=_CW_DEEP,
+            # 铺稀有度颜色的筹码名按钮、橙色的强调按钮：白字加深色细描边
+            NAME_OUTLINE=p["ink"], ACCENT_OUTLINE=p["ink"], REROLL_OUTLINE=p["ink"],
+            # 「提示」卡片里的次要说明：调透明后在浅灰底上太淡，写成实色的灰
+            NOTICE_BODY_COLOR="#6e6e6e",
             TIP_BG=p["white"], TIP_TEXT=p["dark"], TIP_BORDER="#c9c9c9", TIP_PADDING=6,
             TITLE_COLOR=p["white"], TITLE_WEIGHT=900, SUMMARY_COLOR="#d0d0d8", CARD_TITLE_COLOR=p["white"],
             MSG_COLOR="#4a4a4f", ASK_COLOR=p["yellow"],
@@ -191,12 +202,14 @@ def _classic_white() -> Skin:
             SHEET_EXTRA=overlay_extra, PANEL_DECOR="chrome", MARK_BG=p["ink"], MARK_PADDING="2px 12px",
             REROLL_BG="qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #33e6d2, stop:1 #a8f03c)",
             REROLL_TEXT=p["white"], NAME_FILL=True, NAME_TEXT=p["white"], BEST_MARGINS=(10, 7, 10, 9),
-            WARN_BOX=f"background:{p['ink']};border-radius:11px;padding:4px 10px", GLOBAL_MARGINS=(12, 10, 12, 10),
+            WARN_BOX=f"background:{p['ink']};border-radius:11px;padding:4px 10px",
             SUMMARY_INK={p["dark"]: p["white"], "#4a4a4f": "#d0d0d8", p["gray"]: "#c8c8d0", "#8a8a8a": p["pink"],
                          "#2b8a3e": p["lime"], "#d9480f": p["yellow"], "#a3a3ab": "#6f6f78"},
             SETTINGS_GLYPH=p["white"],
             # 「推荐」卡片头那段「芬妮 · 银行卡流」：卡片头一半压在白卡片上沿外面，写在黑色胶囊里（同「已有筹码」的个数）
-            BASIS_BOX=f"background:{p['ink']};border-radius:9px;padding:1px 10px", BASIS_TEXT="#d0d0d8",
+            BASIS_BOX=f"background:{p['ink']};border-radius:9px;padding:1px 10px;margin-bottom:3px", BASIS_TEXT="#d0d0d8",
+            # 卡片收起时卡片头的摘要：同上，写在黑色胶囊里
+            SUMMARY_BOX=f"background:{p['ink']};color:{p['white']};border-radius:9px;padding:1px 10px;margin-bottom:3px",
         ),
         widgets=dict(
             TONES=tones, PILL_PAD_X=9, PILL_PAD_Y=2, PILL_RADIUS=13, TAG_GAP=6, TAG_PAD_X=8, TAG_PAD_Y=1,
@@ -279,6 +292,7 @@ def _classic_white() -> Skin:
             TONE_BOX={"ok": (p["lime"], p["lime_ink"]), "warn": (p["ink"], p["yellow"])},
         ),
         settings=dict(
+            LIST_BG=common.POPUP_BG,  # 下拉列表：浅底（默认的卡片底色是深色，压不住深色的字）
             # 高度：含游戏平台、低配模式两行（连同间距约 113、111 像素），「识别」页在各种截取状态下底下都留有空；
             # 「只用大核」一行的说明有两行（处理器名称、打开以后的效果），连同间距约 115 像素
             WIDTH=860, HEIGHT=804, BIG_CORES_EXTRA=115, SCREEN_MARGIN=0, SHEET_EXTRA=settings_extra,

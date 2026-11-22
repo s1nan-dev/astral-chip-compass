@@ -134,6 +134,7 @@ class EventHandlers:
         with self.lock:
             new_hero = getattr(getattr(self.session, "game", None), "new_hero", None)
         new_hero = new_hero if isinstance(new_hero, str) and new_hero else None
+        self.advice.new_hero = new_hero  # 「提示」卡片里请选角色那一条按它写（AdviceCard.hero_row）
         self.advice.set_live_view(lambda: self.advice.hero_needed_view(offer, new_hero))
         self.eggs.count("triple", self.eggs.golds(offer))  # 候选认出来了（推荐暂停）：三个金色照样算
 

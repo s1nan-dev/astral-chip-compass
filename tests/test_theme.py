@@ -205,7 +205,7 @@ class SkinDataTest(unittest.TestCase):
     def test_shared_extras(self):
         """几套皮肤共用的两项（OverlayLook）：底栏「设置」前的齿轮图标，默认皮肤不画，其余六套都画（颜色同各自按钮上的字，
         白色海景房是强调色紫）；「已有筹码」卡片头的个数（「0 个」）另写颜色的有霓虹贴纸（电光青）、碳纤流光（电光青）、
-        白色海景房（紫），其余照 TEXT_COLOR、DIM_COLOR。"""
+        白色海景房（紫）、经典主题-反色（写在黑色胶囊里：白、浅灰），其余照 TEXT_COLOR、DIM_COLOR。"""
         glyphs = {s.key: s.overlay.SETTINGS_GLYPH for s in theme.skins() if s.key in theme.SKIN_ORDER}
         self.assertEqual(glyphs.pop("default"), "")
         self.assertEqual(len(glyphs), 6)
@@ -213,6 +213,7 @@ class SkinDataTest(unittest.TestCase):
         self.assertEqual(glyphs["white_seaview"], theme.WHITE_SEAVIEW.common.MAP_COLOR)
         colors = {s.key: s.overlay.OWNED_COUNT_COLORS for s in theme.skins() if s.overlay.OWNED_COUNT_COLORS}
         self.assertEqual(colors, {"neon_sticker": ("#2ed0ff", "#2ed0ff"), "carbon_flow": ("#00e5ff", "#00e5ff"),
+                                  "classic_inverse": ("#ffffff", "#d0d0d8"),
                                   "white_seaview": ("#7a5cff", "#7a5cff")})
 
     def test_unknown_name_is_default(self):

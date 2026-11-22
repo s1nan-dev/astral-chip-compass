@@ -9,7 +9,7 @@ test_newgame_after_result_is_info_only）。
 import unittest
 from types import SimpleNamespace
 
-from advisor.ui.overlay_parts.wording import (GAME_OVER_WAITING, NEWGAME_MIDGAME, NEWGAME_OWNED, NEWGAME_TEXT,
+from advisor.ui.overlay_parts.wording import (GAME_OVER_WAITING, NEWGAME_MIDGAME, NEWGAME_TEXT,
                                               PROMPT_PANEL)
 from tests.test_overlay_behavior import RESULT, WAITING, BehaviorBase
 
@@ -66,7 +66,7 @@ class NewGameAfterRoomTest(BehaviorBase):
                 self.assertTrue(self.w.needs_attention())
                 texts = self.w.notice_model.texts()
                 self.assertEqual(texts.get("newgame"), midgame)
-                self.assertEqual(texts.get("newgame_owned"), NEWGAME_OWNED)
+                self.assertNotIn("newgame_owned", texts)
                 self.assertEqual([b.text() for b in self.w.notices.buttons("newgame")], ["撤销"])
         self.undo(chip)
         self.assertIn("第 8 轮", self.w.status.status_text())

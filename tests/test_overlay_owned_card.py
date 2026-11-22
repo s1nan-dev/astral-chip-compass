@@ -46,7 +46,7 @@ class FakeParts:
 
 def owned_card(parts: FakeParts) -> OwnedCard:
     """按卡片构造时收的几样建「已有筹码」卡片；补录不碰控件、资料库和量宽度，那几样给 None。"""
-    return OwnedCard(owned_count=None, chip_grid=None, mini_box=None, missed_label=None, missed_buttons=None,
+    return OwnedCard(owned_count=None, chip_grid=None, mini_box=None,
                      db=None, session=parts.session, lock=parts.lock, live=parts.live, say=parts.say, flash=parts.flash,
                      waiting_text=parts.waiting_text, trace_user=parts.trace_user, refresh=parts.refresh,
                      card_width=None, remove_owned=None, set_pick=parts.set_pick, supplement=parts.supplement)

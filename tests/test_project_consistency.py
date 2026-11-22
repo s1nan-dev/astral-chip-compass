@@ -157,8 +157,8 @@ def load_labels(name: str) -> dict:
 
 
 class VersionTest(unittest.TestCase):
-    """版本号只在 advisor/version.py 定义；README 第一节、THIRD_PARTY_NOTICES.md 开头一句要跟着改
-    （docs/软件维护说明.md「打包发行版」一节）。署名同样只在 advisor/version.py 定义（AUTHOR），别处照它写。"""
+    """版本号只在 advisor/version.py 定义；README 第一节要跟着改（docs/软件维护说明.md「版本号」一节），
+    THIRD_PARTY_NOTICES.md 不写版本号。署名同样只在 advisor/version.py 定义（AUTHOR），别处照它写。"""
 
     @classmethod
     def setUpClass(cls):
@@ -170,10 +170,10 @@ class VersionTest(unittest.TestCase):
         self.assertEqual(found, [version.VERSION])
 
     def test_notices_version(self):
-        # THIRD_PARTY_NOTICES.md 随发行版发布，开头一句写当前的版本号：改版本号时容易漏改这一处（docs/软件维护说明.md「打包发行版」一节）
+        # THIRD_PARTY_NOTICES.md 随发行版发布，内容和版本无关，不写拾星助手的版本号，免得每次改号都要跟着改
         notices = read(PROJECT / "THIRD_PARTY_NOTICES.md")
         found = re.findall(rf"{re.escape(version.APP_NAME)} (\d+\.\d+\.\d+)", notices)
-        self.assertEqual(found, [version.VERSION])
+        self.assertEqual(found, [])
 
     def test_author_same_everywhere(self):
         # 作者的笔名照原样写、中间不加空格。THIRD_PARTY_NOTICES.md 第四节 data 资料的署名、exe 版本信息里的版权
@@ -489,7 +489,7 @@ class TerminologyTest(unittest.TestCase):
              "也可以点击右侧「重试」按钮。", ui["DOWNLOAD_FEW"].format(n=1, these="这张图片")),
             ("之后会自动再试", ui["DOWNLOAD_FEW_LATER"].format(n="N", these="这些图片")),  # 混着别的失败时的那一句
             ("未选择「X」的原因？", ui["FEEDBACK_QUESTION"].format(best="X")),
-            ("请在上方「筹码方案」卡片的角色下拉框中选择当前角色", ui["PROMPT_HERO"]),
+            ("请在下方「筹码方案」卡片的角色下拉框中选择当前角色", ui["PROMPT_HERO"]),
             ("请点击右侧按钮选择当前地图", ui["MAP_ASK"]),
             ("请点击面板上方自己的页签（从左数第 N 个）", ui["PANEL_TAB"].format(n="N")),
             ("未检测到上一次筹码三选一选择的筹码", ui["MISSED_PROMPT"]),
@@ -856,7 +856,7 @@ class RecommendCardTest(unittest.TestCase):
         cls = next(t for t in chip.tags if t in CLASSES)
         parts = [Part("基础分", 10.0), Part("特性", 20.0, "加分的理由", short="加分"),
                  Part("组合", -40.0, "扣分的理由", short="扣分"),
-                 Part("标签分", 30.0, f"筹码标签「{cls}」与角色当前职业相符")]
+                 Part("标签分", 30.0, f"筹码标签「{cls}」与角色当前筹码池相符")]
         item = ChipEval(chip=chip, parts=parts, official=40.0, immediate=20.0, lookahead=-25.0,
                         lookahead_reason="前瞻的说明", total=-5.0, percent=0.3, lookahead_short="前瞻：短句")
         return item, cls
@@ -867,7 +867,7 @@ class RecommendCardTest(unittest.TestCase):
         pills = ui_text.option_pills(item, best=True)
         self.assertEqual([p.text for p in pills], ["扣分", f"标签：{cls} ✓", "前瞻：短句", "加分"])
         self.assertEqual([p.tone for p in pills], [ui_text.MINUS, ui_text.PLUS, ui_text.MINUS, ui_text.PLUS])
-        self.assertEqual(pills[1].tip, f"筹码标签「{cls}」与角色当前职业相符")  # 悬停也不接「（+30）」
+        self.assertEqual(pills[1].tip, f"筹码标签「{cls}」与角色当前筹码池相符")  # 悬停也不接「（+30）」
         for pill in pills:
             self.assertNotRegex(pill.text, self.SCORE_TAIL)
             self.assertNotRegex(pill.tip, self.SCORE_PAREN)
@@ -929,7 +929,7 @@ class RecommendCardTest(unittest.TestCase):
         rules["official"]["scale"] = 0.5
         db = dataclasses.replace(self.db, rules=rules)
         part = next(p for p in Scorer(db, State(hero="凛")).parts("书签", (), None) if p.label == "职业倾向")
-        self.assertEqual(part.short, "职业倾向：卡牌（暂不加分）")  # 与整句的「暂不加分」一致
+        self.assertEqual(part.short, "筹码池倾向：卡牌（暂不加分）")  # 与整句的「暂不加分」一致
         self.assertIn("本局不再出现的高适配度筹码：", self.engine_templates)
 
     def test_series_wording(self):
@@ -1325,7 +1325,7 @@ class SchemeCardWordingTest(unittest.TestCase):
                                "（下拉框中显示的角色与本局相同时也请点选一次）。",
             "HERO_PENDING_TIP": "本局尚未识别角色，进入对局画面后根据左下角的角色立绘自动识别；也可在下方「筹码方案」卡片的"
                                 "角色下拉框中选择角色。",
-            "PROMPT_HERO": "请在上方「筹码方案」卡片的角色下拉框中选择当前角色",
+            "PROMPT_HERO": "请在下方「筹码方案」卡片的角色下拉框中选择当前角色",
             "SHARE_BTN": "导入/导出",  # 在「筹码方案」卡片里
             "SHARE_TIP": "打开「导入/导出筹码方案」窗口：复制筹码方案的文字或短字符串，或粘贴方案文字、短字符串导入",
             "SCHEME_CARD": "筹码方案", "SCHEME_EDIT": "编辑方案", "SCHEME_GROUP": "── 我的方案 ──",
@@ -1592,10 +1592,10 @@ class UiWordingTest(unittest.TestCase):
         self.assertEqual([(where, text) for where, text in self.strings if old.search(text)], [])
         data_texts = [text for _, text in walk_strings(tomllib.loads(read(PROJECT / "data" / "synergy.toml")))]
         self.assertEqual([text for text in data_texts if old.search(text)], [])
-        reason = engine.CLASS_SHIFT_REASON.format(points="辅助职业分值 +50", classes="辅助")
-        self.assertEqual(reason, "选择后辅助职业分值 +50，之后升星和筹码商店的三选一更常出现辅助职业的筹码")
-        shop = engine.CLASS_SHIFT_SHOP_REASON.format(points="辅助职业分值 +50", classes="辅助")
-        self.assertEqual(shop, "选择后辅助职业分值 +50，之后筹码商店的三选一更常出现辅助职业的筹码")
+        reason = engine.CLASS_SHIFT_REASON.format(points="辅助分值 +50", classes="辅助")
+        self.assertEqual(reason, "选择后辅助分值 +50，之后升星和筹码商店的三选一更常出现辅助筹码池的筹码")
+        shop = engine.CLASS_SHIFT_SHOP_REASON.format(points="辅助分值 +50", classes="辅助")
+        self.assertEqual(shop, "选择后辅助分值 +50，之后筹码商店的三选一更常出现辅助筹码池的筹码")
         late = engine.LATE_INCOME_NOTE.format(round=7)
         self.assertEqual(late, "第 7 轮起获得，星币兑现较晚，收入再减半")
         piercing = "可快速击倒防御力高的怪物"

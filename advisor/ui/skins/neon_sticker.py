@@ -66,7 +66,6 @@ def _neon_sticker() -> Skin:
         f"QPushButton#remove {{ border-radius: 9px; padding: 0px 6px; }}\n"
         f"QLabel#title {{ padding: 2px 8px 5px 4px; font-size: 15pt; $TITLE_FONT }}\n"
         f"QLabel#cardTitle {{ padding: 4px 24px 5px 26px; font-size: 10pt; $TITLE_FONT }}\n"
-        f"QWidget#globalArea {{ background: {p['card']}; border: 2px solid {ink}; border-radius: 12px; }}\n"
         f"QWidget#bestBlock {{ background: {p['best']}; border: 2px solid {p['yellow']}; border-radius: 12px; }}\n"
         f"QLabel#ask, QLabel#notice_warn, QLabel#notice_action {{ background: {p['pink']}; color: {p['white']}; "
         f"border: 2px solid {ink}; border-radius: 10px; padding: 5px 10px; font-weight: bold; }}\n"
@@ -200,7 +199,7 @@ def _neon_sticker() -> Skin:
             SHEET_EXTRA=overlay_extra, PANEL_DECOR="neon", MARK_BG=p["off"], MARK_PADDING="1px 10px",
             REROLL_BG=p["off"], REROLL_TEXT=p["green"], NAME_FILL=True, NAME_TEXT=ink, BEST_MARGINS=(10, 8, 10, 10),
             WARN_BOX=f"background:{p['pink']};border:2px solid {ink};border-radius:10px;padding:4px 10px",
-            WARN_BOX_TEXT=p["white"], GLOBAL_MARGINS=(12, 10, 12, 10), PANEL_MARGINS_LINE=(14, 9, 22, 15),
+            WARN_BOX_TEXT=p["white"], PANEL_MARGINS_LINE=(14, 9, 22, 15),
             NAME_STYLE="capsule", MARK_STYLE="outline",
             MARK_KINDS={
                 "best": ("", p["white"], ink, 5), "marked": ("", p["white"], ink, 5), "unmarked": ("", p["white"], ink, 5),

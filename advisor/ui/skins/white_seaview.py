@@ -14,10 +14,10 @@ from ._shared import _COMBO_PLAIN, _PANEL_CLEAR, _scrollbar
 WHITE_SEAVIEW_KEY = "white_seaview"
 WHITE_SEAVIEW_LABEL = "白色海景房"
 _WS = dict(
-    bg="#f5f6fb", card="#ffffff", line="#e3e6ef", line2="#d5d9e6", text="#1b1f2e", soft="#4f5770", dim="#8a91a5",
-    caption="#9aa1b3", disabled="#b3b8c6", violet="#7a5cff", pink="#ff4fd8", cyan="#00a6d6", teal="#0a9f66",
+    bg="#f5f6fb", card="#ffffff", line="#e3e6ef", line2="#d5d9e6", text="#1b1f2e", soft="#4f5770", dim="#687087",
+    caption="#7a8196", disabled="#b3b8c6", violet="#7a5cff", pink="#ff4fd8", cyan="#00a6d6", teal="#07804f",
     teal_bg="#dcf6ea", coral="#f0325f", coral_bg="#ffe3ea", gray_bg="#eef0f6", track="#e9ebf3", off="#dfe2ec",
-    violet_bg="#efe9ff", violet_line="#e2d9ff", cyan_bg="#dff6fd", amber="#f59e0b", green="#10b981",
+    violet_bg="#efe9ff", violet_line="#e2d9ff", cyan_bg="#dff6fd", cyan_text="#007ea3", amber="#f59e0b", green="#10b981",
     bar_unmarked="#c9cede", bar_locked="#dfe2ea", preview="#f6f3ff", scroll="#eceef5",
     led_recog="#22c3ee", led_scheme="#8b5cf6", led_advice="#f43f9e", led_owned="#10b981", led_look="#f59e0b",
     led_diag="#3b82f6",
@@ -67,7 +67,6 @@ def _white_seaview() -> Skin:
         f"QLabel#laneTag {{ background: {p['card']}; color: {p['violet']}; border: 1px solid {p['violet']}; "
         f"border-radius: 9px; padding: 0px 8px; font-weight: bold; }}\n"
         f"QLabel#cardTitle {{ padding: 3px 6px 3px 18px; font-size: 10pt; $TITLE_FONT }}\n"
-        f"QWidget#globalArea {{ background: {p['card']}; border: 1px solid {p['line']}; border-radius: 14px; }}\n"
         f"QLabel#ask, QLabel#notice_warn, QLabel#notice_action {{ background: {p['coral_bg']}; color: {p['coral']}; "
         f"border-radius: 10px; padding: 5px 10px; font-weight: bold; }}\n"
         f"QLabel#ownedCount {{ color: {p['violet']}; font-size: 13pt; font-weight: 300; $NUMBER_FONT }}\n"
@@ -201,14 +200,16 @@ def _white_seaview() -> Skin:
             NAME_BORDER_ALPHA=255, UNREADABLE_BORDER_ALPHA=255, NAME_PADDING="1px 10px", NAME_WEIGHT_BEST=700,
             NAME_WEIGHT=700, PICKED_WEIGHT=700, GRID_DIAMETER=26,
             SHEET_EXTRA=overlay_extra, PANEL_DECOR="seaview", MARK_BG=p["gray_bg"], MARK_PADDING="2px 11px",
-            REROLL_BG=p["cyan_bg"], REROLL_TEXT=p["cyan"], NAME_FILL=False, NAME_TEXT=p["text"],
+            REROLL_BG=p["cyan_bg"], REROLL_TEXT=p["cyan_text"], NAME_FILL=False, NAME_TEXT=p["text"],
             WARN_BOX=f"background:{p['coral_bg']};border-radius:10px;padding:4px 10px", WARN_BOX_TEXT=p["coral"],
-            GLOBAL_MARGINS=(12, 10, 12, 10), PANEL_MARGINS_LINE=(18, 9, 12, 9),
+            PANEL_MARGINS_LINE=(18, 9, 12, 9),
+            # 「提示」卡片里的次要说明：调透明后在浅灰底上太淡，写成实色的灰
+            NOTICE_BODY_COLOR=p["dim"],
             NAME_STYLE="tinted", NAME_FILLS={"蓝": "#e3f4fd", "紫": "#f3e6fd", "金": "#fff1db"},
             MARK_KINDS={
                 "best": (grad, "#ffffff", "", 0), "marked": (p["violet_bg"], p["violet"], "", 0),
                 "unmarked": (p["gray_bg"], p["soft"], "", 0), "locked": (p["gray_bg"], p["dim"], "", 0),
-                "percent": (p["gray_bg"], p["text"], "", 0), "reroll": (p["cyan_bg"], p["cyan"], "", 0),
+                "percent": (p["gray_bg"], p["text"], "", 0), "reroll": (p["cyan_bg"], p["cyan_text"], "", 0),
             },
             ENTRY_BARS={"best": (p["violet"], p["pink"]), "marked": p["violet"], "unmarked": p["bar_unmarked"],
                         "locked": p["bar_locked"], "percent": p["bar_unmarked"], "reroll": p["cyan"]},
@@ -288,6 +289,7 @@ def _white_seaview() -> Skin:
             TONE_BOX={"ok": (p["teal_bg"], p["teal"]), "warn": (p["coral_bg"], p["coral"])},
         ),
         settings=dict(
+            LIST_BG=common.POPUP_BG,  # 下拉列表：浅底（默认的卡片底色是深色，压不住深色的字）
             WIDTH=600, HEIGHT=0, SCREEN_MARGIN=0, SHEET_EXTRA=settings_extra,
             TILE_BG=p["gray_bg"], TILE_BORDER=p["gray_bg"], TILE_HOVER_BORDER=p["line2"], TILE_ON_BG=p["card"],
             TILE_PEN=1, TILE_ON_PEN=2, TILE_RADIUS=14, TILE_MARGINS=(12, 8, 12, 10), TILE_SPACING=12,

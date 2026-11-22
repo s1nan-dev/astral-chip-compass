@@ -509,7 +509,7 @@ class AdviceTest(Base):
         reason = vitamin.lookahead_reason
         self.assertGreater(vitamin.lookahead, 0)
         self.assertIn("本局不再出现的高适配度筹码：魔法箭袋、标记喷罐", reason)
-        self.assertIn(CLASS_SHIFT_REASON.format(points="卡牌职业分值 +30", classes="卡牌"), reason)
+        self.assertIn(CLASS_SHIFT_REASON.format(points="卡牌分值 +30", classes="卡牌"), reason)
         locked = {"标记", "充能"}
         for bit in reason.split("；"):
             m = re.match(r"^(.+?)下次出现率 \d+% → \d+%$", bit)
@@ -807,18 +807,19 @@ class LookaheadTopStarTest(Base):
 
     def test_reason_names_shop_not_levelup(self):
         """3 星以后职业分值只影响筹码商店的最左格：前瞻的整句写「之后筹码商店的三选一更常出现……」，不再写「升星」；
-        短句写「前瞻：筹码商店更常出现辅助职业的筹码」，两个职业放不下时照写「前瞻：更常出现攻击、辅助职业的筹码」。
+        短句写「前瞻：筹码商店更常出现……」，放不下时（现在一个、两个筹码池都放不下）照写「前瞻：更常出现攻击、辅助筹码池的筹码」。
         之后只剩任务时（没有筹码商店）不写职业分值这一句。0～2 星照旧写「之后升星和筹码商店的三选一……」。"""
         early = Scorer(self.db, State(hero="邦妮", star=1, round=3)).lookahead_reason("ATM机", ())
-        self.assertIn(CLASS_SHIFT_REASON.format(points="辅助职业分值 +50", classes="辅助"), early)
+        self.assertIn(CLASS_SHIFT_REASON.format(points="辅助分值 +50", classes="辅助"), early)
         late = Scorer(self.db, State(hero="邦妮", star=3, round=9))
         reason = late.lookahead_reason("ATM机", ())
-        self.assertIn(CLASS_SHIFT_SHOP_REASON.format(points="辅助职业分值 +50", classes="辅助"), reason)
-        self.assertEqual(CLASS_SHIFT_SHOP_REASON.format(points="辅助职业分值 +50", classes="辅助"),
-                         "选择后辅助职业分值 +50，之后筹码商店的三选一更常出现辅助职业的筹码")
+        self.assertIn(CLASS_SHIFT_SHOP_REASON.format(points="辅助分值 +50", classes="辅助"), reason)
+        self.assertEqual(CLASS_SHIFT_SHOP_REASON.format(points="辅助分值 +50", classes="辅助"),
+                         "选择后辅助分值 +50，之后筹码商店的三选一更常出现辅助筹码池的筹码")
         self.assertNotIn("升星", reason)
-        for classes, short in (("辅助", "前瞻：筹码商店更常出现辅助职业的筹码"),
-                               ("攻击、辅助", "前瞻：更常出现攻击、辅助职业的筹码")):
+        # 「筹码商店更常出现辅助筹码池的筹码」长于 SHORT_LIMIT，一个筹码池时也照不写「筹码商店」的短句写
+        for classes, short in (("辅助", "前瞻：更常出现辅助筹码池的筹码"),
+                               ("攻击、辅助", "前瞻：更常出现攻击、辅助筹码池的筹码")):
             sc = Scorer(self.db, State(hero="邦妮", star=3, round=9))
             sc.memo.lookahead_keys[("星币锤", ())] = {"classes": classes}  # 只剩职业这一个要点
             with self.subTest(classes=classes):
@@ -1178,7 +1179,7 @@ class SynergyTableTest(Base):
         adv = self.run_case("邦妮", ["标靶", "夹心饼干-可口", "会员推荐信"], star=1, round=4, db=self.scaled(0.5))
         target = self.by_name(adv)["标靶"]
         tag = next(p for p in target.parts if p.label == "标签分")
-        self.assertEqual(tag.reason, "筹码标签「攻击」与角色当前职业相符")
+        self.assertEqual(tag.reason, "筹码标签「攻击」与角色当前筹码池相符")
         self.assertTrue(any("（前瞻 +" in r for r in target.reasons(limit=5)))  # reasons() 给命令行和诊断包，照写分值
         adv = self.run_case("凛", ["银行卡-余额多", "会员推荐信", "优雅之羽"])
         self.assertEqual(adv.notes, [LOW_NOTE, "地图：待识别，按候选地图平均计算"])
@@ -1759,9 +1760,9 @@ class EndlessPendingPicksTest(Base):
 
     def test_only_endless_left_no_class_shift(self):
         """之后的三选一只剩循环往复给的那一次时（进度条走到头、那一次还没给），前瞻说明不写职业分值那一句：那一次是任务来源，
-        三格全随机，不看职业，之后也不再有升星和筹码商店。还剩 1 轮时照写。选大碗炖肉：生存职业分值 +50。"""
-        upgrade = CLASS_SHIFT_REASON.format(points="生存职业分值 +50", classes="生存")
-        shop = CLASS_SHIFT_SHOP_REASON.format(points="生存职业分值 +50", classes="生存")
+        三格全随机，不看职业，之后也不再有升星和筹码商店。还剩 1 轮时照写。选大碗炖肉：生存分值 +50。"""
+        upgrade = CLASS_SHIFT_REASON.format(points="生存分值 +50", classes="生存")
+        shop = CLASS_SHIFT_SHOP_REASON.format(points="生存分值 +50", classes="生存")
         for star in (2, 3):
             with self.subTest(star=star):
                 sc = self.scorer(star=star, round=15, progress=16, endless_pending=True)
@@ -2260,8 +2261,8 @@ class TendencyTest(Base):
         parts = scorer.parts("书签", (), None)
         part = next(p for p in parts if p.label == "职业倾向")
         self.assertEqual(part.score, 0)
-        self.assertEqual(part.reason, "筹码标签「卡牌」与角色的职业倾向（卡牌 80）相符；职业分值未达到 100，暂不加分")
-        self.assertEqual(part.short, "职业倾向：卡牌（暂不加分）")
+        self.assertEqual(part.reason, "筹码标签「卡牌」与角色的筹码池倾向（卡牌 80）相符；分值未达到 100，暂不加分")
+        self.assertEqual(part.short, "筹码池倾向：卡牌（暂不加分）")
         # 总分不变：去掉这一项和不去掉一样
         self.assertEqual(scorer.score("书签", (), None), sum(p.score for p in parts if p.label != "职业倾向"))
         # 攻击标签与倾向不符：没有这一条

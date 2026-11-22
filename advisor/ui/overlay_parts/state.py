@@ -304,7 +304,7 @@ class SessionView:
 
     @property
     def map_switched(self) -> bool:
-        """这一局按地图换着方案（实际用的不是保存的那套）：「筹码方案」卡片里「本局按地图换用了……」那一行显示与否。"""
+        """这一局按地图换着方案（实际用的不是保存的那套）：「提示」卡片里「本局按地图换用了……」那一行显示与否。"""
         return self.scheme_map is not None
 
     @property

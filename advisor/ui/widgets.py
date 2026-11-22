@@ -9,7 +9,7 @@ from __future__ import annotations
 import math
 from collections.abc import Callable
 
-from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRect, QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -1172,6 +1172,59 @@ class ComboRowDelegate(QStyledItemDelegate):
         painter.restore()
 
 
+class SlantBackdrop(QObject):
+    """卡片头上的几块文字（方案依据、收起时的摘要、「已有筹码」的个数）在皮肤写了 OverlayLook.BOX_SLANT 时，字底下先画一块
+    这种颜色的平行四边形（同区域名标签的斜条，错开量同 ChromeLook.SLANT），再照常画字。没写时什么都不做。"""
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802  Qt 的虚函数
+        fill = theme.OVERLAY.BOX_SLANT
+        if fill and event.type() == QEvent.Paint and obj.text():
+            p = QPainter(obj)
+            p.setRenderHint(QPainter.Antialiasing)
+            rect = QRectF(obj.rect())
+            p.fillPath(decor.slant(rect, min(float(theme.CHROME.SLANT), rect.height() * 0.4)), decor.qc(fill))
+            p.end()
+        return False
+
+
+_SLANT_BACKDROP: SlantBackdrop | None = None
+
+
+def slant_backdrop(label: QLabel) -> None:
+    """给 label 装上 SlantBackdrop（一个过滤器给所有的用）。"""
+    global _SLANT_BACKDROP
+    if _SLANT_BACKDROP is None:
+        _SLANT_BACKDROP = SlantBackdrop()
+    label.installEventFilter(_SLANT_BACKDROP)
+
+
+COMPLETER_NAME = "comboCompleter"  # 可编辑下拉框的补全列表的部件名（样式表按它套下拉列表的样子）
+
+
+class _CompleterSkin(QObject):
+    """补全列表弹出之前（Show），把下拉框所在窗口的样式表抄给它：「QComboBox QAbstractItemView」（下拉列表）那几条改成
+    按补全列表的部件名匹配，滚动条等其余规则照抄。窗口的样式表换了（换皮肤）也照新的套。"""
+
+    def __init__(self, combo: QComboBox, popup: QWidget):
+        super().__init__(popup)
+        self._combo = combo
+        self._sheet = None
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802  Qt 的虚函数
+        if event.type() == QEvent.Show:
+            sheet, widget = "", self._combo
+            while widget is not None and not sheet:  # 从下拉框往上找第一张写了下拉列表样子的样式表
+                if "QComboBox QAbstractItemView" in widget.styleSheet():
+                    sheet = widget.styleSheet()
+                widget = widget.parentWidget()
+            if sheet != self._sheet:
+                self._sheet = sheet
+                obj.setStyleSheet(sheet.replace("QComboBox QAbstractItemView", f"QAbstractItemView#{COMPLETER_NAME}"))
+            # 下拉列表的字体随下拉框（经典主题几套是粗体）：补全列表同样用下拉框的字体
+            obj.setFont(self._combo.font())
+        return False
+
+
 def draw_combo_rows(combo: QComboBox) -> ComboRowDelegate:
     """下拉框的下拉列表改用 ComboRowDelegate 画每一行（原来的条目代理留着算行高）；可编辑的下拉框（输入筹码名搜索的）
     另把补全列表也换上（补全列表没有「当前的值」，不画短条）。返回下拉列表的条目代理。皮肤写了 COMBO_ARROW 时下拉框右端的
@@ -1182,6 +1235,10 @@ def draw_combo_rows(combo: QComboBox) -> ComboRowDelegate:
     if completer is not None:
         popup = completer.popup()
         popup.setItemDelegate(ComboRowDelegate(popup, popup.itemDelegate()))
+        # 补全列表是单独弹出的窗口，不在下拉框所在窗口的部件树里，窗口的样式表管不到它：每次弹出前照那张样式表给它套上
+        # 同一套下拉列表的样子（_CompleterSkin），不然是系统默认的白底黑字，和点箭头弹出的下拉列表两个样
+        popup.setObjectName(COMPLETER_NAME)
+        popup.installEventFilter(_CompleterSkin(combo, popup))
     if not isinstance(combo, MapPill):
         draw_combo_arrow(combo)
     return delegate
@@ -1412,10 +1469,14 @@ class Card(QFrame):
         self.summary.setTextFormat(Qt.RichText)
         self.summary.setTextInteractionFlags(Qt.NoTextInteraction)  # 富文本默认接走鼠标；关掉文字交互，按在文字上也能拖动悬浮窗
         self.summary.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        slant_backdrop(self.summary)
         self.toggle = FoldButton()
         self.toggle.clicked.connect(self.toggle_clicked)
         head.addWidget(self.title)
         head.addWidget(self.summary, 1)
+        # 摘要写在胶囊里的皮肤（OverlayLook.SUMMARY_BOX）摘要只占字的宽度，余下的空让给这一截；别的皮肤摘要占满（伸缩比 1），
+        # 这一截是 0 宽
+        head.addStretch(0)
         head.addWidget(self.toggle)
         box.addLayout(head)
         self.body = QWidget()
@@ -1433,8 +1494,19 @@ class Card(QFrame):
         self.layout().setSpacing(W.CARD_HEAD_GAP if W.CARD_HEAD_GAP >= 0 else W.CARD_SPACING)
         self.head.setSpacing(W.CARD_HEAD_SPACING)
         self.body_box.setSpacing(W.CARD_SPACING)
+        # 收起时的摘要：卡片头一半压在卡片上沿外面的皮肤，摘要写在深色胶囊里（OverlayLook.SUMMARY_BOX，样式表写法），
+        # 胶囊只有字那么宽
+        box = theme.OVERLAY.SUMMARY_BOX
+        self.summary.setStyleSheet(f"QLabel#cardSummary {{ {box} }}" if box else "")
+        self.summary.setSizePolicy(QSizePolicy.Maximum if box else QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.head.setStretchFactor(self.summary, 0 if box else 1)
+        self._show_summary()
         self.toggle.apply_skin()
         self.update()
+
+    def _show_summary(self) -> None:
+        """摘要写在胶囊里时，没有摘要（展开着）就整个藏起来，不留一个空胶囊。"""
+        self.summary.setVisible(not theme.OVERLAY.SUMMARY_BOX or bool(self.summary.text()))
 
     def paintEvent(self, event) -> None:
         if W.CARD_DECOR == "index":  # 不画卡片：区域名后面一小截亮色、一条细线（碳纤流光；只画在字和按钮之间的空白里）
@@ -1465,6 +1537,8 @@ class Card(QFrame):
 
         look = theme.CHROME
         metrics = decor.card_metrics(look.CARD_KIND)
+        if self.head.geometry().height() <= 0:  # 排版还没排好（刚收起、展开别的卡片时）：先排好，免得按空的卡片头画
+            self.layout().activate()
         if metrics.top == "edge":  # 白卡片整张画（卡片头的小灯点、区域名写在卡片里面）
             top, left = 0, 0
             body = QRectF(metrics.inset, metrics.inset, self.width() - 2 * metrics.inset,
@@ -1486,6 +1560,14 @@ class Card(QFrame):
         p.drawPixmap(0, 0, decor.cached(self, ("card", theme.current_key(), self.key, top, left), self.size(),
                                         lambda q: decor.card(q, body, look, seed=len(self.key) * 7 + 11, radius=22)))
         p.end()
+
+    def event(self, event) -> bool:
+        handled = super().event(event)
+        if event.type() == QEvent.LayoutRequest:
+            # 卡片自己画的底按卡片头的位置画（区域名的中线、卡片头的下沿）：排版变了以后整张重画一次，不留着按旧位置画的那一版
+            # （别的卡片收起、展开时，这张卡片的大小可能不变，Qt 不会自己重画它）
+            QTimer.singleShot(0, self, self.update)  # 挂在卡片上：卡片先删掉了就不再调用
+        return handled
 
     def _rule_span(self) -> tuple[float, float] | None:
         """区域名后面那条横线的左右两头（CARD_DECOR 为 section 时）：从区域名、紧跟它的部件和收起时的摘要的右边起，到右边
@@ -1532,6 +1614,7 @@ class Card(QFrame):
         self._open = on
         self.body.setVisible(on)
         self.summary.setText("" if on else summary_html)
+        self._show_summary()
         self.toggle.set_open(on)
         name = self.title.text()
         self.toggle.setToolTip(

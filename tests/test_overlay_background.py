@@ -30,7 +30,7 @@ from tests.support import sandbox  # noqa: E402
 from tests.support.errors import capture_errors  # noqa: E402
 from tests.support.fakes import FakeLogbook  # noqa: E402
 from tests.support.waits import wait_until  # noqa: E402
-from tests.support.overlay_cases import APP, FakeHotkey, FakeRecorder, FakeWatcher, PROJECT, button, buttons, capture_state, frame, probe, shown, tip_text
+from tests.support.overlay_cases import notice_block, APP, FakeHotkey, FakeRecorder, FakeWatcher, PROJECT, button, buttons, capture_state, frame, probe, shown, tip_text
 
 
 class OverlayServicesTest(unittest.TestCase):
@@ -165,7 +165,7 @@ class OverlayServicesTest(unittest.TestCase):
         offer = self.logbook.offers[0][0]
         self.session.on_frame(None)
         w.handle(self.session.on_frame(None))
-        button(w.missed, "大背包").click()
+        button(notice_block(w, "missed"), "大背包").click()
         self.assertEqual(self.logbook.picks, [(offer, "大背包", "supplement")])
 
     def test_question_when_best_not_picked(self):
@@ -479,7 +479,7 @@ class OverlayServicesTest(unittest.TestCase):
         self.session.on_frame(None)
         w.handle(self.session.on_frame(None))  # 未检测到选择
         self.assertIsNone(w.advice.question_state())
-        button(w.missed, other).click()
+        button(notice_block(w, "missed"), other).click()
         self.assertEqual(w.advice.question_state(), "ask")
         w.advice.submit_feedback("地图因素")
         self.assertEqual(self.logbook.feedback, [(offer_id, "地图因素", "")])

@@ -354,11 +354,12 @@ class OverlayTest(unittest.TestCase):
         ev = self.session.on_frame(frame(OFFER))
         self.assertEqual(ev.kind, "hero_needed")
         w.handle(ev)
-        advice = shown(w, w.advice_card)
+        advice, tips = shown(w, w.advice_card), shown(w, w.global_area)  # 请选角色那一条在「提示」卡片里
         self.assertEqual(NEW_HERO, "这个角色是新出的，请更新拾星助手")
-        self.assertIn(NEW_HERO, advice)
-        self.assertNotIn(PROMPT_HERO, advice)
-        self.assertNotIn(HERO_PAUSED, advice)  # 「选择角色后立即计算推荐」不引着玩家去选别的角色
+        self.assertIn(NEW_HERO, tips)
+        self.assertNotIn(PROMPT_HERO, tips)
+        self.assertNotIn(HERO_PAUSED, tips)  # 「选择角色后立即计算推荐」不引着玩家去选别的角色
+        self.assertNotIn(NEW_HERO, advice)
         self.assertIn("候选筹码：", advice)
         self.assertEqual(w.hero_state.text(), "角色 待识别")  # 胶囊照旧
         self.assertIn(NEW_HERO, tip_text(w.hero_state.toolTip()))
@@ -374,13 +375,13 @@ class OverlayTest(unittest.TestCase):
 
         w = self.window
         w.handle(self.session.on_frame(frame(OFFER)))
-        self.assertIn(PROMPT_HERO, shown(w, w.advice_card))
-        self.assertIn(HERO_PAUSED, shown(w, w.advice_card))  # 认不出资料里的角色时照旧
+        self.assertIn(PROMPT_HERO, shown(w, w.global_area))
+        self.assertIn(HERO_PAUSED, shown(w, w.global_area))  # 认不出资料里的角色时照旧
         self.session.on_hero(portrait(NEW_NAME, new=NEW_NAME))
         ev = self.session.on_frame(frame(OFFER))
         self.assertEqual(ev.kind, "hero_needed")
         w.handle(ev)
-        self.assertIn(NEW_HERO, shown(w, w.advice_card))
+        self.assertIn(NEW_HERO, shown(w, w.global_area))
 
     def test_teammate_name_in_tip(self):
         from advisor.ui.overlay_parts.wording import teammates_text

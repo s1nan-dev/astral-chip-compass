@@ -89,6 +89,7 @@ QPushButton#cardToggle:hover { color: $TOGGLE_HOVER_TEXT; background: $TOGGLE_HO
 QPushButton#cardToggle:pressed { color: $TOGGLE_HOVER_TEXT; background: $TOGGLE_PRESSED_BG; }
 QPushButton#remove { padding: $REMOVE_PADDING; font-size: ${FONT_S}pt; border-radius: ${REMOVE_RADIUS}px; }
 QScrollArea#ownedScroll { background: transparent; border: none; }
+QScrollArea#cardsScroll, QScrollArea#cardsScroll > QWidget#qt_scrollarea_viewport, QWidget#cardsArea { background: transparent; border: none; }
 QWidget#qt_scrollarea_viewport, QWidget#ownedBody { background: transparent; }
 QScrollBar:vertical { background: transparent; width: ${SCROLL_WIDTH}px; margin: 0px; }
 QScrollBar::handle:vertical { background: $SCROLL_HANDLE; border-radius: ${SCROLL_RADIUS}px; min-height: ${SCROLL_HANDLE_MIN}px; }
@@ -121,7 +122,8 @@ def overlay_style(skin: Skin | None = None) -> str:
     o = skin.overlay
     # 信息栏分块、正文的颜色按提示文字的颜色调透明度：底色和框线是文字色的一层薄纱，深浅底上都看得出、又不抢字
     msg = _ns(skin, "overlay")["MSG_COLOR"]
-    tint = {"NOTICE_TINT": _alpha(msg, 14), "NOTICE_LINE": _alpha(msg, 40), "NOTICE_BODY": _alpha(msg, 175)}
+    tint = {"NOTICE_TINT": _alpha(msg, 14), "NOTICE_LINE": _alpha(msg, 40),
+            "NOTICE_BODY": o.NOTICE_BODY_COLOR or _alpha(msg, 175)}
     return OVERLAY_SHEET.substitute(_ns(skin, "overlay", **tint, TOOL_PAD_X=o.SCHEME_TOOL_PADDING[0],
                                         TOOL_PAD_Y=o.SCHEME_TOOL_PADDING[1],
                                         FONT_RULES=font_rule("#title, #cardTitle", "title", skin)
@@ -147,7 +149,7 @@ QLabel#keycap[tone="capture"] { color: $SELECTED_COLOR; border-color: $SELECTED_
 QComboBox { background: $KEYCAP_BG; color: $TEXT_COLOR; border: 1px solid $KEYCAP_BORDER;
     border-radius: ${BUTTON_RADIUS}px; padding: 3px 26px 3px 10px; }
 QComboBox:hover { border-color: $BUTTON_HOVER_BORDER; }
-QComboBox QAbstractItemView { background: $CARD_BG; color: $TEXT_COLOR; border: 1px solid $CARD_BORDER;
+QComboBox QAbstractItemView { background: $LIST_BG; color: $TEXT_COLOR; border: 1px solid $CARD_BORDER;
     selection-background-color: $TILE_ON_BG; }
 QLabel#chip { background: $CHIP_OK_BG; color: $CHIP_OK_TEXT; border: 1px solid $CHIP_OK_BORDER; border-radius: ${CHIP_RADIUS}px;
     padding: $CHIP_PADDING; font-size: ${FONT_S}pt; }
@@ -170,7 +172,8 @@ def settings_style(skin: Skin | None = None) -> str:
     skin = _skin(skin)
     s = skin.settings
     ns = _ns(skin, "settings", CHIP_OK_TEXT=s.CHIP_OK[0], CHIP_OK_BG=s.CHIP_OK[1], CHIP_OK_BORDER=s.CHIP_OK[2],
-             CHIP_WARN_TEXT=s.CHIP_WARN[0], CHIP_WARN_BG=s.CHIP_WARN[1], CHIP_WARN_BORDER=s.CHIP_WARN[2])
+             CHIP_WARN_TEXT=s.CHIP_WARN[0], CHIP_WARN_BG=s.CHIP_WARN[1], CHIP_WARN_BORDER=s.CHIP_WARN[2],
+             LIST_BG=s.LIST_BG or s.CARD_BG)
     extra = font_rule("QLabel#pageTitle, QLabel#section", "title", skin) + font_rule("QLabel#keycap", "number", skin)
     extra += _extra(s.SHEET_EXTRA, skin)
     return SETTINGS_SHEET.substitute(ns, EXTRA=extra)

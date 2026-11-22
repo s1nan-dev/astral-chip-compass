@@ -10,7 +10,9 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 from PySide6.QtCore import QEvent, Qt  # noqa: E402
-from PySide6.QtWidgets import QLabel  # noqa: E402
+from PySide6.QtWidgets import QLabel, QWidget  # noqa: E402
+from advisor.ui.widgets import Card  # noqa: E402
+from advisor.ui.overlay_parts.wording import CARD_KEYS, DISMISS, TIPS_CARD  # noqa: E402
 from advisor import paths as app_paths  # noqa: E402
 from advisor import version as app_version  # noqa: E402
 from advisor.data import load_db  # noqa: E402
@@ -64,13 +66,13 @@ class CaptureNoticeTest(unittest.TestCase):
                 self.assertTrue(CAPTURE_NOTICE[problem].startswith("⚠ "))
                 self.assertTrue(CAPTURE_NOTICE[problem].endswith("已改为截取屏幕：游戏窗口不在前台时暂停识别。"))
                 self.assertNotIn("截图工具截不到悬浮窗", CAPTURE_NOTICE[problem])
-                label = notice_titles(w.recog_top, CAPTURE_NOTICE[problem])[0]
+                label = notice_titles(w.global_notices, CAPTURE_NOTICE[problem])[0]
                 self.assertEqual(label.objectName(), "notice_warn")
                 self.assertEqual(tip_text(label.toolTip()), tip)
                 self.assertEqual([b.text() for b in w.notices.buttons("capture")], ["关闭本条提示"])
-                # 一行显示时「识别」卡片也出现，只显示这一行；不是「需要您操作」，边框不变色
+                # 一行显示时也在「提示」卡片里看得到；不是「需要您操作」，边框不变色
                 self.assertFalse(w.expanded)
-                self.assertTrue(w.card_open("recog"))
+                self.assertFalse(w.global_area.isHidden())
                 self.assertFalse(w.needs_attention())
         self.assertEqual(self.records[-1], ("capture", {"method": "screen", "problem": "blank", "detail": "", "step": "",
                                                          "build": 26200, "border_requested": False}))
@@ -88,7 +90,7 @@ class CaptureNoticeTest(unittest.TestCase):
 
         def notice_label() -> QLabel:
             # 同一条提示换了悬停说明时整行重建，换下来的那一行隐藏后等待删除：只取显示着的
-            found = notice_titles(w.recog_top, CAPTURE_NOTICE["failed"])
+            found = notice_titles(w.global_notices, CAPTURE_NOTICE["failed"])
             self.assertEqual(len(found), 1)
             return found[0]
 
@@ -122,7 +124,7 @@ class CaptureNoticeTest(unittest.TestCase):
         release = "app\\.tmp\\overlay_err.txt"
 
         def notice_tip() -> str:
-            found = notice_titles(w.recog_top, CAPTURE_NOTICE["failed"])
+            found = notice_titles(w.global_notices, CAPTURE_NOTICE["failed"])
             self.assertEqual(len(found), 1)
             return tip_text(found[0].toolTip())
 
@@ -145,7 +147,7 @@ class CaptureNoticeTest(unittest.TestCase):
         s.set_owned(["书签"])
         w.handle(s._auto_new_game("round", 1, "轮次由第 8 轮变为第 1 轮"))
         w.on_capture_changed(capture_state("screen", "failed", "0x80004005"))
-        rows = [w.recog_top_box.itemAt(i).widget().objectName() for i in range(w.recog_top_box.count())]
+        rows = [w.global_notice_box.itemAt(i).widget().objectName() for i in range(w.global_notice_box.count())]
         self.assertEqual(rows, ["notice-newgame", "notice-capture"])
 
     def test_dismiss_and_restore(self):
@@ -645,6 +647,92 @@ class HantNoticeTest(NoticeCase):
         session.on_frame(seen(False))
         self.assertTrue(session.hant_game)  # 这次运行里一直为真
         self.assertEqual(len([e for e in session.recent_events(600) if e.get("kind") == "read:hant_game"]), 1)
+
+
+class TipsCardTest(NoticeCase):
+    """标题栏下方的「提示」卡片：和别的卡片同一种卡片（卡片名「提示」、没有折叠按钮、不在四张卡片里），当前状态那一句和
+    全部提示行都在里面；原来放在各卡片里的提示（识别、筹码方案、推荐、已有筹码的事）都排进来，各卡片里不再有提示块；
+    按钮照旧能点。"""
+
+    # 原来放在各卡片里的提示：键 → 一行（文字、按钮照 NoticeModel.rows 的写法）
+    CARD_ROWS = [
+        ("newgame", "⚠ 对局中途判定为新的一局。", "action", [("撤销", "primary", "undo", "")]),
+        ("capture", "⚠ 已改为截取屏幕。", "warn", [(DISMISS, "", "dismiss_capture", "")]),
+        ("unsupported0", "⚠ 游戏窗口过小：请调大。", "warn", []),
+        ("unlocked0", "已解锁皮肤，解锁条件：x。", "action", [(DISMISS, "", ("dismiss_unlock", "carbon"), "")]),
+        ("map_switch", "本局按地图换用了「甲」", "info", [("换回原来的", "primary", "revert_map_scheme", "")]),
+        ("owned_unknown", "⚠ 还不知道已有筹码，可能不准。", "warn", []),
+        ("reverted", "同一组候选筹码再次出现。", "info", []),
+        ("panel", "请打开面板。", "action", [(DISMISS, "", "dismiss_panel", "")]),
+        ("gain", "星数已增加。请补录。", "action", [("补录筹码", "primary", "add", ""), (DISMISS, "", "dismiss_gain", "")]),
+        ("removed", "已从已有筹码中移出「标靶」。", "info", [("撤销", "primary", "undo_remove", "")]),
+    ]
+
+    def test_is_a_card_without_fold_button(self):
+        w = self.make()
+        card = w.global_area
+        self.assertIsInstance(card, Card)
+        self.assertEqual(card.objectName(), "card")  # 卡片框照样式表的 #card，和别的卡片一样
+        self.assertEqual(card.title.text(), TIPS_CARD)
+        self.assertEqual(card.title.objectName(), "cardTitle")
+        self.assertTrue(card.toggle.isHidden())
+        self.assertNotIn(card, w.cards.values())
+        self.assertEqual(tuple(w.cards), CARD_KEYS)
+        w.message.say(lang.t("未找到游戏窗口，请先启动游戏。"))
+        w.notice_model.free_notice = "免费。"
+        w.set_expanded(True)
+        w.show()
+        APP.processEvents()
+        self.assertTrue(card.is_open)
+        self.assertLess(card.geometry().bottom(), w.recog_card.geometry().top())  # 标题栏下面、四张卡片上面
+        self.assertIn("未找到游戏窗口", shown(w, card))
+        self.assertLess(w.global_msg.geometry().top(), w.global_notices.geometry().top())  # 状态那一句在提示上面
+        w.set_expanded(False)  # 「全部折叠」不收起它：提示行照旧看得到
+        self.assertFalse(card.isHidden())
+        self.assertTrue(card.is_open)
+
+    def test_hidden_when_empty(self):
+        w = self.make()
+        w.set_expanded(True)
+        w.message.say("")
+        w.refresh()
+        self.assertEqual(w.notice_model.texts(), {})
+        self.assertTrue(w.global_area.isHidden())
+
+    def test_card_rows_moved_in_and_buttons_work(self):
+        w = self.make()
+        calls = []
+        w.notices.action = lambda action: (lambda a=action: calls.append(a))
+        rows = list(self.CARD_ROWS)
+        w.notice_model.rows = lambda *a, **k: list(rows)
+        for expanded in (False, True):
+            with self.subTest(expanded=expanded):
+                w.notice_model.shown = None
+                w.set_expanded(expanded)
+                APP.processEvents()
+                self.assertEqual(self.global_keys(w), [k for k, *_ in rows])
+                self.assertFalse(w.global_area.isHidden())
+                for card in w.cards.values():  # 各卡片里不再有提示块
+                    self.assertEqual([b for b in card.findChildren(QWidget) if b.property("noticeBlock")], [])
+        for key, _, _, btns in rows:
+            calls.clear()
+            for b in w.notices.buttons(key):
+                b.click()
+            self.assertEqual(calls, [b[2] for b in btns], key)
+
+    def test_collapsed_cards_stay_collapsed(self):
+        """用户收起的卡片不因为提示行自动展开（提示行在「提示」卡片里，看得到）。"""
+        w = self.make()
+        w.set_expanded(True)
+        for key in ("recog", "advice", "owned"):
+            w.cards[key].toggle.click()
+        rows = [r for r in self.CARD_ROWS if r[0] in ("capture", "reverted", "removed")]  # 识别、推荐、已有筹码的事各一条
+        w.notice_model.rows = lambda *a, **k: list(rows)
+        w.refresh()
+        self.assertEqual(set(w.notice_model.texts()), {"capture", "reverted", "removed"})
+        for key in ("recog", "advice", "owned"):
+            self.assertFalse(w.cards[key].is_open, key)
+        self.assertIn("已从已有筹码中移出", shown(w, w.global_area))
 
 
 if __name__ == "__main__":

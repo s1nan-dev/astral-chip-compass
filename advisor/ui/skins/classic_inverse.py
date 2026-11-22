@@ -15,7 +15,7 @@ CLASSIC_INVERSE_KEY = "classic_inverse"
 CLASSIC_INVERSE_LABEL = "经典主题-反色"
 _CI = dict(
     g1="#3d5afe", g2="#a64dff", g3="#ff3fa4", band="#0b0b0e", white="#ffffff", lime="#b6f23a", pink="#ff3fa4",
-    magenta="#e8238f", orange="#ff9f1a", text="#121212", soft="#4a4a52", dim="#8b8b95", caption="#9a9aa6",
+    magenta="#e8238f", orange="#ff9f1a", text="#121212", soft="#4a4a52", dim="#6b6b75", caption="#757580",
     gray="#ececf1", gray_line="#d6d6de", yellow="#ffe03a", cyan="#2fd2ff", light="#f6f6fa", line="#e2e2ea",
     green="#1a9e2e", black="#000000", warn="#d9480f", band_soft="#24242a", locked="#b9b9c4", disabled="#b0b0ba",
     select="#eaf9cf", olive="#3b4a10",
@@ -66,11 +66,12 @@ def _classic_inverse() -> Skin:
         f"QLabel#laneTag {{ background: {p['yellow']}; color: {p['band']}; border: 2px solid {p['band']}; "
         f"border-radius: 4px; padding: 0px 8px; font-weight: bold; }}\n"
         f"QLabel#cardTitle {{ padding: 3px 18px 4px 16px; font-size: 10pt; $TITLE_FONT }}\n"
-        f"QWidget#globalArea {{ background: {p['white']}; border-radius: 14px; }}\n"
         f"QWidget#bestBlock {{ background: #fff6e3; border: 2px solid {p['orange']}; border-radius: 12px; }}\n"
         f"QLabel#ask, QLabel#notice_warn, QLabel#notice_action {{ background: {p['band']}; color: {p['yellow']}; "
         f"border-radius: 4px; padding: 5px 10px; font-weight: bold; }}\n"
-        f"QLabel#ownedCount {{ font-size: 14pt; font-weight: bold; font-style: italic; $NUMBER_FONT }}\n"
+        # 「已有筹码」的个数：卡片头一半压在卡片上沿外面的紫色斜纹上，深色字看不清，写在黑色平行四边形里（BOX_SLANT 画底），
+        # 字体、字号、上下内边距同旁边的区域名标签，两块一样高、一样的字
+        f"QLabel#ownedCount {{ padding: 2px 16px 2px 16px; font-size: 10pt; $TITLE_FONT }}\n"
         f"Pill, MapPill {{ font-weight: bold; }}\n"
     )
     on_band = {p["dim"]: p["locked"], p["soft"]: "#d0d0d8", p["text"]: p["white"], p["warn"]: p["yellow"],
@@ -185,6 +186,12 @@ def _classic_inverse() -> Skin:
             WINDOW_ALPHA=SEE_THROUGH,  # 面板整块自己画、按不透明画：透出下方的游戏画面靠整个悬浮窗的透明度
             CARD_BG="transparent", CARD_BORDER="transparent", CARD_RADIUS=16,
             MINI_BG=p["light"], MINI_BORDER=p["line"], MINI_RADIUS=10, LABEL_COLOR=p["text"],
+            # 补录行、地图发放的筹码按钮：绿色按钮上稀有度颜色的字看不清，换成筹码小卡片的浅底、稀有度颜色的字和框
+            CHIP_BUTTON_BG=p["light"], CHIP_BUTTON_HOVER_BG="#ececf0",
+            # 浅底上的金、蓝太亮：补录行和地图发放的筹码按钮的字换深一档，框线照旧
+            CHIP_BUTTON_TEXT={"蓝": "#0070b8", "金": "#b06400"},
+            # 「提示」卡片里的次要说明：调透明后在浅灰底上太淡，写成实色的灰
+            NOTICE_BODY_COLOR=p["dim"],
             TIP_BG=p["white"], TIP_TEXT=p["text"], TIP_BORDER=p["gray_line"], TIP_PADDING=6,
             TITLE_COLOR=p["white"], TITLE_WEIGHT=900, SUMMARY_COLOR="#d0d0d8", CARD_TITLE_COLOR=p["white"],
             MSG_COLOR=p["soft"], ASK_COLOR=p["yellow"],
@@ -211,9 +218,12 @@ def _classic_inverse() -> Skin:
             SHEET_EXTRA=overlay_extra, PANEL_DECOR="stripes", MARK_BG=p["gray"], MARK_PADDING="1px 12px",
             REROLL_BG=p["pink"], REROLL_TEXT=p["white"], NAME_FILL=True, NAME_TEXT=p["white"],
             BEST_MARGINS=(10, 7, 10, 9), WARN_BOX=f"background:{p['band']};border-radius:4px;padding:4px 10px",
-            WARN_BOX_TEXT=p["yellow"], GLOBAL_MARGINS=(12, 10, 12, 10),
+            WARN_BOX_TEXT=p["yellow"],
             # 「推荐」卡片头那段「芬妮 · 银行卡流」：卡片头一半压在白卡片上沿外面，写在黑色的底上（同警告色提示行的底）
-            BASIS_BOX=f"background:{p['band']};border-radius:4px;padding:1px 8px", BASIS_TEXT="#d0d0d8",
+            # 方案依据、收起时的摘要、已有筹码的个数：写在黑色平行四边形里（BOX_SLANT 画底），形状、高度同旁边的区域名标签
+            BASIS_BOX="margin-left:0px;padding:3px 16px 4px 16px", BASIS_TEXT="#d0d0d8",
+            SUMMARY_BOX=f"color:{p['white']};padding:3px 16px 4px 16px", BOX_SLANT=p["band"],
+            OWNED_COUNT_COLORS=(p["white"], "#d0d0d8"),  # 个数写在黑色胶囊里（样式表的 #ownedCount）
             SUMMARY_INK={p["text"]: p["white"], p["soft"]: "#d0d0d8", p["dim"]: p["locked"], p["caption"]: p["lime"],
                          p["green"]: p["lime"], p["warn"]: p["yellow"], p["disabled"]: "#6f6f78"},
             PANEL_MARGINS_LINE=(16, 7, 10, 7), NAME_STYLE="bar", BEST_BADGE="slant",
@@ -299,6 +309,7 @@ def _classic_inverse() -> Skin:
             TONE_BOX={"ok": (p["lime"], p["text"]), "warn": (p["band"], p["yellow"])},
         ),
         settings=dict(
+            LIST_BG=common.POPUP_BG,  # 下拉列表：浅底（默认的卡片底色是深色，压不住深色的字）
             # 高度：「识别」页含游戏平台、低配模式两行（连同间距约 109、106 像素），说明最长的「Windows 未允许」改为截取
             # 屏幕时也正好排下、不截掉页底的横幅；「只用大核」一行的说明有两行（处理器名称、打开以后的效果），连同间距
             # 约 108 像素

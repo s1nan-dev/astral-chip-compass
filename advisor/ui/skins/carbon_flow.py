@@ -70,7 +70,6 @@ def _carbon_flow() -> Skin:
         f"QLabel#summary {{ color: {p['text']}; font-weight: bold; }}\n"
         f"QLabel#laneTag {{ background: rgba(0,229,255,16); color: {p['cyan']}; border: 1px solid {p['cyan']}; "
         f"border-radius: 0px; padding: 0px 8px; font-weight: bold; }}\n"
-        f"QWidget#globalArea {{ background: rgba(17,22,32,210); border: 1px solid {p['edge']}; }}\n"
         f"QLabel#ask, QLabel#notice_warn, QLabel#notice_action {{ background: rgba(255,59,92,22); color: {p['red']}; "
         f"border: 1px solid {p['red']}; padding: 5px 10px; }}\n"
         f"QLabel#ownedCount {{ color: {p['cyan']}; font-size: 13pt; $NUMBER_FONT }}\n"
@@ -201,7 +200,7 @@ def _carbon_flow() -> Skin:
             SHEET_EXTRA=overlay_extra, PANEL_DECOR="carbon", MARK_BG=p["tile"], MARK_PADDING="1px 10px",
             REROLL_BG="rgba(255,43,214,30)", REROLL_TEXT=p["magenta"], NAME_FILL=False, NAME_TEXT=p["text"],
             WARN_BOX=f"background:rgba(255,59,92,22);border:1px solid {p['red']};padding:4px 10px",
-            WARN_BOX_TEXT=p["red"], GLOBAL_MARGINS=(12, 8, 12, 8), PANEL_MARGINS_LINE=(20, 8, 12, 8),
+            WARN_BOX_TEXT=p["red"], PANEL_MARGINS_LINE=(20, 8, 12, 8),
             MARK_KINDS={
                 "best": (p["cyan"], p["cyan_ink"], p["cyan"], 1.0),
                 "marked": ((0, 229, 255, 24), p["cyan"], p["cyan"], 1.0),

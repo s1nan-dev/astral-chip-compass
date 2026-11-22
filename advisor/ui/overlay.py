@@ -72,7 +72,7 @@ from .overlay_parts.factory import _alive, _plain, _set_tip
 from .overlay_parts.follow import LANE_CLOSE_TIP, Tray, WindowFollower, WindowStack
 from .overlay_parts.geometry import clamp_into, pair_position
 from .overlay_parts.hotkeys import HotkeyController
-from .overlay_parts.notices import NoticeModel, NoticeView
+from .overlay_parts.notices import CardPrompts, NoticeModel, NoticeView
 from .overlay_parts.ocr_check import OcrCheck, recorded_gain
 from .overlay_parts.owned_card import OwnedCard
 from .overlay_parts.records import Eggs, OfferLog
@@ -263,8 +263,9 @@ class Overlay(QWidget):
         self._add_seq = 0  # 每打开一次补录栏加一：「已有筹码」卡片收起着也自动展开
         # 显示
         self._expanded = False  # 用户点了标题栏的「全部展开」：全部显示
-        # 卡片折叠：_collapsed 是用户收起的卡片（存进 state.json）；_card_keys 是卡片里当前要显示的提示（有提示时
-        # 卡片自动展开）；_dismissed 是用户收起卡片时已在显示的提示，这些提示不再让卡片自动展开，换了新的才展开
+        # 卡片折叠：_collapsed 是用户收起的卡片（存进 state.json）；_card_keys 是卡片里当前要用户看、要用户操作的几行
+        # （地图选择行、补录栏、补录行、三选一的推荐等，有时卡片自动展开；提示行在「提示」卡片里，不算）；_dismissed 是用户
+        # 收起卡片时已在显示的那几行，它们不再让卡片自动展开，换了新的才展开
         saved = session.settings.collapsed_cards
         self._collapsed = {k for k in (saved if isinstance(saved, (list, tuple)) else ()) if k in CARD_KEYS}
         self._card_keys: dict[str, set] = {k: set() for k in CARD_KEYS}
@@ -378,14 +379,13 @@ class Overlay(QWidget):
             deliver=lambda ev, extra: self.router.deliver(ev, extra), card_width=self._card_width)
         self.owned = OwnedCard(
             owned_count=self.owned_count, chip_grid=self.chip_grid, mini_box=self.mini_box,
-            missed_label=self.missed_label, missed_buttons=self.missed_buttons,
             db=db, session=session, lock=lock, live=self.live_state, say=self.message.say, flash=self._flash,
             waiting_text=self._waiting_text, trace_user=self._trace_user, refresh=self.refresh,
             card_width=self._card_width, remove_owned=self.remove_owned, set_pick=self.advice.set_pick,
             supplement=self.offers.supplement)
         self.scheme = SchemeCard(
             hero_box=self.hero_box, scheme_box=self.scheme_box, map_label=self.map_prompt, map_buttons=self.map_buttons,
-            map_dismiss=self.map_dismiss, granted_label=self.granted_label, granted_buttons=self.granted_buttons,
+            granted_label=self.granted_label, granted_buttons=self.granted_buttons,
             db=db, session=session, lock=lock, store=store, live=self.live_state, trace_user=self._trace_user,
             refresh=self.refresh, card_width=self._card_width, choose_map=self._choose_map, add_owned=self.add_owned,
             manual=lambda: self.manual, usable_key=self.hotkeys.usable_key)
@@ -420,7 +420,7 @@ class Overlay(QWidget):
             blocked=self._assets_blocked, plan=lambda: self.follower.plan,
             stopped=lambda: self.notice_model.recog_stopped)
         self.notices = NoticeView(
-            model=self.notice_model, boxes=self._notice_boxes, session=session, lock=lock, store=store,
+            model=self.notice_model, box=self.global_notice_box, session=session, lock=lock, store=store,
             services=services, live=self.live_state, calibrate_games=int(watch.get("calibrate_games", 20)),
             capture_state=lambda: self._capture, capture_method=lambda: self.capture_method,
             trace_user=self._trace_user, refresh=self.refresh, unlocked=self.records.unlocked_rows,
@@ -431,10 +431,12 @@ class Overlay(QWidget):
                      "switch_hant": self.switch_to_hant, "dismiss_ocr_check": lambda: self.ocr_check.dismiss(),
                      "ocr_check_accept": lambda: self.ocr_check.accept(),
                      "ocr_check_decline": lambda: self.ocr_check.decline(),
+                     "dismiss_map_hint": lambda: self.scheme.dismiss_map_hint(),
+                     "pick_missed": lambda name: self.owned.pick_missed(name),
                      "open_about": lambda: self.dialogs.show_about(ABOUT_DISCLAIMER), **self._update_actions()},
             hotkey_problem=lambda: self.hotkeys.problem(), update_notices=self._update_notices,
             notice_width=self._notice_width, chip_name=lambda name: names.chip_in(db, name),
-            playing=self._playing, ocr_note=lambda: self.ocr_check.notice())
+            playing=self._playing, ocr_note=lambda: self.ocr_check.notice(), prompts=self._card_prompts)
         # 导出诊断、首次下载（background.py）
         self.background = Background(
             db=db, session=session, lock=lock, services=services, live=self.live_state, say=self.message.say,
@@ -717,10 +719,15 @@ class Overlay(QWidget):
         margins = self.recog_card.layout().contentsMargins()
         return self._content_width() - margins.left() - margins.right() - 2
 
+    def _card_prompts(self, view) -> CardPrompts:
+        """原来卡片自己画的三处，这一轮排成的提示行（排进「提示」卡片，notices.CardPrompts）：提示打开任务栏（按全部展开
+        与否定出现的时机）、请选角色、补录行。要在地图选择行、补录行这一轮的状态定好以后取（_refresh_now 里的先后）。"""
+        return CardPrompts(opentasks=self.scheme.opentasks_row(self._expanded), hero=self.advice.hero_row(),
+                           missed=self.owned.missed_row(), tips={"opentasks": self.scheme.opentasks_tip()})
+
     def _notice_width(self) -> int:
-        """标题栏下方全局提示里一行内容的宽度（再减去这一块的内边距，皮肤的 GLOBAL_MARGINS）。"""
-        left, _, right, _ = O.GLOBAL_MARGINS
-        return self._content_width() - left - right
+        """「提示」卡片里一行内容的宽度（和别的卡片一样，_card_width）。"""
+        return self._card_width()
 
     # ------------------------------------------------------------ 软件内更新（overlay_parts/updates.py 的 UpdateControl）
 
@@ -958,10 +965,11 @@ class Overlay(QWidget):
 
         # 状态胶囊：数值自带单位的不写主体，其余写明主体；待识别的标橙色
         base = self._guarded("识别状态", self.status.refresh, view, view.map_ask) or []
-        self._guarded("提示行", self.notices.update, view)
         self._guarded("地图选择行", self.scheme.show_map_row, view)
         self._guarded("地图发放的筹码", self.scheme.show_granted, view)
         self._guarded("补录行", self.owned.show_missed, view.missed_offer is not None)
+        # 提示行排在地图选择行、补录行之后：提示打开任务栏、补录行这两条照它们这一轮的状态排进「提示」卡片
+        self._guarded("提示行", self.notices.update, view)
         self._guarded("已有筹码", self.owned.show, view)
         self._guarded("已选和未选择首推的原因", self.advice.show_closed)
         self._guarded("方案下拉框", self.scheme.show_schemes, view)
@@ -1090,6 +1098,8 @@ class Overlay(QWidget):
             spacing = card.head.spacing()
             avail = self._card_width() - sum(w.sizeHint().width() + spacing for w in others if not w.isHidden())
             text = rich(_elide_segs(summary, card.summary.fontMetrics(), max(avail, 40)))
+            if O.SUMMARY_BOX:  # 写在深色胶囊里：颜色换成深色底上用的
+                text = theme.ink_html(text, table=O.SUMMARY_INK or None)
         card.setVisible(visible)
         card.set_open(is_open, text)
 
@@ -1243,7 +1253,7 @@ class Overlay(QWidget):
 
     def _expire_newgame(self, seq: int) -> None:
         """计时到点：只有还是同一次判定（这期间又判了一次新一局、点了撤销、记下了第一个筹码，序号或提示都对不上）时
-        才收起。收起时清掉 newgame_why，对局中途判定的两行（newgame、newgame_owned）随之一起去掉。一次判定在计时期间
+        才收起。收起时清掉 newgame_why，那一行（newgame）随之去掉。一次判定在计时期间
         不会换种类：newgame_cause 只在判定时写，换种类一定是又判了一次，那会另加序号、另挂计时，这一次的到点不再收。"""
         notices = self.notice_model
         if seq == self._newgame_seq and notices.newgame_why is not None:
@@ -1276,10 +1286,15 @@ class Overlay(QWidget):
     def fit_height(self) -> None:
         """按窗口的固定宽度重算高度，再按固定的角重新定位（内容变多变少时那个角不动）。
 
-        已有筹码多、悬浮窗总高度超出所在屏幕的可用高度时，「已有筹码」卡片的主体改为在卡片内滚动，其余部分不动。
+        悬浮窗总高度超出所在屏幕的可用高度时，先让「已有筹码」卡片的主体在卡片内滚动；压到最矮（留出图标格子）还超出时，
+        卡片区（cards_scroll）整体在窗口里上下滚动，窗口最高到屏幕的可用高度，标题栏和底栏照旧露在外面。
         不用 adjustSize()：它按各部件的「理想宽度」（比窗口宽）算自动换行，长理由的最后一行会被截掉。
         """
         full = self._fit_owned_scroll(None)
+        scroll = self.cards_scroll
+        # 五张卡片都藏着（一行显示）时滚动区也藏起来，不在标题栏和底栏之间多留一段间距
+        scroll.setVisible(any(not w.isHidden() for w in (self.global_area, *self.cards.values())))
+        scroll.set_cap(0)
         # 带样式表边框的 QFrame 按宽度算高度时偶尔少算 1 像素（最后一行会被截掉一线），留 2 像素余量
         height = self._layout_height() + 2
         limit = self._screen_height()
@@ -1288,6 +1303,11 @@ class Overlay(QWidget):
             if target < full:
                 self._fit_owned_scroll(target)
                 height = self._layout_height() + 2
+        if limit and height > limit and not scroll.isHidden():
+            # 「已有筹码」压到最矮还是比屏幕高：卡片区整体在窗口里上下滚动，窗口最高到屏幕的可用高度
+            natural = scroll.content_height(scroll.width() or self._card_width())
+            scroll.set_cap(max(60, natural - (height - limit)))
+            height = self._layout_height() + 2
         self.resize(self.width(), max(height, self.minimumSizeHint().height()))
         self.follower.reposition()
 
@@ -1621,12 +1641,17 @@ class Overlay(QWidget):
         self._schemes_changed()
 
     def _hero_restore_clicked(self) -> None:
-        """「恢复自动识别」：把角色交回自动识别。"""
-        with self.lock:
+        """「恢复自动识别」：把角色交回自动识别。三选一显示着时按同一个画面立即重算（同 _hero_changed）：不然「识别」卡片已经
+        回到自动识别的角色，「推荐」卡片还是手动选的那个角色的推荐，要等下一帧（手动模式要等下次按热键）才对上。"""
+        ev = None
+        with self.lock, self.router.taking() as extra:
             if self.session.game.hero_locked:
                 self.session.release_hero()
+                if self.live_state.on:
+                    ev = self.session.recompute()
         self._trace_user("hero_restore")
-        self.refresh()
+        if not self.router.deliver(ev, extra):
+            self.refresh()
 
     def _map_changed(self, name: str) -> None:
         """地图下拉框里选了一项（MAP_AUTO 为交回自动识别）。难度胶囊的写法随地图变了时 Session 放进队列的 status 当场交出。
@@ -2033,14 +2058,23 @@ class Overlay(QWidget):
         self.add_box.setFocus()
 
     def close_add(self, refresh: bool = True) -> None:
+        """收起补录栏。补录栏里输错名字的那句提示（_add_confirm）跟着收起：补录栏都关了，不留一句要照着改的话。"""
         self.add_box.clearFocus()
         self._add_open = False
         self.add_row.hide()
+        if self._add_error and self.message.text == self._add_error:
+            self.message.say("" if self.live_state.on else self._waiting_text(), "advice")
+        self._add_error = ""
         if refresh:
             self.refresh()
 
+    _add_error = ""  # 补录栏里输错名字时显示的那句提示（收起补录栏时一起收起）
+
     def _add_confirm(self) -> None:
         text = self.add_box.currentText().strip()
+        if not text:  # 什么都没填：不出「「」不在筹码表中」这种空话，等用户输入
+            self.add_box.setFocus()
+            return
         # 从列表里选的（显示的是繁体界面的名字）：用 itemData 里的简体名；自己输入的按文字另行匹配
         selected = self.add_box.currentData()
         index = self.add_box.currentIndex()
@@ -2048,7 +2082,8 @@ class Overlay(QWidget):
         try:
             name = self.db.resolve_chip(typed).name
         except KeyError:
-            self.set_status(lang.t(f"「{text}」不在筹码表中，请输入完整的筹码名或从列表中选择"), "owned")
+            self._add_error = lang.t(f"「{text}」不在筹码表中，请输入完整的筹码名或从列表中选择")
+            self.set_status(self._add_error, "owned")
             return
         self.close_add(refresh=False)
         self.add_owned(name)

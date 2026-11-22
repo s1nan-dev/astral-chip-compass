@@ -303,10 +303,10 @@ class TextsTest(unittest.TestCase):
                          "「重生人偶」只出现在地图「幽魂暗巷」的筹码三选一中，其他地图不会出现。")
         self.assertEqual(
             E.POOL_RARE_TIP.format(chip="拳击手套-高级", classes="「攻击」", hero="米米", weight=15, percent=32),
-            "「拳击手套-高级」只在「攻击」职业筹码池中，米米的「攻击」职业分值是标准值 15，较难出现：一局里见到它的机会约 32%。")
+            "「拳击手套-高级」只在「攻击」筹码池中，米米的「攻击」分值是标准值 15，较难出现：一局里见到它的机会约 32%。")
         self.assertEqual(
             E.POOL_RARE_TIP_MULTI.format(chip="X", classes="「攻击」「生存」", hero="米米", count="两", weight=15, percent=34),
-            "「X」只在「攻击」「生存」职业筹码池中，米米这两项职业分值都是标准值 15，较难出现：一局里见到它的机会约 34%。")
+            "「X」只在「攻击」「生存」筹码池中，米米这两项分值都是标准值 15，较难出现：一局里见到它的机会约 34%。")
 
     def test_bottom_texts(self):
         self.assertEqual(E.HINT_SERIES.format(low="手持风扇-小", high="手持风扇-大"),
@@ -2302,16 +2302,16 @@ class PoolNotesTest(unittest.TestCase):
             self.assertTrue(all(self.db.chips[n].rarity == "金" for n in self.rare(hero)), hero)
 
     def test_hover_texts(self):
-        # 一局里见到它的机会含刷新后的三选一（刷新后的最左格同样按职业分值抽、职业池按筹码的职业标签建，职业分值是标准值的
+        # 一局里见到它的机会含刷新后的三选一（刷新后的最左格同样按职业分值抽、职业池按筹码的职业标签建，分值是标准值的
         # 池出得少）
         mimi = self.notes["米米"]
         self.assertEqual(mimi["拳击手套-高级"].label, "较难出现")
         self.assertEqual(mimi["拳击手套-高级"].tip,
-                         "「拳击手套-高级」只在「攻击」职业筹码池中，米米的「攻击」职业分值是标准值 15，较难出现：一局里见到它的机会约 26%。")
+                         "「拳击手套-高级」只在「攻击」筹码池中，米米的「攻击」分值是标准值 15，较难出现：一局里见到它的机会约 26%。")
         self.assertEqual(mimi["夹心饼干-美味"].tip,
-                         "「夹心饼干-美味」只在「攻击」「生存」职业筹码池中，米米这两项职业分值都是标准值 15，较难出现：一局里见到它的机会约 31%。")
+                         "「夹心饼干-美味」只在「攻击」「生存」筹码池中，米米这两项分值都是标准值 15，较难出现：一局里见到它的机会约 31%。")
         self.assertEqual(self.notes["芬妮"]["探天卫星"].tip,
-                         "「探天卫星」只在「卡牌」职业筹码池中，芬妮的「卡牌」职业分值是标准值 15，较难出现：一局里见到它的机会约 34%。")
+                         "「探天卫星」只在「卡牌」筹码池中，芬妮的「卡牌」分值是标准值 15，较难出现：一局里见到它的机会约 34%。")
         self.assertEqual(self.notes["芬妮"]["重生人偶"].tip, "「重生人偶」只出现在地图「幽魂暗巷」的筹码三选一中，其他地图不会出现。")
         self.assertEqual(self.notes["芬妮"]["运动手环"].tip,
                          "「运动手环」只出现在地图「海选赛运动场」「淘汰赛运动场」「决赛大赛场」的筹码三选一中，其他地图不会出现。")

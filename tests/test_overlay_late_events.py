@@ -13,6 +13,8 @@ from __future__ import annotations
 import dataclasses
 import threading
 import unittest
+
+from tests.support.overlay_cases import notice_block
 from types import SimpleNamespace
 
 from PySide6.QtWidgets import QPushButton
@@ -258,7 +260,7 @@ class LateCloseTest(LateBase):
 
     def click_missed(self, name: str) -> None:
         """点补录行里的筹码按钮。"""
-        button = next(b for b in self.w.missed.findChildren(QPushButton) if b.text() == name and not b.isHidden())
+        button = next(b for b in notice_block(self.w, "missed").findChildren(QPushButton) if b.text() == name and not b.isHidden())
         button.click()
 
 

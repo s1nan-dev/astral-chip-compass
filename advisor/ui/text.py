@@ -47,7 +47,7 @@ def __getattr__(name: str):
 TAG_LABEL = "标签分"  # 引擎里「筹码标签与角色职业相符」那一项（Part.label，匹配用的键）
 REROLL_LABEL = "刷新"  # engine.REROLL 在界面上的叫法，与游戏按钮「刷新 ×N」一致（代码内部名不改）
 GENERAL_SCHOOL = "通用"  # 不属于任何流派的筹码，在筹码小卡片的流派标签上写「通用」
-UNREADABLE_HINT = "请点击标为橙色的筹码名按钮进行改正。三个候选筹码全部识别后显示推荐。"
+UNREADABLE_HINT = "请点击写着「无法识别」的筹码名按钮进行改正。三个候选筹码全部识别后显示推荐。"
 FIX_HINT = "识别有误时，请点击对应的筹码名按钮进行改正"
 PLUS, MINUS, INFO = "plus", "minus", "info"  # 理由标签的色调：加分绿色，扣分橙色，只作说明的灰色
 # 自己的方案里「选择后无法获得……」的标签（Loss.warn 为真时）：橙色，和扣分同一种颜色（widgets.TONES 的 warn），不另起色号

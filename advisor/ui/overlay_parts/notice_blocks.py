@@ -1,13 +1,15 @@
-"""提示行（标题栏下方的信息栏和各卡片的提示区）的排法：每条提示一个淡底色的小块，块与块之间留间隔。
+"""提示行（标题栏下方的「提示」卡片）的排法：每条提示一个淡底色的小块，块与块之间留间隔。
 
-- 首句加粗当标题（split_head）；其余正文另起一行、字色淡一点，一句一行（sentences）。
+- 首句加粗当标题（split_head）；其余正文另起一行、字色淡一点，一句一行（sentences）。在逗号处断开的标题，显示时去掉
+  末尾那个「，」（head_shown：标题和正文已经分成两行，句中的逗号留在行尾不好看）；以冒号结尾的照写（冒号引出下文）。
 - 按钮统一排在块的右下角：一行放得下（NoticeView.notice_width）就排成一行，否则每行两个（factory._fill_grid）；
   EQUAL_WIDTH_NOTICES 里的两个按钮一样宽。
 - 要紧的（warn、action 级，⚠ 橙色字）块左边一道橙色竖条，ok 级一道绿色竖条（样式表的 QFrame[noticeBlock="true"]）。
 - 网址换成短的文字链接（link_marks）：「说法：网址」的链接文字是说法，单独的网址照写；官网核对页的域名
   （wording.VERIFY_SHOWN）照写域名，让人认得出、也能自己输入。点了照样交给 NoticeView.open_link，鼠标停上去显示地址。
   「免费软件」声明那一条的「关于」照旧是打开「关于」窗口的链接（ABOUT_LINK）。
-- 提示的文字一个字不改：只拆段、换行、加粗，网址换成链接。
+- 提示的文字不改：只拆段、换行、加粗，网址换成链接，标题末尾的「，」显示时不写，「免费软件」声明两个链接中间的「；」显示成
+  「 · 」。
 
 块的部件名是 notice-<键>（NoticeView.buttons 按它找按钮），标题的部件名是 notice_<级别>（皮肤的样式表按它给颜色）。
 """
@@ -22,7 +24,8 @@ from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QToolTip, QVBoxLayout
 
 from .. import lang
 from ..text import KEEP_JOINER, keep_words, link_style
-from .factory import _button, _equal_width, _fill_grid, _grid, _set_tip
+from ..theme import COMMON as C
+from .factory import _button, _chip_button, _equal_width, _fill_grid, _grid, _own_style, _set_tip
 from .wording import ABOUT_LINK, FREE_NOTICE_LINK, VERIFY_SHOWN, VERIFY_URL
 
 # 两个按钮一样宽的提示行：按钮只有一个字时（〔换〕〔不换〕〔是〕〔否〕）也要好点，宽度见 factory._equal_width
@@ -34,6 +37,8 @@ HEAD_MIN = 6  # 断开处之前至少这么多字（不在「⚠ 有 2」这样�
 TAIL_KEEP = 4  # 每行最后这么多个字连在一起：一句折行时最后一行不只剩一两个字（例如只剩「来。」）
 BLOCK_MARGINS = (9, 6, 8, 7)  # 块的内边距（左、上、右、下）；左边另有 3px 竖条
 BLOCK_GAP = 7  # 块与块之间的间隔
+# 「免费软件」声明（version.FREE_NOTICE）里两个链接之间的分隔：显示时换成中点（build_block）
+FREE_LINK_SEP, FREE_LINK_SEP_SHOWN = " ；", " · "
 _URL_LABELED = re.compile(r"([^\s。；，：、（）「」]+)：(https?://[^\s<>「」（）()，。；]+)[ 　]?")
 _URL = re.compile(r"(https?://[^\s<>「」（）()，。；]+)[ 　]?")
 
@@ -142,8 +147,14 @@ def rich_line(text: str, about: bool = False) -> str:
     return "".join(out)
 
 
+def head_shown(head: str) -> str:
+    """标题显示的样子：在逗号处断开的标题（split_head）去掉末尾那个「，」（正文照旧另起一行）；以冒号、句号等结尾的不动。
+    只管显示，提示的原文不变。"""
+    return head[:-1] if head.endswith("，") else head
+
+
 def head_html(head: str, about: bool = False) -> str:
-    return f"<b>{rich_line(head, about)}</b>"
+    return f"<b>{rich_line(head_shown(head), about)}</b>"
 
 
 def body_html(body: str, about: bool = False) -> str:
@@ -172,7 +183,8 @@ def _label(rich: str, name: str, view, links: bool) -> QLabel:
 def build_block(view, name: str, text: str, level: str, btns, tip: str):
     """一条提示的小块：(块, 按钮的网格或 None, 按钮)。text 已转成界面语言；tip 是悬停说明（空串为没有）。"""
     about = name == "free"
-    head, body = split_head(text)
+    # 「免费软件」声明里两个链接中间的「；」显示成「 · 」（链接做成了带底色的文字，分号夹在两块中间不好认）；原文不变
+    head, body = split_head(text.replace(FREE_LINK_SEP, FREE_LINK_SEP_SHOWN, 1) if about else text)
     frame = QFrame()
     frame.setObjectName(f"notice-{name}")
     frame.setProperty("noticeBlock", True)
@@ -194,7 +206,17 @@ def build_block(view, name: str, text: str, level: str, btns, tip: str):
             _set_tip(label, tip)
     buttons = []
     for btn_text, accent, action, btn_tip in btns:
-        btn = _button(lang.t(btn_text), accent=accent, tip=lang.t(btn_tip or btn_text))
+        if action is None:
+            # 不是按钮，只写一段字（补录行里无法识别的候选：「「xx」无法识别」），和按钮排在一起
+            label = QLabel(lang.t(btn_text))
+            label.setTextInteractionFlags(Qt.NoTextInteraction)
+            _own_style(label, f"color:{C.CAPTION_COLOR}")
+            buttons.append(label)
+            continue
+        if accent.startswith("#"):  # 字按这个颜色写（补录行的筹码按钮：稀有度颜色），按钮的底见 factory._chip_button
+            btn = _chip_button(lang.t(btn_text), accent, tip=lang.t(btn_tip or btn_text), deep=True)
+        else:
+            btn = _button(lang.t(btn_text), accent=accent, tip=lang.t(btn_tip or btn_text))
         btn.clicked.connect(lambda _=False, cb=view.action(action): cb())
         buttons.append(btn)
     grid = None
@@ -209,14 +231,14 @@ def build_block(view, name: str, text: str, level: str, btns, tip: str):
 
 
 def render(view, rows, tips: dict, shown_tip) -> None:
-    """把提示行排进各块（view 是 NoticeView：boxes、model、action、open_link、notice_width）。rows 的文字已转成界面语言；
+    """把提示行按先后排进「提示」卡片（view 是 NoticeView：box、action、open_link、notice_width）。rows 的文字已转成界面语言；
     tips 为各行的悬停说明，shown_tip(说明) 转成界面语言（路径原样）。按钮放进悬浮窗以后再量（按悬浮窗的样式表）。"""
     width = view.notice_width() if view.notice_width is not None else 0
     inner = max(width - BLOCK_MARGINS[0] - BLOCK_MARGINS[2] - 3, 0)
     for name, text, level, btns in rows:
         tip = shown_tip(tips[name]) if tips.get(name) else ""
         frame, grid, buttons = build_block(view, name, text, level, btns, tip)
-        view.boxes[view.model.area(name)].addWidget(frame)
+        view.box.addWidget(frame)
         if name in EQUAL_WIDTH_NOTICES and len(buttons) > 1:
             _equal_width(buttons)
         if grid is not None:

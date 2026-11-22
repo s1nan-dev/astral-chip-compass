@@ -111,6 +111,17 @@ def notice_titles(root, text: str) -> list[QLabel]:
     return [next(lb for lb in b.findChildren(QLabel) if lb.objectName().startswith("notice_")) for b in blocks]
 
 
+def notice_block(window, key: str) -> QWidget:
+    """「提示」卡片里键为 key 的那一块（notice-<key>，显示着的）；没有时给一个空部件（里面找不到按钮）。补录行（missed）、
+    提示打开任务栏（opentasks）、请选角色（hero）也是这样的一块。"""
+    box = window.global_notice_box
+    for i in range(box.count()):
+        block = box.itemAt(i).widget()
+        if block is not None and block.objectName() == f"notice-{key}" and not block.isHidden():
+            return block
+    return QWidget()
+
+
 def buttons(widget) -> list[QPushButton]:
     """widget 里正在显示的按钮（刚换掉、等待删除的不算）。"""
     return [b for b in widget.findChildren(QPushButton) if not b.isHidden()]

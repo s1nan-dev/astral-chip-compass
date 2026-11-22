@@ -19,7 +19,7 @@ from advisor.pool import State  # noqa: E402
 from advisor.session import Event, GAME_FIELDS  # noqa: E402
 from advisor.ui import lang, theme
 from advisor.ui.overlay import Overlay
-from advisor.ui.overlay_parts.wording import MAP_AUTO, LIVE_TIP, CARD_KEYS, RUNNING_TIP, CAPTURE_SCREEN_TIP, PAUSED_MIN_TIP, EXPAND_ALL_TIP, CAPTURE_NOTICE, SETTINGS_TIP, SETTINGS_TIP_HANT, CAPTURE_TIP, MANUAL_SWITCHED, PAUSED_TIP
+from advisor.ui.overlay_parts.wording import OPEN_TASKS, MAP_AUTO, LIVE_TIP, CARD_KEYS, RUNNING_TIP, CAPTURE_SCREEN_TIP, PAUSED_MIN_TIP, EXPAND_ALL_TIP, CAPTURE_NOTICE, SETTINGS_TIP, SETTINGS_TIP_HANT, CAPTURE_TIP, MANUAL_SWITCHED, PAUSED_TIP
 from advisor.ui.overlay_parts.app import UiSettings, OverlaySession
 from advisor.ui.hotkey import startup_busy_text  # noqa: E402
 from advisor.ui.services import Services  # noqa: E402
@@ -58,20 +58,48 @@ class CardLayoutTest(unittest.TestCase):
         APP.processEvents()
         cards = [w.recog_card, w.scheme_card, w.advice_card, w.owned_card]
         self.assertEqual([c.key for c in cards], list(CARD_KEYS))
-        tops = [c.geometry().top() for c in cards]
+
+        def geo(widget):  # 卡片放在卡片区的滚动区里：一律换成面板上的坐标再比
+            return QRect(widget.mapTo(w.panel, QPoint(0, 0)), widget.size())
+
+        tops = [geo(c).top() for c in cards]
         self.assertEqual(tops, sorted(tops))
         self.assertLess(w.head.geometry().bottom(), tops[0])
-        self.assertGreater(w.toolbar.geometry().top(), w.owned_card.geometry().bottom())
-        lefts = {c.geometry().left() for c in cards} | {w.head.geometry().left(), w.toolbar.geometry().left()}
-        rights = {c.geometry().right() for c in cards} | {w.head.geometry().right(), w.toolbar.geometry().right()}
+        self.assertGreater(w.toolbar.geometry().top(), geo(w.owned_card).bottom())
+        lefts = {geo(c).left() for c in cards} | {w.head.geometry().left(), w.toolbar.geometry().left()}
+        rights = {geo(c).right() for c in cards} | {w.head.geometry().right(), w.toolbar.geometry().right()}
         self.assertEqual(len(lefts), 1, lefts)
         self.assertEqual(len(rights), 1, rights)
         for upper, lower in zip(cards, cards[1:]):
-            self.assertEqual(lower.geometry().top() - upper.geometry().bottom() - 1, 8, lower.key)
+            self.assertEqual(geo(lower).top() - geo(upper).bottom() - 1, 8, lower.key)
         for card in cards:
             self.assertEqual(card.title.objectName(), "cardTitle")  # 区域名：暗色小字
             self.assertIn(card.toggle.text(), ("▾", "▸"))  # 折叠按钮
             self.assertIsInstance(card.toggle, QPushButton)  # 有框线的按钮
+
+    def test_cards_scroll_when_taller_than_screen(self):
+        """压过「已有筹码」卡片还比屏幕高时，卡片区整体在窗口里滚动，窗口不超过屏幕的可用高度，标题栏和底栏照旧显示；
+        屏幕够高时不滚动（上限为 0）。"""
+        w = self.window
+        self.session.set_owned(["普通瞄具", "标靶"])
+        w.handle(self.session.on_frame(frame(["标靶", "大背包", "缓冲盾牌"])))
+        w.set_expanded(True)
+        w.show()
+        APP.processEvents()
+        w.fit_height()
+        natural = w.height()
+        self.assertEqual(w.cards_scroll.cap, 0)
+        limit = natural - 150
+        with mock.patch.object(w, "_screen_height", return_value=limit):
+            w.fit_height()
+            APP.processEvents()
+            self.assertLessEqual(w.height(), limit)
+            self.assertGreater(w.cards_scroll.cap, 0)
+            self.assertFalse(w.toolbar.isHidden())
+            self.assertGreater(w.cards_scroll.verticalScrollBar().maximum(), 0)
+        w.fit_height()
+        self.assertEqual(w.cards_scroll.cap, 0)
+        self.assertEqual(w.height(), natural)
 
     def test_card_collapse_saved(self):
         """每张卡片的折叠按钮（▾ / ▸）：收起后只剩卡片头和摘要；收起状态存进 state.json（界面偏好，不属于对局状态），
@@ -154,19 +182,24 @@ class CardLayoutTest(unittest.TestCase):
         self.assertEqual(self.session.settings.collapsed_cards, ["advice"])
 
     def test_prompt_expands_collapsed_card(self):
-        """卡片里出现需要操作的提示（补录、请选地图）时自动展开；用户收起后这条提示不再让它展开，新的提示才展开。"""
+        """卡片里出现要用户操作的那几行（补录栏、补录行、请选地图）时自动展开；用户收起后这几行不再让它展开，新的才展开。
+        提示行在「提示」卡片里，不让卡片展开（星数涨了请补录的那一条出现时「已有筹码」卡片照旧收起）。"""
         w = self.window
         w.set_expanded(True)
         w.owned_card.toggle.click()
         self.assertFalse(w.card_open("owned"))
         self.session.game.unrecorded = 1
         w.handle(Event("unrecorded_gain", why="星数由 1 星增加为 2 星，未检测到对应的筹码三选一界面", count=1))
+        self.assertFalse(w.card_open("owned"))
+        self.assertIn("gain", w.notice_model.texts())
+        self.assertFalse(w.global_area.isHidden())
+        w.open_add()  # 点了补录：补录栏是新的一行，卡片展开
         self.assertTrue(w.card_open("owned"))
-        w.owned_card.toggle.click()  # 用户收起
+        w.owned_card.toggle.click()  # 用户收起（补录栏随之关上）
         self.assertFalse(w.card_open("owned"))
         w.refresh()
         self.assertFalse(w.card_open("owned"))
-        w.open_add()  # 点了补录：新的提示
+        w.open_add()  # 又点了补录：新的一行
         self.assertTrue(w.card_open("owned"))
         self.assertFalse(w.add_row.isHidden())
         w.recog_card.toggle.click()
@@ -388,7 +421,7 @@ class TipStyleTest(unittest.TestCase):
 
     def test_tips_not_styled_like_text(self):
         w, s = self.window, self.session
-        s.settings.round = 3  # 进入对局、地图待识别：「识别」卡片里有打开任务栏的提示
+        s.settings.round = 3  # 进入对局、地图待识别：「提示」卡片里有打开任务栏的提示
         st = State(hero="美咲", star=1, round=3, rerolls=2)
         ev = Event("advice", advice=advise(self.db, st, ["摩托头盔-中级", "摩托头盔-高级", "速度轮滑-中级"]), state=st)
         w.handle(ev)
@@ -409,7 +442,7 @@ class TipStyleTest(unittest.TestCase):
             "首推推荐度": percent,
             "被X上位替代": next(lb for lb in labels if lb.text() == "被金色上位替代"),
             "对比行": next(lb for lb in labels if lb.text() == "比紫色（摩托头盔-中级）多防御力 +1"),
-            "地图选择提示": w.map_prompt,
+            "打开任务栏的提示": notice_titles(w.global_notices, OPEN_TASKS)[0],  # 在「提示」卡片里
             "退出按钮": w.close_btn,
         })
         self.assert_own_sheets_scoped()
@@ -517,7 +550,7 @@ class TipWidthTest(unittest.TestCase):
         # 点名的两处：推荐卡片的 LIVE_TIP、截取方式提示的悬停说明（两段）
         self.assertEqual(w.body.toolTip(), tip_paragraphs_html(LIVE_TIP))
         self.assertEqual(tip_text(w.body.toolTip()), LIVE_TIP)
-        notice = notice_titles(w.recog_top, CAPTURE_NOTICE["failed"])[0]
+        notice = notice_titles(w.global_notices, CAPTURE_NOTICE["failed"])[0]
         self.assertEqual(tip_text(notice.toolTip()), CAPTURE_TIP["failed"].format(
             code="0x887A0005", err_file=ERR_SHOWN_DEV) + "\n" + CAPTURE_SCREEN_TIP)
         for tip in (RUNNING_TIP, PAUSED_MIN_TIP, PAUSED_TIP):

@@ -118,10 +118,10 @@ STALE_REMOVE = "移除"
 POOL_MAP = "仅限地图"
 POOL_RARE = "较难出现"
 POOL_MAP_TIP = "「{chip}」只出现在地图{maps}的筹码三选一中，其他地图不会出现。"
-POOL_RARE_TIP = "「{chip}」只在{classes}职业筹码池中，{hero}的{classes}职业分值是标准值 {weight}，较难出现：一局里见到它的机会约 {percent}%。"
+POOL_RARE_TIP = "「{chip}」只在{classes}筹码池中，{hero}的{classes}分值是标准值 {weight}，较难出现：一局里见到它的机会约 {percent}%。"
 # 筹码在两个（或更多）这样的职业池里时；count 为 COUNT_WORD 里的写法
 POOL_RARE_TIP_MULTI = (
-    "「{chip}」只在{classes}职业筹码池中，{hero}这{count}项职业分值都是标准值 {weight}，较难出现：一局里见到它的机会约 {percent}%。"
+    "「{chip}」只在{classes}筹码池中，{hero}这{count}项分值都是标准值 {weight}，较难出现：一局里见到它的机会约 {percent}%。"
 )
 COUNT_WORD = {2: "两", 3: "三", 4: "四"}
 QUOTED = "「{}」"  # 地图名、职业名、流派名逐个加引号连写：「攻击」「生存」

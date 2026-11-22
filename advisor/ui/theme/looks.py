@@ -232,7 +232,6 @@ class OverlayLook:
     NAME_TEXT: str = ""
     BEST_MARGINS: tuple = ()  # 首推那一块另有底色和框线（样式表里 #bestBlock 的规则）时它的内边距；空为不另画
     WARN_BOX: str = ""  # 写成警告色的提示行另加的样子（样式表写法，例如深色底和圆角），字换成 Common.INK 里对应的颜色
-    GLOBAL_MARGINS: tuple = (0, 0, 0, 0)  # 标题栏下方全局提示一块的内边距
     SUMMARY_INK: Mapping = field(default_factory=dict)  # 一行显示的摘要（写在面板上）另用的换色表；空为照 Common.INK
     WARN_BOX_TEXT: str = ""  # 写成警告色的提示行（WARN_BOX）里字的颜色；空为照 Common.INK 换
     PANEL_MARGINS_LINE: tuple = ()  # 一行显示时面板的内边距；空为同 PANEL_MARGINS
@@ -277,6 +276,33 @@ class OverlayLook:
     # 空为直接写在卡片头上（暗色小字，Common.DIM_COLOR）
     BASIS_BOX: str = ""
     BASIS_TEXT: str = ""
+    # 写着筹码名、字按稀有度颜色写的按钮（补录行、地图发放的筹码，factory._chip_button）：按钮本身铺满颜色的皮肤里稀有度颜色的
+    # 字看不清，按钮底换成 CHIP_BUTTON_BG（卡片的底色）、字和 2 像素框线用稀有度颜色，鼠标移上去换成 CHIP_BUTTON_HOVER_BG；
+    # 空为照普通按钮、只改字色
+    CHIP_BUTTON_BG: str = ""
+    CHIP_BUTTON_HOVER_BG: str = ""
+    # 上面那种按钮的内边距（样式表写法）：2 像素的框比普通按钮的框厚时，少掉的内边距让它和同一行的按钮一样高；空为照普通按钮
+    CHIP_BUTTON_PADDING: str = ""
+    # 补录行、地图发放的筹码按钮的字：稀有度 →（换成）这个颜色。按钮底是浅色（CHIP_BUTTON_BG）、稀有度颜色太亮的皮肤里字换
+    # 深一档，框线照旧用稀有度颜色；没写的稀有度照 Common.RARITY_COLOR。factory._chip_button 的 deep 打开时才用
+    CHIP_BUTTON_TEXT: Mapping = field(default_factory=dict)
+    # 写在浅色卡片上的筹码名（「已有筹码」的筹码小卡片、角色待识别时「推荐」卡片里的候选筹码那一行）：稀有度 → 字的颜色；
+    # 没写的稀有度照 Common.RARITY_COLOR。图标的稀有度色环、整块铺稀有度颜色的名字按钮不用它
+    RARITY_TEXT: Mapping = field(default_factory=dict)
+    # 字的描边颜色（空为不描边）：NAME_OUTLINE 为整块铺稀有度颜色的筹码名按钮（NAME_FILL），ACCENT_OUTLINE 为强调的按钮
+    # （accent 为 map、primary、capture）。亮色底上的白字靠一圈深色细边看清，描边的画法见 factory.OutlineButton
+    NAME_OUTLINE: str = ""
+    ACCENT_OUTLINE: str = ""
+    REROLL_OUTLINE: str = ""  # 「刷新」胶囊（REROLL_BG）里的字的描边颜色（factory.OutlineLabel）；空为不描边
+    # 卡片收起时卡片头的摘要另加的样子（样式表写法，例如深色底、圆角和内边距）：卡片头一半压在卡片上沿外面的皮肤，摘要写在
+    # 胶囊里才看得清（同 BASIS_BOX），字的颜色按 SUMMARY_INK 换成深色底上用的。空为直接写在卡片头上
+    SUMMARY_BOX: str = ""
+    # 写在卡片头上的几块（方案依据 BASIS_BOX、收起时的摘要 SUMMARY_BOX、「已有筹码」的个数）的底画成这种颜色的平行四边形
+    # （widgets.SlantBackdrop，同区域名标签的斜条：区域名是斜条的皮肤）；空为照样式表画（圆角胶囊或不画）
+    BOX_SLANT: str = ""
+    # 「提示」卡片里每条提示的正文（次要说明）的颜色；空为提示文字颜色（MSG_COLOR）调成约七成不透明。浅色皮肤上调透明后太淡时
+    # 写成一个实色
+    NOTICE_BODY_COLOR: str = ""
 
     @classmethod
     def derive(cls, c: Common) -> OverlayLook:
@@ -498,6 +524,9 @@ class SettingsLook:
     # 性能测试的结果档名：余裕、正常、危险、临界、过载（键是 dual_check 的档位取值）。浅色底用深色，深色底用亮色
     LEVEL_COLOR: Mapping = field(default_factory=dict)
     SHEET_EXTRA: str = ""  # 接在样式表最后的几条规则
+    # 下拉框弹出的列表的底色；空为卡片的底色（CARD_BG）。浅色皮肤的分页排法不画卡片、CARD_BG 还是默认的深色，字却是深色：
+    # 这几套另写浅色的底
+    LIST_BG: str = ""
     HEIGHT: int = 0  # 窗口高度：0 为按内容（默认的单页分组卡片）；分页的排法用固定的高度
     BIG_CORES_EXTRA: int = 0  # 固定高度的排法：多了「只用大核」一行（有大小核的电脑）时窗口再高这么多（这一行连同间距）
     CHIP_BADGE: str = ""  # 状态标签左边的圆点里写的字（截取屏幕等需要留意的状态，例如「!」）；空为只画圆点

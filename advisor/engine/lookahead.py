@@ -45,11 +45,11 @@ if TYPE_CHECKING:
 
 # 前瞻：职业分值累加（rules.toml [pool] accumulate_class_points）。{points} 写「辅助职业分值 +50」（几个职业用「、」连），
 # {classes} 写职业名（「辅助」「攻击、生存」）；短句前面另加「前瞻：」，短句是整句的一部分
-CLASS_SHIFT_REASON = "选择后{points}，之后升星和筹码商店的三选一更常出现{classes}职业的筹码"
-CLASS_SHIFT_SHORT = "更常出现{classes}职业的筹码"
+CLASS_SHIFT_REASON = "选择后{points}，之后升星和筹码商店的三选一更常出现{classes}筹码池的筹码"
+CLASS_SHIFT_SHORT = "更常出现{classes}筹码池的筹码"
 # 3 星以后不再升星，职业分值只影响筹码商店的最左格（任务三格全随机）。短句放不下时（两个职业）照上面的短句写
-CLASS_SHIFT_SHOP_REASON = "选择后{points}，之后筹码商店的三选一更常出现{classes}职业的筹码"
-CLASS_SHIFT_SHOP_SHORT = "筹码商店更常出现{classes}职业的筹码"
+CLASS_SHIFT_SHOP_REASON = "选择后{points}，之后筹码商店的三选一更常出现{classes}筹码池的筹码"
+CLASS_SHIFT_SHOP_SHORT = "筹码商店更常出现{classes}筹码池的筹码"
 # 档位前瞻的说明（按自己的方案计算时，标了档位的候选前瞻那一条）：{words} 说的是哪几档（「必选、推荐」；方案里没有还没
 # 持有的必选、推荐时是「可选」），{before}、{after} 是下一次三选一里这几档还没持有、不在本次候选里的筹码至少出现一张的
 # 机会（不拿 / 拿了以后，按下一次三选一的主体，同前瞻的说明；_avg_any）。一次三选一只能选一张，下一次能不能见到至少一张
@@ -505,7 +505,7 @@ def lookahead_reason(sc: Scorer, name: str, owned: tuple, skip_lock: bool = Fals
     # 3 星以后不再升星，只写筹码商店
     shift = _class_shift(sc, name)
     if shift:
-        points = "、".join(f"{cls}职业分值 +{v:g}" for cls, v in shift)
+        points = "、".join(f"{cls}分值 +{v:g}" for cls, v in shift)
         classes = "、".join(cls for cls, _ in shift)
         template = CLASS_SHIFT_SHOP_REASON if sc.st.star >= TOP_STAR else CLASS_SHIFT_REASON
         bits.append(template.format(points=points, classes=classes))

@@ -209,11 +209,11 @@ class DifficultyDisplayTest(unittest.TestCase):
         self.enter_round()
         pills = self.pills()
         self.assertIn("难度 噩梦", pills)
-        self.assertFalse([p for p in pills if p.startswith("职业 ")])  # 角色待识别时不写职业
+        self.assertFalse([p for p in pills if p.startswith("筹码池 ")])  # 角色待识别时不写职业
         s.game.seen_hero = s.settings.hero  # 认出角色以后：职业胶囊出现，难度紧跟在它后面
         w.refresh()
         pills = self.pills()
-        self.assertEqual(pills.index("难度 噩梦"), pills.index(next(p for p in pills if p.startswith("职业 "))) + 1)
+        self.assertEqual(pills.index("难度 噩梦"), pills.index(next(p for p in pills if p.startswith("筹码池 "))) + 1)
         self.assertIn("难度：噩梦。依据组队房间的难度选项识别。", w.status.status_tip_text)
         self.assertEqual(w.status.summary_plain, "噩梦 · 第 3 轮 · 星数 待识别")
         self.assertTrue(w.status.summary_tip_text.split("\n\n")[0].count("难度 噩梦"))  # 悬停说明照写完整的「难度 噩梦」

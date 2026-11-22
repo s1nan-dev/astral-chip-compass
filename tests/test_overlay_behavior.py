@@ -26,7 +26,7 @@ from advisor.data import load_db
 from advisor.session import split_extra
 from advisor.session.selection import HOLD_MAX_S
 from advisor.ui.overlay import Overlay
-from advisor.ui.overlay_parts.wording import DISMISS, FEEDBACK_QUESTION, FEEDBACK_REASONS, GAIN_TEXT, GAME_OVER_WAITING, HERO_PAUSED, MAP_READ, MISSED_PROMPT, NEWGAME_MIDGAME, NEWGAME_OWNED, NEWGAME_TEXT, PANEL_READ, PANEL_TAB, PICKED_LABEL, PROMPT_HERO, PROMPT_PANEL, REVERTED_NOTICE, REVERTED_PROMPT, STALE_CAPTION
+from advisor.ui.overlay_parts.wording import DISMISS, FEEDBACK_QUESTION, FEEDBACK_REASONS, GAIN_TEXT, GAME_OVER_WAITING, HERO_PAUSED, MAP_READ, MISSED_PROMPT, NEWGAME_MIDGAME, NEWGAME_TEXT, PANEL_READ, PANEL_TAB, PICKED_LABEL, PROMPT_HERO, PROMPT_PANEL, REVERTED_NOTICE, REVERTED_PROMPT, STALE_CAPTION
 from advisor.ui.overlay_parts.app import OverlaySession, UiSettings
 from advisor.ui.services import Services
 from tests.support import qtenv
@@ -199,8 +199,8 @@ class BehaviorBase(unittest.TestCase):
         self.w.set_expanded(False)
 
     def texts(self, card: str) -> list[str]:
-        """某张卡片里正在显示的文字（标签、胶囊、按钮）。"""
-        return self.w.visible_texts(self.w.cards[card])
+        """某张卡片里正在显示的文字（标签、胶囊、按钮）。tips 为标题栏下方的「提示」卡片（提示行都在那里）。"""
+        return self.w.visible_texts(self.w.global_area if card == "tips" else self.w.cards[card])
 
     def shown(self, card: str) -> str:
         return "\n".join(self.texts(card))
@@ -363,7 +363,7 @@ class HeroNeededEventTest(BehaviorBase):
                 self.assertIn("推荐已暂停", summary)
                 self.assertTrue(self.w.card_open("scheme"))  # 角色下拉框在这张卡片里
                 self.assertTrue(self.w.card_open("advice"))
-                advice = self.shown("advice")
+                advice = self.shown("tips")  # 请选角色那一条在「提示」卡片里
                 self.assertIn(PROMPT_HERO, advice)
                 self.assertIn(HERO_PAUSED, advice)
                 self.assertTrue(self.w.needs_attention())  # 要用户选角色：边框变色
@@ -378,16 +378,16 @@ class MissedPickEventTest(BehaviorBase):
         self.assertEqual(self.kinds(self.close()), ["missed_pick"])
         for mode in self.modes():
             with self.subTest(mode=mode):
-                self.assertTrue(self.w.card_open("owned"))
-                owned = self.texts("owned")
+                self.assertFalse(self.w.global_area.isHidden())
+                owned = self.texts("tips")  # 补录行在「提示」卡片里
                 self.assertIn(MISSED_PROMPT, owned)
                 for name in OFFER:
                     self.assertIn(name, owned)
                 self.assertEqual(self.w.owned.missed_buttons_text(), [*OFFER, DISMISS])
                 self.assertTrue(self.w.needs_attention())  # 需要用户操作：边框变色
 
-    def test_collapsed_owned_card_reopens_on_missed(self):
-        """收起「已有筹码」卡片时里面只有「请打开查看筹码面板」的提示：收起后不再展开；之后漏记时自动展开，补录行看得见。"""
+    def test_collapsed_owned_card_stays_on_missed(self):
+        """收起「已有筹码」卡片以后漏记：补录行在「提示」卡片里看得见，「已有筹码」卡片不因为它展开。"""
         self.enter()
         self.offer()
         self.w.set_expanded(True)
@@ -398,8 +398,8 @@ class MissedPickEventTest(BehaviorBase):
         self.assertEqual(self.kinds(self.close()), ["missed_pick"])
         for mode in self.modes():
             with self.subTest(mode=mode):
-                self.assertTrue(self.w.card_open("owned"))
-                self.assertIn(MISSED_PROMPT, self.texts("owned"))
+                self.assertFalse(self.w.card_open("owned"))
+                self.assertIn(MISSED_PROMPT, self.texts("tips"))
                 self.assertEqual(self.w.owned.missed_buttons_text(), [*OFFER, DISMISS])
 
 
@@ -414,7 +414,7 @@ class PickRevertedEventTest(BehaviorBase):
             with self.subTest(mode=mode):
                 self.assertEqual(self.w.notice_model.texts().get("reverted"), REVERTED_NOTICE.format(chip=chip))
                 self.assertTrue(self.w.card_open("advice"))
-                self.assertIn(REVERTED_NOTICE.format(chip=chip), self.w.advice.texts())
+                self.assertIn(REVERTED_NOTICE.format(chip=chip), self.texts("tips"))  # 提示行在「提示」卡片里
         self.w.set_expanded(True)
         self.assertNotIn(chip, self.texts("owned"))  # 刚记下的已从已有筹码中撤销
 
@@ -426,8 +426,8 @@ class PickRevertedEventTest(BehaviorBase):
         self.assertEqual(self.kinds(self.close()), ["missed_pick"])
         for mode in self.modes():
             with self.subTest(mode=mode):
-                self.assertTrue(self.w.card_open("owned"))
-                self.assertIn(REVERTED_PROMPT.format(chip=chip), self.texts("owned"))
+                self.assertFalse(self.w.global_area.isHidden())
+                self.assertIn(REVERTED_PROMPT.format(chip=chip), self.texts("tips"))
                 self.assertEqual(self.w.owned.missed_buttons_text(), [*OFFER, DISMISS])
                 self.assertNotIn("reverted", self.w.notice_model.texts())  # 三选一已关闭：「推荐」卡片里那一行收起
 
@@ -448,8 +448,9 @@ class UnrecordedGainEventTest(BehaviorBase):
         for mode in self.modes():
             with self.subTest(mode=mode):
                 self.assertEqual(self.w.notice_model.texts().get("gain"), text)
-                self.assertTrue(self.w.card_open("owned"))
-                self.assertIn(text, self.texts("owned"))
+                self.assertFalse(self.w.global_area.isHidden())
+                self.assertIn(text, self.texts("tips"))
+                self.assertNotIn(text, self.texts("owned"))
                 self.assertEqual([b.text() for b in self.w.notices.buttons("gain")], ["补录筹码", DISMISS])
                 self.assertTrue(self.w.needs_attention())
 
@@ -492,13 +493,12 @@ class NewGameEventTest(BehaviorBase):
         for mode in self.modes():
             with self.subTest(mode=mode):
                 self.assertTrue(self.w.needs_attention())
-                self.assertTrue(self.w.card_open("recog"))
-                self.assertTrue(self.w.card_open("owned"))
+                self.assertFalse(self.w.global_area.isHidden())  # 提示行都在「提示」卡片里，两种显示方式都看得到
                 texts = self.w.notice_model.texts()
                 self.assertEqual(texts["newgame"], midgame)
-                self.assertEqual(texts["newgame_owned"], NEWGAME_OWNED)
-                self.assertIn(midgame, self.texts("recog"))
-                self.assertIn(NEWGAME_OWNED, self.texts("owned"))
+                self.assertNotIn("newgame_owned", texts)  # 只这一条，「已有筹码」卡片里不另放
+                self.assertIn(midgame, self.texts("tips"))
+                self.assertNotIn(midgame, self.texts("recog"))
                 self.assertEqual([b.text() for b in self.w.notices.buttons("newgame")], ["撤销"])
         self.w.set_expanded(True)
         self.assertNotIn(chip, self.texts("owned"))  # 已有筹码随新的一局清空
@@ -532,8 +532,8 @@ class PanelEventsTest(BehaviorBase):
         for mode in self.modes():
             with self.subTest(mode=mode):
                 self.assertEqual(self.w.notice_model.texts().get("panel"), PROMPT_PANEL)
-                self.assertTrue(self.w.card_open("owned"))
-                self.assertIn(PROMPT_PANEL, self.texts("owned"))
+                self.assertFalse(self.w.global_area.isHidden())
+                self.assertIn(PROMPT_PANEL, self.texts("tips"))
                 self.assertTrue(self.w.needs_attention())
                 self.assertEqual([b.text() for b in self.w.notices.buttons("panel")], [DISMISS])
 
@@ -566,8 +566,8 @@ class PanelEventsTest(BehaviorBase):
         for mode in self.modes():
             with self.subTest(mode=mode):
                 self.assertEqual(self.w.notice_model.texts().get("panel"), PANEL_TAB.format(n=1))
-                self.assertTrue(self.w.card_open("owned"))
-                self.assertIn(PANEL_TAB.format(n=1), self.texts("owned"))
+                self.assertFalse(self.w.global_area.isHidden())
+                self.assertIn(PANEL_TAB.format(n=1), self.texts("tips"))
                 self.assertTrue(self.w.needs_attention())
 
 

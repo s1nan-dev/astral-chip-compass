@@ -527,7 +527,8 @@ class PreviewTest(Case):
         self.assertEqual(order[len(scene):], [item.name for item in others])
         self.assertTrue(store.busy)  # 已经排上了
         progress_text = wording.DOWNLOADING.format(done=len(scene), total=len(todo))
-        self.assertEqual(w.notice_model.texts(), {"assets": progress_text})
+        # 对局中地图待识别时提示打开任务栏的那一条和下载无关，不算
+        self.assertEqual({k: v for k, v in w.notice_model.texts().items() if k != "opentasks"}, {"assets": progress_text})
         before = visible_texts(w, w.dialogs.settings)
         self.assertIn(progress_text, before)
         held[0] = False
@@ -544,7 +545,8 @@ class PreviewTest(Case):
                 self.assertEqual(entry["sig"], skin_preview.fingerprint(skin))
         self.assertEqual(store.stale(), [])
         self.assertTrue(thumb.has_preview)
-        self.assertEqual(w.notice_model.texts(), {"assets": progress_text})  # 下载那一行照旧，没有别的提示
+        # 对局中地图待识别时提示打开任务栏的那一条和下载无关，不算
+        self.assertEqual({k: v for k, v in w.notice_model.texts().items() if k != "opentasks"}, {"assets": progress_text})  # 下载那一行照旧，没有别的提示
         self.assertEqual(visible_texts(w, w.dialogs.settings), before)  # 画预览图没有加任何文字
         gate.set()
         wait_for(lambda: not w.background._downloading)

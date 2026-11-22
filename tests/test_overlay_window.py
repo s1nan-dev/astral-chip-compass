@@ -37,7 +37,7 @@ from advisor.ui.text import tip_html, DIM_COLOR, option_views, plain_words, brea
 from advisor.ui.widgets import TaggedText, Pill  # noqa: E402
 from tests.support import sandbox  # noqa: E402
 from tests.support.fakes import FakeLogbook  # noqa: E402
-from tests.support.overlay_cases import APP, BANNED, FakeHotkey, FakeWatcher, SCORE_WORDS, button, buttons, capture_state, choose_hero, flat, frame, name_buttons, plain_html, probe, score_marks, shown, tip_score_marks, tip_text, unreadable
+from tests.support.overlay_cases import notice_block, APP, BANNED, FakeHotkey, FakeWatcher, SCORE_WORDS, button, buttons, capture_state, choose_hero, flat, frame, name_buttons, plain_html, probe, score_marks, shown, tip_score_marks, tip_text, unreadable
 
 
 def fits(widget) -> bool:
@@ -183,7 +183,7 @@ class OverlayWidgetTest(unittest.TestCase):
         self.session.on_frame(frame(["小猪存钱罐", "友情徽章", "医疗箱-紧急治疗"]))
         self.session.on_frame(None)
         w.handle(self.session.on_frame(None))
-        self.assertFalse(w.missed.isHidden())
+        self.assertIn("missed", w.notice_model.texts())
         w.set_expanded(True)
         remove = [b for b in buttons(w.mini_list) if b.text() == "×"]
         self.assertEqual(len(remove), 2)
@@ -193,10 +193,10 @@ class OverlayWidgetTest(unittest.TestCase):
         self.assertEqual(w.chip_grid.names(), ["书签"])
         # 「已有筹码」卡片里一条提示（只作说明，边框不变色），带「撤销」
         self.assertEqual(w.notice_model.texts()["removed"], "已从已有筹码中移出「标靶」")
-        self.assertIn("已从已有筹码中移出「标靶」", shown(w, w.owned_card))
+        self.assertIn("已从已有筹码中移出「标靶」", shown(w, w.global_area))
         self.assertEqual([b.text() for b in w.notices.buttons("removed")], ["撤销"])
         self.assertEqual(tip_text(w.notices.buttons("removed")[0].toolTip()), "把「标靶」按原来的位置和来源放回已有筹码")
-        self.assertFalse(w.missed.isHidden())
+        self.assertIn("missed", w.notice_model.texts())
         self.assertIsNotNone(self.session.game.missed_offer)
 
     def test_undo_remove_owned_chip(self):
@@ -208,8 +208,8 @@ class OverlayWidgetTest(unittest.TestCase):
         w.refresh()
         self.assertTrue(w.remove_owned("标靶"))
         self.assertFalse(w.expanded)
-        self.assertFalse(w.owned_card.isHidden())  # 一行显示：「已有筹码」卡片只显示这一条提示
-        self.assertIn("已从已有筹码中移出「标靶」", shown(w, w.owned_card))
+        self.assertFalse(w.global_area.isHidden())  # 一行显示：这一条在「提示」卡片里
+        self.assertIn("已从已有筹码中移出「标靶」", shown(w, w.global_area))
         self.assertFalse(w.needs_attention())
         w.notices.buttons("removed")[0].click()
         self.assertEqual(self.session.settings.owned, ["书签", "标靶", "大背包"])
@@ -308,22 +308,23 @@ class OverlayWidgetTest(unittest.TestCase):
         self.assertTrue(s.contains(self.window.frameGeometry()))
 
     def test_missed_pick_prompt(self):
-        """三选一关了却没检测到选择了哪个：「已有筹码」卡片里列出候选筹码按钮，点一下补录（一行显示时也显示）。"""
+        """三选一关了却没检测到选择了哪个：「提示」卡片里的补录行列出候选筹码按钮，点一下补录（一行显示时也显示，「已有筹码」
+        卡片不因为它出现）。"""
         w = self.window
         self.session.on_frame(frame(["小猪存钱罐", "友情徽章", "医疗箱-紧急治疗"]))
         self.session.on_frame(None)
         ev = self.session.on_frame(None)
         self.assertEqual(ev.kind, "missed_pick")
         w.handle(ev)
-        self.assertFalse(w.missed.isHidden())
-        self.assertFalse(w.owned_card.isHidden())
-        self.assertTrue(w.owned_scroll.isHidden() and w.owned_empty.isHidden())  # 一行显示时只显示提示
-        self.assertIn("请点击下方对应的筹码按钮补录", w.missed_label.text())
+        self.assertIn("missed", w.notice_model.texts())
+        self.assertTrue(w.owned_card.isHidden())
+        self.assertFalse(w.global_area.isHidden())
+        self.assertIn("请点击下方对应的筹码按钮补录", w.notice_model.texts()["missed"])
         self.assertEqual(w.owned.missed_buttons_text(), ["小猪存钱罐", "友情徽章", "医疗箱-紧急治疗", "关闭本条提示"])
-        button(w.missed, "友情徽章").click()
+        button(notice_block(w, "missed"), "友情徽章").click()
         self.assertEqual(self.session.settings.owned, ["友情徽章"])
         self.assertEqual(w.chip_grid.names(), ["友情徽章"])
-        self.assertTrue(w.missed.isHidden())
+        self.assertNotIn("missed", w.notice_model.texts())
         self.assertIn("已补录：友情徽章", self.status())
         self.assertIn("已补录：友情徽章", w.status.summary_plain)
 
@@ -333,7 +334,7 @@ class OverlayWidgetTest(unittest.TestCase):
         self.session.on_frame(None)
         self.window.handle(self.session.on_frame(None))
         self.assertEqual(self.window.owned.missed_buttons_text(), ["「某某某」无法识别", "友情徽章", "书签", "关闭本条提示"])
-        self.assertEqual([b.text() for b in buttons(self.window.missed)], ["友情徽章", "书签", "关闭本条提示"])
+        self.assertEqual([b.text() for b in buttons(notice_block(self.window, "missed"))], ["友情徽章", "书签", "关闭本条提示"])
 
     def test_missed_prompt_survives_next_advice(self):
         """补录行不会被下一次三选一的推荐冲掉；点「关闭本条提示」才收起，且不动正在显示的推荐。"""
@@ -343,9 +344,9 @@ class OverlayWidgetTest(unittest.TestCase):
         ev = self.session.on_frame(frame(["标靶", "大背包", "缓冲盾牌"]))
         self.window.handle(ev)
         self.assertFalse(self.window.body.isHidden())
-        self.assertFalse(self.window.missed.isHidden())
-        button(self.window.missed, "关闭本条提示").click()
-        self.assertTrue(self.window.missed.isHidden())
+        self.assertIn("missed", self.window.notice_model.texts())
+        button(notice_block(self.window, "missed"), "关闭本条提示").click()
+        self.assertNotIn("missed", self.window.notice_model.texts())
         self.assertFalse(self.window.body.isHidden())
         self.assertEqual(self.session.settings.owned, [])
         self.assertIn("来源 升星或筹码商店", self.status())  # 候选筹码那一行没被改掉
@@ -385,6 +386,30 @@ class OverlayWidgetTest(unittest.TestCase):
         self.window.fix_box.setEditText("完全不是筹码")
         self.window.advice.fix_confirm()
         self.assertIn("「完全不是筹码」不在筹码表中，请输入完整的筹码名或从列表中选择", self.status())
+        self.window.advice.fix_close()  # 收起改正栏：这句要照着改的提示跟着收起
+        self.window.refresh()
+        self.assertNotIn("不在筹码表中", self.status())
+
+    def test_fix_and_add_empty_input(self):
+        """改正栏、补录栏什么都没填就点「确定」：什么都不做（不出「「」不在筹码表中」）；补录栏输错名字以后点「取消」，
+        那句提示跟着收起。"""
+        w = self.window
+        w.handle(self.session.on_frame(frame(["标靶", "标记喷罐", "鹰眼瞄具"])))
+        w.advice.open_fix(0)
+        w.fix_box.setEditText("")
+        w.advice.fix_confirm()
+        self.assertNotIn("不在筹码表中", self.status())
+        self.assertFalse(w.fix_row.isHidden())
+        w.advice.fix_close()
+        w.open_add()
+        w.add_box.setEditText("")
+        w._add_confirm()
+        self.assertNotIn("不在筹码表中", self.status())
+        w.add_box.setEditText("完全不是筹码")
+        w._add_confirm()
+        self.assertIn("「完全不是筹码」不在筹码表中", self.status())
+        w.close_add()
+        self.assertNotIn("不在筹码表中", self.status())
 
     def test_status_pills_name_subjects(self):
         """状态胶囊：数值自带单位的不写主体（第 3 轮、1 星），其余写明主体（主体暗色、数值亮色）；
@@ -396,7 +421,7 @@ class OverlayWidgetTest(unittest.TestCase):
         text = self.status()
         for part in ("轮次 待识别", "星数 待识别", "地图 待识别"):
             self.assertIn(part, text)
-        self.assertNotIn("职业 ", text)
+        self.assertNotIn("筹码池 ", text)
         tones = {b.key: b.tone for b in self.window.status.shown_bits}
         self.assertEqual((tones["round"], tones["star"], tones["map"]), ("muted",) * 3)  # 还没进入对局
         self.assertEqual(self.window.hero_state.text(), "角色 待识别")
@@ -416,8 +441,8 @@ class OverlayWidgetTest(unittest.TestCase):
         self.assertNotIn("星数", text)
         self.assertEqual(self.window.hero_state.text(), "角色 已识别")
         self.assertTrue(self.window.hero_restore.isHidden())
-        pill = next(p for p in self.window.status_box.findChildren(Pill) if p.text().startswith("职业"))
-        self.assertEqual(pill._segments[0], ("职业 ", DIM_COLOR))
+        pill = next(p for p in self.window.status_box.findChildren(Pill) if p.text().startswith("筹码池"))
+        self.assertEqual(pill._segments[0], ("筹码池 ", DIM_COLOR))
         self.assertNotEqual(pill._segments[1][1], DIM_COLOR)
 
     def test_hero_manual_has_restore_button(self):
@@ -521,19 +546,20 @@ class OverlayWidgetTest(unittest.TestCase):
     def test_map_unknown_asks_to_open_task_panel(self):
         """还没读到任务栏：提示打开任务栏（手动模式下还要按热键），不列候选地图。
         进入对局（读到轮次）之后才显示这一行，一行显示、全部展开都一样（还没进对局时打不开任务栏）。"""
+        texts = self.window.notice_model.texts
         self.window.refresh()
-        self.assertTrue(self.window.map_row.isHidden())  # 还没进对局：一行显示时不占地方
+        self.assertNotIn("opentasks", texts())  # 还没进对局：一行显示时不提示
         self.window.set_expanded(True)
-        self.assertTrue(self.window.map_row.isHidden())  # 全部展开时也不显示
+        self.assertNotIn("opentasks", texts())  # 全部展开时也不提示
         self.session.settings.round = 1
         self.window.refresh()
-        self.assertFalse(self.window.map_row.isHidden())
+        self.assertEqual(texts().get("opentasks"), OPEN_TASKS)  # 在「提示」卡片里
         self.window.set_expanded(False)
-        self.assertFalse(self.window.map_row.isHidden())
-        self.assertEqual(self.window.map_prompt.text(), OPEN_TASKS)
+        self.assertEqual(texts().get("opentasks"), OPEN_TASKS)
+        self.assertTrue(self.window.map_row.isHidden())  # 「识别」卡片的地图选择行只用来请用户选地图
         self.assertEqual(self.window.scheme.map_buttons_text(), [])
         self.window.set_manual(True)
-        self.assertEqual(self.window.map_prompt.text(), f"请打开游戏中的任务栏，然后按 {self.window.hotkeys.hotkey}")
+        self.assertEqual(texts().get("opentasks"), f"请打开游戏中的任务栏，然后按 {self.window.hotkeys.hotkey}")
 
     def test_advice_line_shows_source(self):
         """三选一显示期间，状态胶囊写出这次三选一的来源和剩余刷新次数；星数没读到或和记下的不同时写出按几星计算。"""
@@ -607,7 +633,7 @@ class OverlayWidgetTest(unittest.TestCase):
         self.assertIn("候选筹码 第 1 个无法识别", self.status())
         body = shown(self.window, self.window.body)
         self.assertIn("「某某某」无法识别", body)
-        self.assertIn("请点击标为橙色的筹码名按钮进行改正", body)
+        self.assertIn("请点击写着「无法识别」的筹码名按钮进行改正", body)
         self.assertNotIn("⚠ 第 1 个", body)  # 已经在列表里标出来了，不再重复提示
         names = name_buttons(self.window)
         self.assertEqual(len(names), 3)
@@ -945,7 +971,7 @@ class OverlayWidgetTest(unittest.TestCase):
         self.window.show()
         APP.processEvents()
         w = self.window
-        for widget in (w.status_box, w.map_row, w.map_prompt, w.body, w.missed, w.missed_label, w.owned_body):
+        for widget in (w.status_box, w.map_row, w.map_prompt, w.body, notice_block(w, "missed"), w.owned_body):
             self.assertFalse(widget.isHidden())
             self.assertTrue(fits(widget), type(widget).__name__)
         for widget in w.panel.findChildren(QWidget):
@@ -997,19 +1023,20 @@ class OverlayModeTest(unittest.TestCase):
         w, s = self.window, self.session
         s.settings.round = 3
         w.refresh()
-        self.assertTrue(w.map_row.isVisibleTo(w.panel))
-        self.assertIn("打开任务栏", w.map_prompt.text())
-        self.assertTrue(w.map_dismiss.isVisibleTo(w.panel))
-        self.assertEqual(w.map_dismiss.text(), "关闭本条提示")
-        w.map_dismiss.click()
-        self.assertFalse(w.map_row.isVisibleTo(w.panel))
+        self.assertFalse(w.map_row.isVisibleTo(w.panel))  # 这一句在「提示」卡片里
+        self.assertIn("打开任务栏", w.notice_model.texts()["opentasks"])
+        self.assertFalse(w.global_area.isHidden())
+        btns = w.notices.buttons("opentasks")
+        self.assertEqual([b.text() for b in btns], ["关闭本条提示"])
+        btns[0].click()
+        self.assertNotIn("opentasks", w.notice_model.texts())
         s.settings.round = 4
         w.refresh()
-        self.assertFalse(w.map_row.isVisibleTo(w.panel))  # 这一局不再提示
+        self.assertNotIn("opentasks", w.notice_model.texts())  # 这一局不再提示
         s.new_game()
         s.settings.round = 1
         w.refresh()
-        self.assertTrue(w.map_row.isVisibleTo(w.panel))  # 新的一局照常提示
+        self.assertIn("opentasks", w.notice_model.texts())  # 新的一局照常提示
 
     def test_drag_by_text(self):
         """按在文字上也能拖动悬浮窗：一行显示时标题栏的「等待筹码三选一界面…」、卡片头的摘要（富文本标签默认会接走鼠标）。"""

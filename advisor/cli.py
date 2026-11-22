@@ -165,13 +165,13 @@ def difficulty_text(st: State) -> str | None:
 
 
 def class_text(db: DB, adv: Advice) -> str:
-    """「职业：卡牌」，或职业分值都没到门槛时「职业：无（倾向：卡牌 80）」。"""
+    """「筹码池：卡牌」，或分值都没到门槛时「筹码池：无（倾向：卡牌 80）」。"""
     classes = hero_classes(db, adv.state.hero, adv.state.owned)
     if classes:
-        return "职业：" + "、".join(c for c in CLASSES if c in classes)
+        return "筹码池：" + "、".join(c for c in CLASSES if c in classes)
     if adv.tendency:
-        return f"职业：无（倾向：{adv.tendency[0]} {adv.tendency[1]}）"
-    return "职业：无"
+        return f"筹码池：无（倾向：{adv.tendency[0]} {adv.tendency[1]}）"
+    return "筹码池：无"
 
 
 def versus_lines(adv: Advice, item: ChipEval) -> list[str]:

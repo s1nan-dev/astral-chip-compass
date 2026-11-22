@@ -4,14 +4,15 @@
 
 两层：NoticeModel 记着这些提示的状态（哪几条用户关掉了、要显示的几样），rows 按状态排出这一轮的各行
 （（键, 文字, 级别, [(按钮文字, 强调色, 动作, 悬停说明)]），级别 action 时边框变色，ok 时绿字），不碰 Qt，也不读 Session；按钮的动作写成
-名字，点了做什么由 NoticeView 接（NoticeView.action）。NoticeView 把各行排进搭界面时建好的几块（NOTICE_AREA：标题栏下方、
-各卡片），内容没变时不重建；用户关掉一条时改状态、记识别记录、刷新；启动时的几项检查（check_*）也在这里。
+名字，点了做什么由 NoticeView 接（NoticeView.action）。NoticeView 把各行排进标题栏下方的「提示」卡片（先全局提示，再按
+NOTICE_ORDER 排各卡片的事），内容没变时不重建；用户关掉一条时改状态、记识别记录、刷新；启动时的几项检查（check_*）也在这里。
 """
 from __future__ import annotations
 
 import os
 import re
 import traceback
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from PySide6.QtCore import QUrl
@@ -73,9 +74,9 @@ from .wording import (
     MAP_SCHEME_REVERT_TIP,
     MAP_SCHEME_TEXT,
     NEWGAME_MIDGAME,
-    NEWGAME_OWNED,
     NEWGAME_TEXT,
-    NOTICE_AREA,
+    NOTICE_GROUP,
+    NOTICE_ORDER,
     OCR_CHECK_AFTER,
     OCR_CHECK_LEFT,
     OCR_CHECK_NO,
@@ -298,6 +299,19 @@ DOWNLOAD_FALLBACK_DETAIL = "个人目录用不了（{reason}），这次运行�
 DOWNLOAD_DIR_TITLE = "下载的识别图片的文件夹写不进（拾星助手仍在运行）"
 
 
+@dataclass(frozen=True)
+class CardPrompts:
+    """原来卡片自己画的三处提示，这一轮排成的提示行（键, 文字, 级别, 按钮）；不显示的为 None。
+    - opentasks：地图待识别时请打开任务栏（SchemeCard.opentasks_row）；
+    - hero：三选一出现了、角色待识别时请选角色（AdviceCard.hero_row）；
+    - missed：补录行（OwnedCard.missed_row）：候选筹码做成按钮（按稀有度着色），无法识别的只写原文（动作为 None），最后
+      「关闭本条提示」。"""
+    opentasks: tuple | None = None
+    hero: tuple | None = None
+    missed: tuple | None = None
+    tips: dict = field(default_factory=dict)  # 键 → 悬停说明
+
+
 class NoticeModel:
     """提示行的状态和排法。状态只在界面线程里改（事件、用户点了按钮）；rows 只读这些状态和传进来的几样。"""
 
@@ -348,7 +362,7 @@ class NoticeModel:
     def rows(self, view, *, live: bool, reverted_chip: str, capture, unlocked, schemes: str, assets,
              calibrate_games: int, folder: str, images_personal: bool = False, hotkey: str = "",
              update=(), chip_name=None, hant: bool = False, ocr_note=None,
-             owned_unknown: bool = False) -> list[tuple]:
+             owned_unknown: bool = False, prompts=None) -> list[tuple]:
         """按当前状态排出提示行：（键, 文字, 级别, [(按钮文字, 强调色, 动作, 悬停说明)]）。级别 action 时边框变色。
 
         view 是这一轮的快照（本局已结束、不支持的情况、待补录的个数），live 为三选一显示着，reverted_chip 为同一组候选再次出现
@@ -357,14 +371,16 @@ class NoticeModel:
         为提示校准的局数，folder 为个人目录的文件夹名，images_personal 为下载的识别图片在个人目录里（发行版平时；开发版、
         个人目录用不了退回程序文件夹时为假），hotkey 为热键不可用的那一句（热键能用时为空），update 为软件内更新的几条
         （UpdateControl.notices：对局中为空，排法见 update_rows）。hant 为界面是简体、认出游戏是繁体中文、这一轮该显示那一条
-        （对局进行中先不出，由调用的一方判断）：标题栏下方的全局提示，排在「免费软件」声明前面，带〔换〕〔不换〕两个按钮，
+        （对局进行中先不出，由调用的一方判断）：全局提示，排在「免费软件」声明前面，带〔换〕〔不换〕两个按钮，
         文字和按钮在显示时才转成繁体，两个按钮一样宽。ocr_note 为性能自检这一轮写什么（OcrNote，排法见 ocr_check_row，
-        没有时为 None；结果那一条对局进行中先不出，由调用的一方判断）：标题栏下方，排在诊断包位置后面、软件内更新前面。
+        没有时为 None；结果那一条对局进行中先不出，由调用的一方判断）：全局提示，排在诊断包位置后面、软件内更新前面。
 
-        各行放进所属的一块（NOTICE_AREA）：新一局、不支持的情况在「识别」卡片；补录、打开「查看筹码」面板、刚移出的筹码
-        （带「撤销」）在「已有筹码」卡片；这一局按地图换用了方案（带「换回原来的」）在「筹码方案」卡片；不知道已有筹码、推荐按
-        没有筹码算的那一句（排在最上面）和同一组候选再次出现在「推荐」卡片；这次运行里一直留着的三条、热键不可用、个人目录存不进、
-        方案文件读取的结果、图片下载、校准、诊断包位置、第一次启动时的「免费软件」声明在标题栏下方。
+        各行都排在「提示」卡片里，先后按所属的一组（NOTICE_GROUP、NOTICE_ORDER）：全局提示（这次运行里一直留着的三条、热键
+        不可用、个人目录存不进、方案文件读取的结果、图片下载、校准、诊断包位置、性能自检、软件内更新、认出繁体游戏、第一次启动
+        时的「免费软件」声明）在最前；接着是「识别」的事（对局中途判定的新一局、截取方式，再是不支持的情况、从选角界面判定的
+        新一局、皮肤解锁）、「筹码方案」的事（这一局按地图换用了方案，带「换回原来的」）、「推荐」的事（不知道已有筹码、推荐按
+        没有筹码算的那一句，同一组候选再次出现）、「已有筹码」的事（对局中途判定的新一局的另一行、打开「查看筹码」面板、补录、
+        刚移出的筹码，带「撤销」）。同一组里照下面排出的先后（sort 是稳定的）。
         一直留着的三条排在全局提示的最前面，按要紧的先后：识别已停止 ＞ DPI 设置被改过 ＞ 程序文件夹写不进（理由见
         wording.RECOG_STOPPED 那一段），热键不可用（带「更换热键」）紧跟在它们后面。图片下载失败的全是写盘出错时（assets 的
         第 4 项为 "write"），下载那一行换成写不进的
@@ -381,27 +397,35 @@ class NoticeModel:
         和这次使用有关的几条（存不进个人目录、方案文件读坏、图片下载进度和失败、校准、诊断包位置、软件内更新、认出繁体游戏
         时问要不要换界面）排在它前面。
         本局已结束时不显示只对进行中的对局有意义的两类：打开「查看筹码」面板（含切到自己的页签）、星数增加需补录。
+        prompts 为原来卡片自己画的三处（CardPrompts，出现与否、文字和按钮由管它们的部件定，这里只排进来）：提示打开任务栏
+        （opentasks，「识别」的事，排在「识别」其余几条前面）、请选角色（hero，「推荐」的事，排在「推荐」其余几条后面）、补录行
+        （missed，「已有筹码」的事，排在「已有筹码」其余几条前面）；没有时为 None。
         """
+        prompts = prompts or CardPrompts()
         over = view.game_over
         shown = chip_name or (lambda name: name)  # 「reverted_chip」「self.removed」是按简体记下的，显示时换
         rows = []
         undo_btn = ("撤销", "primary", "undo", UNDO_TIP)
         midgame = self.midgame()
         if midgame:
-            # 对局中途的判定：误判时清空的是正在用的记录，排在最上面、按「需要您操作」显示，「已有筹码」卡片里另放一行
+            # 对局中途的判定：误判时清空的是正在用的记录，排在「识别」的事的最前面、按「需要您操作」显示（提示都在「提示」卡片
+            # 里，已有筹码清空了这件事写在这一条的正文里，不另放一行）
             rows.append(("newgame", NEWGAME_MIDGAME.format(why=self.newgame_why), "action", [undo_btn]))
-            rows.append(("newgame_owned", NEWGAME_OWNED, "action", [undo_btn]))
         if capture is not None:
-            # 直接截取用不了、改为截取屏幕：「识别」卡片最上面（排在对局中途的新一局之后），⚠ 橙色，不改边框颜色
+            # 直接截取用不了、改为截取屏幕：「识别」的事的最前面（排在对局中途的新一局之后），⚠ 橙色，不改边框颜色
             rows.append(("capture", capture[0], "warn", [(DISMISS, "", "dismiss_capture", "关闭本条提示")]))
+        if prompts.opentasks is not None:
+            rows.append(prompts.opentasks)
         for i, text in enumerate(view.unsupported):
             rows.append((f"unsupported{i}", f"⚠ {text}", "warn", []))
         if self.newgame_why is not None and not midgame:
             rows.append(("newgame", NEWGAME_TEXT.format(why=self.newgame_why), "info", [undo_btn]))
         for index, text, key in unlocked:
-            # 解锁了一套皮肤：「识别」卡片里一条，按需要操作显示（边框变橙色）；键按六套的先后编号，关掉别的一条时不变
+            # 解锁了一套皮肤：「识别」的事里一条，按需要操作显示（边框变橙色）；键按六套的先后编号，关掉别的一条时不变
             rows.append((f"unlocked{index}", text, "action",
                          [(DISMISS, "", ("dismiss_unlock", key), "关闭本条提示")]))
+        if prompts.missed is not None:
+            rows.append(prompts.missed)
         ignore_panel = (DISMISS, "", "dismiss_panel", "不识别已有筹码，关闭本条提示（之后可点击「补录筹码」按钮手动补录）")
         if self.panel_tab is not None and not over:
             # 面板已经打开，但选中的是队友的页签：这一行代替「请打开面板」
@@ -410,10 +434,12 @@ class NoticeModel:
             text = PROMPT_PANEL_RESUME if self.panel_resume else PROMPT_PANEL
             rows.append(("panel", text, "action", [ignore_panel]))
         if owned_unknown and live and not over:
-            # 对局中途才打开、还没读到「查看筹码」面板：推荐照常给，「推荐」卡片最上面提醒一句可能不准（⚠ 橙色，边框不变色）
+            # 对局中途才打开、还没读到「查看筹码」面板：推荐照常给，「推荐」的事的最前面提醒一句可能不准（⚠ 橙色，边框不变色）
             rows.append(("owned_unknown", OWNED_UNKNOWN_ADVICE, "warn", []))
         if reverted_chip and live:
             rows.append(("reverted", REVERTED_NOTICE.format(chip=shown(reverted_chip)), "info", []))
+        if prompts.hero is not None:
+            rows.append(prompts.hero)
         gain = 0 if over else max(int(view.unrecorded), 0)
         if gain:
             n = f" {gain} 个筹码" if gain > 1 else ""
@@ -510,7 +536,8 @@ class NoticeModel:
             rows.append(("free", self.free_notice, "info", [(DISMISS, "", "dismiss_free", "关闭本条提示")]))
         if self.lane_only:
             rows = [row for row in rows
-                    if self.area(row[0]) != "global" or re.sub(r"\d+$", "", row[0]) == "stopped"]
+                    if self.group(row[0]) != "global" or re.sub(r"\d+$", "", row[0]) == "stopped"]
+        rows.sort(key=lambda row: NOTICE_ORDER.index(self.group(row[0])))
         return rows
 
     def tips(self, *, logs: str, assets_folder: str, capture, assets=None, assets_personal: bool = False) -> dict[str, str]:
@@ -548,17 +575,13 @@ class NoticeModel:
             "ocr_check": OCR_CHECK_TIP,
         }
 
-    def area(self, key: str) -> str:
-        """提示行放在哪一块。对局中途判定的新一局放在「识别」卡片最上面单独的一块（recog_top），
-        从选角界面判定的照旧放在「识别」卡片的提示区。"""
+    def group(self, key: str) -> str:
+        """提示行说的是哪一块的事（NOTICE_GROUP，「提示」卡片里按它排先后）。对局中途判定的新一局是 recog_top（排在「识别」
+        的其余几条前面），从选角界面判定的是 recog。"""
         base = re.sub(r"\d+$", "", key)
         if base == "newgame" and self.midgame():
             return "recog_top"
-        return NOTICE_AREA.get(base, "global")
-
-    def keys(self, area: str) -> set[str]:
-        """这一块里正显示的提示（卡片收起后有新的提示时自动展开，按这些键比较）。"""
-        return {f"notice:{k}:{v[1]}" for k, v in self.notices.items() if self.area(k) == area}
+        return NOTICE_GROUP.get(base, "global")
 
     def texts(self) -> dict[str, str]:
         """当前显示的提示行：键 → 文字。"""
@@ -570,16 +593,15 @@ class NoticeModel:
 
 
 class NoticeView:
-    """把提示行排进悬浮窗的几块（标题栏下方的全局提示、各卡片的提示区，搭界面时建好的框），按钮点了做什么（action），以及
-    用户关掉一条时的处理。"""
+    """把提示行排进悬浮窗标题栏下方的「提示」卡片（搭界面时建好的框），按钮点了做什么（action），以及用户关掉一条时的处理。"""
 
-    def __init__(self, *, model: NoticeModel, boxes: dict, session, lock, store, services, live, calibrate_games: int,
+    def __init__(self, *, model: NoticeModel, box, session, lock, store, services, live, calibrate_games: int,
                  capture_state, capture_method, trace_user, refresh, unlocked, dismiss_unlock, assets, actions: dict,
-                 hotkey_problem=None, update_notices=None, notice_width=None, chip_name=None, playing=None, ocr_note=None):
+                 hotkey_problem=None, update_notices=None, notice_width=None, chip_name=None, playing=None, ocr_note=None,
+                 prompts=None):
         self.model = model
-        # 控件：各块放提示行的框（global 标题栏下方、recog_top / recog「识别」卡片、advice、owned、scheme「筹码方案」卡片，
-        # 键同 NOTICE_AREA 的值）
-        self.boxes = boxes
+        # 控件：「提示」卡片里放提示行的框（各行按 NoticeModel.rows 排好的先后放进去）
+        self.box = box
         # 服务：Session 和它的锁、方案存储、可选模块（services() 每次现取）；只读的显示状态：三选一显示期间的状态（live）
         self.session, self.lock, self.store, self.services, self.live = session, lock, store, services, live
         self.calibrate_games = calibrate_games  # 推荐日志累计满这么多局时提示可以校准（[watch] calibrate_games）
@@ -597,7 +619,7 @@ class NoticeView:
         self.actions = actions
         # 热键不可用的那一句（热键能用时为空；热键的部件给，不给时按能用）
         self.hotkey_problem = hotkey_problem if hotkey_problem is not None else (lambda: "")
-        # 软件内更新的几条（update_notices(这一轮的快照) → UpdateControl.notices，对局中为空；不给时没有）；全局提示里一行
+        # 软件内更新的几条（update_notices(这一轮的快照) → UpdateControl.notices，对局中为空；不给时没有）；「提示」卡片里一行
         # 内容的宽度（notice_width()：提示块右下角的按钮一行放不放得下，不给时每行两个）
         self.update_notices = update_notices if update_notices is not None else (lambda view: ())
         self.notice_width = notice_width
@@ -607,6 +629,8 @@ class NoticeView:
         self.playing = playing if playing is not None else (lambda view: False)
         # 性能自检这一轮写什么（OcrCheck.notice，没有时为 None）；不给时没有
         self.ocr_note = ocr_note if ocr_note is not None else (lambda: None)
+        # 原来卡片自己画的三处这一轮排成的行（prompts(view) → CardPrompts）；不给时没有
+        self.prompts = prompts if prompts is not None else (lambda view: CardPrompts())
 
     def storage_state(self):
         """设置和筹码方案存不进个人目录、退回程序文件夹保存的原因（paths.storage_fallback()）；正常时、或 paths 没有这一项
@@ -647,28 +671,30 @@ class NoticeView:
         ocr_note = self.ocr_note()
         if ocr_note is not None and ocr_note.kind != "running" and self.playing(view):
             ocr_note = None
+        prompts = self.prompts(view) or CardPrompts()
         rows = model.rows(view, live=self.live.on, reverted_chip=self.live.reverted_chip, capture=capture,
                           unlocked=self.unlocked(), schemes=schemes_notice(self.store, model.schemes_closed),
                           assets=self.assets(), calibrate_games=self.calibrate_games,
                           folder=getattr(app_paths, "FOLDER_NAME", ""), images_personal=personal is not None,
                           hotkey=self.hotkey_problem() or "", update=tuple(self.update_notices(view) or ()),
                           chip_name=self.chip_name, hant=hant, ocr_note=ocr_note,
-                          owned_unknown=self.live.owned_unknown)
+                          owned_unknown=self.live.owned_unknown, prompts=prompts)
         # 认出繁体游戏那一条在简体界面上显示：文字和按钮这时才转成繁体
         rows = [self._hant_row(row) if row[0] == "hant" else row for row in rows]
         logs = str(logs_dir()) if model.calibrate_n is not None else ""
         tips = model.tips(logs=logs, assets_folder=personal or app_paths.shown(app_paths.ASSETS_SUBDIR), capture=capture,
                           assets=self.assets(), assets_personal=personal is not None)
+        tips.update(prompts.tips)
         # 悬停说明里的完整路径（诊断包的位置、推荐日志的文件夹）显示时不转
         paths = (model.export_zip or "", model.export_path or "", logs)
         # 悬停说明也算在内：同一条提示的说明变了（例如截取方式提示的错误代码、出错的步骤）时一并重建
-        key = tuple((k, t, lvl, tuple(b[0] for b in btns), tips.get(k, "")) for k, t, lvl, btns in rows)
+        key = tuple((k, t, lvl, tuple((b[0], b[1], str(b[2])) for b in btns), tips.get(k, ""))
+                    for k, t, lvl, btns in rows)
         model.notices = {r[0]: r for r in rows}
         if key == model.shown:
             return
         model.shown = key
-        for notice_box in self.boxes.values():
-            _clear_layout(notice_box)
+        _clear_layout(self.box)
         notice_blocks.render(self, [(n, lang.t(t), lvl, b) for n, t, lvl, b in rows], tips,
                              lambda tip: shown_keeping(tip, paths))
 
@@ -680,10 +706,13 @@ class NoticeView:
                 [(lang.to_hant(label), accent, action, lang.to_hant(tip)) for label, accent, action, tip in btns])
 
     def action(self, action):
-        """提示行按钮的动作 → 点了调用的方法：外壳给的（actions）或这里的同名方法；皮肤解锁那一条另带解锁的是哪一套。"""
+        """提示行按钮的动作 → 点了调用的方法：外壳给的（actions）或这里的同名方法；带参数的写成 (动作, 参数)：皮肤解锁那一条
+        另带解锁的是哪一套（dismiss_unlock），补录行的筹码按钮另带筹码名（外壳的 pick_missed 等）。"""
         if isinstance(action, tuple):
-            _, key = action
-            return lambda k=key: self.dismiss_unlock(k)
+            name, arg = action
+            if name == "dismiss_unlock":
+                return lambda k=arg: self.dismiss_unlock(k)
+            return lambda a=arg, f=self.actions[name]: f(a)
         if action in self.actions:
             return self.actions[action]
         return getattr(self, action)
@@ -698,11 +727,10 @@ class NoticeView:
 
     def buttons(self, key: str) -> list[QPushButton]:
         """键为 key 的提示行里的按钮（测试用）。"""
-        for notice_box in self.boxes.values():
-            for i in range(notice_box.count()):
-                row = notice_box.itemAt(i).widget()
-                if row is not None and row.objectName() == f"notice-{key}":
-                    return list(row.findChildren(QPushButton))
+        for i in range(self.box.count()):
+            row = self.box.itemAt(i).widget()
+            if row is not None and row.objectName() == f"notice-{key}":
+                return list(row.findChildren(QPushButton))
         return []
 
     # ---- 用户关掉一条

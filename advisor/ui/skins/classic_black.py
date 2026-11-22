@@ -49,6 +49,9 @@ def _classic_black() -> Skin:
     overlay_extra = _PANEL_CLEAR + blue_button + combo + _scrollbar("#2a2a31", p["yellow"]) + (
         f"QPushButton[accent=\"map\"], QPushButton[accent=\"primary\"], QPushButton[accent=\"capture\"], "
         f"QPushButton[accent=\"warn\"], QPushButton#settingsButton, QPushButton#addOwned {{ {yellow} }}\n"
+        # 黄按钮的框（上 2、下 4）比蓝按钮（下 3）厚 3 像素：上下内边距少 3，和同一行的蓝按钮一样高
+        f"QPushButton[accent=\"map\"], QPushButton[accent=\"primary\"], QPushButton[accent=\"capture\"], "
+        f"QPushButton[accent=\"warn\"], QPushButton#addOwned {{ padding: 1px 12px 2px 12px; }}\n"
         f"QPushButton[accent=\"map\"]:hover, QPushButton[accent=\"primary\"]:hover, QPushButton#settingsButton:hover, "
         f"QPushButton#addOwned:hover {{ background: #ffdd52; }}\n"
         f"QPushButton#closeButton {{ background: {p['tile']}; border: 1px solid rgba(255,255,255,70); "
@@ -65,8 +68,6 @@ def _classic_black() -> Skin:
         f"QLabel#laneTag {{ background: {p['pink']}; color: {p['white']}; border: 1px solid {p['ink']}; "
         f"border-radius: 6px; padding: 0px 8px; font-weight: bold; }}\n"
         f"QLabel#cardTitle {{ padding: 1px 4px 2px 30px; font-size: 11pt; $TITLE_FONT }}\n"
-        f"QWidget#globalArea {{ background: rgba(11,11,14,200); border: 1px solid rgba(255,255,255,40); "
-        f"border-radius: 12px; }}\n"
         f"QLabel#ask, QLabel#notice_warn, QLabel#notice_action {{ background: {p['yellow']}; color: {p['ink']}; "
         f"border: 2px solid {p['ink']}; border-radius: 10px; padding: 5px 10px; font-weight: bold; }}\n"
         f"QLabel#ownedCount {{ font-size: 13pt; font-weight: bold; $NUMBER_FONT }}\n"
@@ -182,6 +183,9 @@ def _classic_black() -> Skin:
             WINDOW_ALPHA=SEE_THROUGH,  # 面板整块自己画、按不透明画：透出下方的游戏画面靠整个悬浮窗的透明度
             CARD_BG="transparent", CARD_BORDER="transparent", CARD_RADIUS=0,
             MINI_BG=p["chip"], MINI_BORDER="rgba(255,255,255,45)", MINI_RADIUS=10, LABEL_COLOR=p["white"],
+            # 补录行、地图发放的筹码按钮：蓝色按钮上稀有度颜色的字看不清，换成筹码小卡片的深底、稀有度颜色的字和框
+            CHIP_BUTTON_BG=p["chip"], CHIP_BUTTON_HOVER_BG="#2c2c33",
+            CHIP_BUTTON_PADDING="3px 12px 2px 12px",  # 四边 2 像素的框比蓝按钮（只有下沿 3）厚 1：下内边距少 1
             TIP_BG=p["tile"], TIP_TEXT=p["white"], TIP_BORDER="rgba(255,255,255,90)", TIP_PADDING=6,
             TITLE_COLOR=p["white"], TITLE_WEIGHT=900, SUMMARY_COLOR=p["soft"], CARD_TITLE_COLOR=p["white"],
             MSG_COLOR=p["soft"], ASK_COLOR=p["yellow"],
@@ -208,7 +212,7 @@ def _classic_black() -> Skin:
             SHEET_EXTRA=overlay_extra, PANEL_DECOR="board", MARK_BG=p["unmarked"], MARK_PADDING="1px 10px",
             REROLL_BG=p["blue"], REROLL_TEXT=p["white"], NAME_FILL=True, NAME_TEXT=p["ink"],
             WARN_BOX=f"background:{p['yellow']};border:2px solid {p['ink']};border-radius:10px;padding:4px 10px",
-            WARN_BOX_TEXT=p["ink"], GLOBAL_MARGINS=(10, 8, 10, 8), SUMMARY_INK={p["caption"]: p["pink"]},
+            WARN_BOX_TEXT=p["ink"], SUMMARY_INK={p["caption"]: p["pink"]},
             PANEL_MARGINS_LINE=(20, 9, 10, 9), TITLE_CENTER=True, HEAD_ALIGN="bottom", ADVICE_BOX="indigo",
             OPTION_ICON=44, MARK_AFTER_NAME=True, NAME_STYLE="outline", BEST_BADGE="star",
             MARK_KINDS={

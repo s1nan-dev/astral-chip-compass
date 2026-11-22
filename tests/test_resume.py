@@ -1072,7 +1072,8 @@ class OverlayResumeTest(unittest.TestCase):
         w = self.window
         texts = w.notice_model.texts()
         self.assertTrue(texts["newgame"].startswith(f"⚠ 对局中途判定为新的一局（依据：{why_start}"), texts["newgame"])
-        self.assertEqual(list(texts)[:2], ["newgame", "newgame_owned"])
+        self.assertEqual(list(texts)[:1], ["newgame"])
+        self.assertNotIn("newgame_owned", texts)
         self.assertTrue(w.panel.property("attention"))
         self.assertTrue(w.needs_attention())
         self.assertEqual([b.text() for b in w.notices.buttons("newgame")], ["撤销"])

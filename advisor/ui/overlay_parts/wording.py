@@ -21,7 +21,7 @@ from ..theme import COMMON as C
 __all__ = [  # layout.py 用 import * 取这些
     "ADD_TIP", "AUTO_SWITCHED", "BLOCKED", "BLOCKED_BIT", "BLOCKED_HOTKEY", "CALIBRATE", "CAPSULE_KEYS",
     "CAPTURE_NOTICE", "CAPTURE_RESTORED", "CAPTURE_SCREEN_TIP", "CAPTURE_TIP", "CAPTURE_TIP_NO_CODE",
-    "CARD_KEYS", "COLLAPSE_ALL", "COLLAPSE_ALL_TIP", "CORNERS", "COVER_POLLS", "DEFAULT_REL",
+    "CARD_KEYS", "CLASS_BIT", "COLLAPSE_ALL", "COLLAPSE_ALL_TIP", "CORNERS", "COVER_POLLS", "DEFAULT_REL",
     "DISMISS", "DOWNLOADING", "DOWNLOAD_CROP_FAILED", "DOWNLOAD_DONE", "DOWNLOAD_FAILED", "DOWNLOAD_FEW",
     "DOWNLOAD_FEW_LATER", "DOWNLOAD_UNWRITABLE", "DPI_CHANGED",
     "EGGS_ERROR", "ERR_RECORD",
@@ -37,9 +37,9 @@ __all__ = [  # layout.py 用 import * 取这些
     "MANUAL_SWITCHED", "MANUAL_SWITCHED_NO_KEY", "MAP_ASK", "MAP_ASK_NO_CHOICE", "MAP_AUTO", "MAP_PLACE", "MAP_READ",
     "MAP_SCHEME_REVERT", "MAP_SCHEME_REVERTED", "MAP_SCHEME_REVERT_TIP", "MAP_SCHEME_SWITCHED", "MAP_SCHEME_TEXT",
     "MAP_SOURCE_TIP", "MISSED_PROMPT", "NEWGAME_MIDGAME", "NEWGAME_MIDGAME_NOTICE_MS", "NEWGAME_NOTICE_MS",
-    "NEWGAME_OWNED", "NEWGAME_TEXT",
+    "NEWGAME_TEXT",
     "NEW_HERO", "NEW_USER_COLLAPSED",
-    "NOTICE_AREA", "NO_DOWNLOAD_ENV", "NO_GAME", "OPEN_TASKS", "OWNED_EMPTY", "OWNED_UNIT", "OWNED_UNKNOWN",
+    "NOTICE_GROUP", "NOTICE_ORDER", "NO_DOWNLOAD_ENV", "NO_GAME", "OPEN_TASKS", "OWNED_EMPTY", "OWNED_UNIT", "OWNED_UNKNOWN",
     "OWNED_UNKNOWN_ADVICE",
     "PANEL_FIXED", "PANEL_READ", "PANEL_TAB", "PANEL_UNKNOWN", "PAUSED", "PAUSED_BIT", "PAUSED_MIN_TIP", "PAUSED_TIP",
     "PICKED_LABEL", "POLL_MS", "PREVIEW_DELAY_MS", "PROGRESS_TIP", "PROMPT_HERO", "PROMPT_PANEL",
@@ -55,7 +55,7 @@ __all__ = [  # layout.py 用 import * 取这些
     "SCHEME_SUMMARY", "SCHEME_SWITCHED", "SCHEME_TARGET_TIP", "SCHEME_UNRECORDED_TIP", "SETTINGS_GLYPH_PX",
     "SETTINGS_TIP", "SETTINGS_TIP_HANT", "SETTLE_MAX_TICKS", "SETTLE_MS", "SETTLE_TICKS", "SHARE_BTN", "SHARE_FORMATS",
     "SHARE_TIP", "SHUTDOWN_DOWNLOAD_S",
-    "SHUTDOWN_WATCHER_S", "STALE_CAPTION", "STOPPED", "STOPPED_BIT", "STORAGE_FALLBACK", "TITLE", "TITLE_DEV",
+    "SHUTDOWN_WATCHER_S", "STALE_CAPTION", "STOPPED", "STOPPED_BIT", "STORAGE_FALLBACK", "TIPS_CARD", "TITLE", "TITLE_DEV",
     "UNDONE_SAVED", "UNDONE_TEXT",
     "UNDO_TIP", "UNLOCKED_CONDITIONS", "UNLOCKED_NOTICE",
 ]
@@ -97,7 +97,7 @@ FOLLOW_FRAMES = 5  # 手动模式：三选一消失后最多再看几帧，等 S
 
 # 需要用户操作、或识别结果的提示。角色待识别、推荐暂停时「推荐」卡片里的大字：
 # 角色下拉框在上方的「筹码方案」卡片里（一行显示时这张卡片随之出现）
-PROMPT_HERO = "请在上方「筹码方案」卡片的角色下拉框中选择当前角色"
+PROMPT_HERO = "请在下方「筹码方案」卡片的角色下拉框中选择当前角色"
 # 立绘认出的是新角色（识别图片的最新清单里有、这一版资料里还没有的角色）：没有她的推荐规则，换掉 PROMPT_HERO 那一句；
 # 角色胶囊的悬停说明也写这一句
 NEW_HERO = "这个角色是新出的，请更新拾星助手"
@@ -343,9 +343,8 @@ REVERTED_PROMPT = "⚠ 同一组候选筹码再次出现，已撤销刚记录的
 # 三选一开着时已有筹码按面板变了，马上按读到的重算
 OWNED_UNKNOWN_ADVICE = "⚠ 还不知道已有筹码，可能不准。"
 NEWGAME_TEXT = "已判定为新的一局（依据：{why}），已清空上一局的已有筹码、星数、轮次和地图。"
-# 对局中途（按轮次、星数或角色）判定的新一局：「需要您操作」级别，「已有筹码」卡片里另放一行
+# 对局中途（按轮次、星数或角色）判定的新一局：「需要您操作」级别，排在「提示」卡片里「识别」的事的最前面（只这一条）
 NEWGAME_MIDGAME = "⚠ 对局中途判定为新的一局（依据：{why}），已清空已有筹码、星数、轮次和地图。如果这一局还没有结束，请点击「撤销」。"
-NEWGAME_OWNED = "⚠ 已有筹码已随新的一局清空。如果这一局还没有结束，请点击「撤销」恢复。"
 UNDONE_TEXT = "已撤销新的一局的判定，已恢复上一局的已有筹码、星数、轮次和地图。"
 UNDONE_SAVED = "已撤销新的一局的判定，已恢复上一局的已有筹码、星数、轮次和地图。误判时的识别记录已保存（不含截图）：{path}"
 UNDO_TIP = "判定有误时点击：恢复上一局的已有筹码、星数、轮次和地图，并保存这次误判的识别记录（不含截图）"
@@ -385,6 +384,9 @@ CARD_KEYS = ("recog", "scheme", "advice", "owned")  # 四张卡片：识别、�
 # 「作业站」打开浏览器里当前角色的方案列表（advisor/hub.py）。能单独收起，收起后卡片头写「芬妮 · 治愈坦克」（SCHEME_SUMMARY，
 # 默认推荐时「芬妮 · 默认推荐」，不加颜色）。一行显示时平时不出现；三选一出现但角色待识别时自动出现，供选择角色
 SCHEME_CARD = "筹码方案"
+# 状态胶囊里角色当前属于哪一类（程序里叫职业，hero_classes）的主体：玩家看到的说法是「筹码池」（升星、筹码商店的最左格按它
+# 选筹码池），例如「筹码池 攻击」「筹码池 无 · 倾向 卡牌 80」
+CLASS_BIT = "筹码池"
 SCHEME_SUMMARY = "{hero} · {scheme}"
 SCHEME_EDIT = "编辑方案"
 SCHEME_EDIT_TIP = "打开「编辑筹码方案」窗口：新建、编辑、复制或删除筹码方案"
@@ -511,12 +513,17 @@ HOTKEY_CHANGE_FAILED = "{reason}（当前热键仍为 {key}）。请点击「设
 # 新用户（没有设置文件）默认收起的卡片：「已有筹码」（开局前没有内容）；其余三张展开。已有设置文件的照文件里的
 NEW_USER_COLLAPSED = ("owned",)
 # 「悬浮窗背景不透明」（设置窗口的「外观」）打开时面板的底色（平时的底色去掉透明度）见皮肤的 PANEL_OPAQUE_BG
-# 提示行放在哪一块：global 为标题栏下方的全局提示，其余放进对应的卡片。截取方式的提示（capture）在「识别」卡片最上面，
-# 排在对局中途判定的新一局之后。方案文件读取的结果（schemes）、个人目录存不进（storage）、第一次启动时的「免费软件」声明
-# （free）、这次运行里一直留着的三条（识别已停止 stopped、DPI 设置被改过 dpi、程序文件夹写不进 folder）、软件内更新的两条
-# （有新版本、下载、出错等 update，刚换上新版本 updated）、性能自检（ocr_check）是全局提示
-NOTICE_AREA = {
-    "unsupported": "recog", "newgame": "recog", "newgame_owned": "owned", "reverted": "advice", "panel": "owned",
+# 提示行都排在标题栏下方的「提示」卡片里（TIPS_CARD）。NOTICE_GROUP 是每种提示说的是哪一块的事：global 为整个拾星助手的
+# 事（全局提示），其余为对应卡片的事（recog_top、recog「识别」，scheme「筹码方案」，advice「推荐」，owned「已有筹码」）。
+# 「提示」卡片里先排全局提示，再按 NOTICE_ORDER 排各卡片的事，同一组里照 NoticeModel.rows 排出的先后；第二张悬浮窗只留不是
+# 全局提示的几条（和「识别已停止」）。截取方式的提示（capture）和对局中途判定的新一局是 recog_top，排在「识别」的其余几条前面。
+# 方案文件读取的结果（schemes）、个人目录存不进（storage）、第一次启动时的「免费软件」声明（free）、这次运行里一直留着的三条
+# （识别已停止 stopped、DPI 设置被改过 dpi、程序文件夹写不进 folder）、软件内更新的两条（有新版本、下载、出错等 update，刚换上
+# 新版本 updated）、性能自检（ocr_check）是全局提示
+TIPS_CARD = "提示"
+NOTICE_ORDER = ("global", "recog_top", "recog", "scheme", "advice", "owned")
+NOTICE_GROUP = {
+    "unsupported": "recog", "newgame": "recog", "opentasks": "recog", "hero": "advice", "missed": "owned", "reverted": "advice", "panel": "owned",
     "owned_unknown": "advice",
     "gain": "owned", "removed": "owned", "map_switch": "scheme", "assets": "global", "calibrate": "global",
     "export": "global", "capture": "recog_top", "schemes": "global", "storage": "global", "unlocked": "recog",
@@ -634,16 +641,17 @@ ZIP_FAILED = "诊断包的压缩包没打成（诊断包文件夹照旧可用，
 HOTKEY_CHANGE = "更换热键"
 HOTKEY_CHANGE_TIP = "打开「拾星助手设置」窗口，按下新的组合键更换热键"
 # 软件内更新（overlay_parts/updates.py 的 UpdateControl；查、下载、备好在 advisor/update.py，换版本在 advisor/update_apply.py）：
-# 标题栏下方的一条（NOTICE_AREA 的 update；刚换上新版本时另一条 updated），排在「免费软件」声明前面。只在对局外显示：对局中
+# 「提示」卡片里的一条（NOTICE_GROUP 的 update；刚换上新版本时另一条 updated），排在「免费软件」声明前面。只在对局外显示：对局中
 # 先攒着，下载在后台照常进行。有新版本、下载中、解压核对中、下好了、已经是最新、刚换上新版本是说明（边框不变色）；出错时
 # ⚠ 橙色、边框不变色，都带「手动下载」。按钮和别的提示一样排在提示块的右下角（notice_blocks）。
-# 有新版本：{version} 是新版本号，{date} 是资料同步日期那一段（UPDATE_DATE，没有日期时为空），{size} 是要下载多少的那一段
+# 有新版本：{version} 是新版本号，{date} 是资料同步日期那一段（UPDATE_DATE，没有日期时为空。有日期时标题只写到版本号，
+# 日期另起一行当正文第一句，窗口窄时标题不被日期拆成两行；没有日期时照旧是一句），{size} 是要下载多少的那一段
 # （update_size_text：这一版有文件清单时是 UPDATE_SIZE_MAX，点「更新」以后先比对本机的文件、只下变了的部分，压缩包的大小
 # 是上限；没有时是 UPDATE_SIZE）。点「更新」才下载（下载之前先问的就是这一条），下好以后在对局外自动重启换上，不用再点；
 # 这一版不能自动换上（Release.auto 为假）时换成 UPDATE_AVAILABLE_MANUAL，「更新」换成「手动下载」
 UPDATE_AVAILABLE = "拾星助手有新版本 {version}{date}。点击「更新」开始下载（{size}），下载期间照常使用，下好后自动重启换上。"
 UPDATE_AVAILABLE_MANUAL = "拾星助手有新版本 {version}{date}。这一版需要手动更新：点击「手动下载」，在浏览器中下载压缩包。"
-UPDATE_DATE = "（资料同步到 {date}）"
+UPDATE_DATE = "\n资料同步到 {date}"
 UPDATE_SIZE = "约 {size} MB"
 UPDATE_SIZE_MAX = "最多约 {size} MB，只下载变了的部分时更少"
 # 下载中（update_download_text 按下到哪一步选一句；「停止」照旧）：比对本机的文件（只下变了的部分之前，不写大小）；只下变了的
@@ -667,8 +675,8 @@ UPDATE_DONE = "拾星助手已更新到 {version}。"
 # 刚换上新版本那一条（UPDATE_DONE）下面列的这一版的主要改动（update_done_text）：换上的正是 UPDATE_NEWS_VERSION 这一版时，
 # UPDATE_NEWS 一条一行、前面加「· 」（UPDATE_NEWS_ITEM），最后一行是 UPDATE_NEWS_SOON（空时不写）；版本号对不上（改了版本号、
 # 列表没跟着改）或者列表是空的，只写 UPDATE_DONE 那一句。发版定号时照这一版的发布说明挑几条短的改这几项（软件维护说明「版本号」）
-UPDATE_NEWS_VERSION = "1.3.0"
-UPDATE_NEWS = ("游戏出了新造型也能及时认出", "推荐模型优化", "队友角色识别优化", "Bug修复")
+UPDATE_NEWS_VERSION = "1.3.1"
+UPDATE_NEWS = ("UI优化", "文本修正", "Bug修复")
 UPDATE_NEWS_ITEM = "· {item}"
 UPDATE_NEWS_SOON = ""  # 即将上线的（例如「即将上线：……」）；这一版不写
 # 刚换上新版本那一条的最后一行（update_done_text，版本号对不对得上 UPDATE_NEWS_VERSION 都写）：从别处下载的人可以到官网的
@@ -839,7 +847,7 @@ def update_mb(size) -> str:
 
 
 def update_date_text(data_date) -> str:
-    """「有新版本」那一句里资料同步日期的一段（UPDATE_DATE）；没有日期时为空。"""
+    """「有新版本」那一条里资料同步日期的一段（UPDATE_DATE：另起一行，后面接句号）；没有日期时为空。"""
     return UPDATE_DATE.format(date=data_date) if isinstance(data_date, str) and data_date else ""
 
 

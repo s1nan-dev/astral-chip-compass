@@ -16,8 +16,9 @@ from .. import lang, names
 from ..text import SCHEME_DEFAULT, tip_paragraphs_html
 from ..theme import COMMON as C
 from ..widgets import add_combo_header
-from .factory import _button, _clear_grid, _fill_grid, _own_style, _set_tip
+from .factory import _button, _chip_button, _clear_grid, _fill_grid, _own_style, _set_tip
 from .wording import (
+    DISMISS,
     HERO_UNRECORDED,
     MAP_ASK,
     MAP_ASK_NO_CHOICE,
@@ -37,12 +38,12 @@ from .wording import (
 class SchemeCard:
     """「筹码方案」卡片和地图的内容和状态。控件由搭界面（layout）建好交给这里。"""
 
-    def __init__(self, *, hero_box, scheme_box, map_label, map_buttons, map_dismiss, granted_label, granted_buttons,
+    def __init__(self, *, hero_box, scheme_box, map_label, map_buttons, granted_label, granted_buttons,
                  db, session, lock, store, live, trace_user, refresh, card_width, choose_map, add_owned, manual,
                  usable_key):
         # 控件：角色下拉框、方案下拉框；地图选择行的提示（map_label）、候选地图按钮的网格、「关闭本条提示」；地图发放的筹码那一行
         self.hero_box, self.scheme_box = hero_box, scheme_box
-        self.map_label, self.map_buttons, self.map_dismiss = map_label, map_buttons, map_dismiss
+        self.map_label, self.map_buttons = map_label, map_buttons
         self.granted_label, self.granted_buttons = granted_label, granted_buttons
         # 服务：资料库、Session 和它的锁、方案存储（None 时只有默认推荐）；只读的显示状态：三选一显示期间的状态（live）
         self.db, self.session, self.lock, self.store, self.live = db, session, lock, store, live
@@ -59,6 +60,7 @@ class SchemeCard:
         self.map_entered = False  # 全部展开时出现（请用户选地图，或进入对局以后提示打开任务栏）
         self.map_hint_closed: int | None = None  # 用户关掉「打开任务栏」提示时的局号（Session.games），这一局不再提示
         self.map_key = ""
+        self.map_hint: tuple | str = ""  # 提示打开任务栏时那一句和悬停说明（opentasks_row）；不提示时为空
         self.granted_shown: tuple = ()
         self.granted_on = False
         self.hero_extra = False  # 角色下拉框最前面临时加了一项「（资料库未收录）X」
@@ -179,7 +181,8 @@ class SchemeCard:
 
         请用户选地图时照常显示（需要操作）。只是提示打开任务栏时，进入对局（读到轮次）后才显示：还没进对局（刚打开、在选角
         界面等）时打不开任务栏，全部展开时也不显示（map_entered）；一行显示时另外在三选一界面开着时也不显示（map_prompt）。
-        「打开任务栏」的提示带「关闭本条提示」按钮，关掉后这一局不再提示（请用户选地图的不能关）。
+        「打开任务栏」的提示带「关闭本条提示」按钮，关掉后这一局不再提示（请用户选地图的不能关）；它排在「提示」卡片里
+        （opentasks_row），这一行只写请用户选地图的那种。
         本局已结束时不显示（下一局开始后照常提示）。
         """
         ask = view.map_ask
@@ -187,9 +190,8 @@ class SchemeCard:
         hint_closed = not ask and self.map_hint_closed == view.games
         if view.map is not None or hint_closed or view.game_over:
             self.map_on = self.map_prompt = self.map_entered = False
-            self.map_key = ""
+            self.map_key = self.map_hint = ""
             self.set_map_buttons([])
-            self.map_dismiss.hide()
             return
         if ask and choices:
             prompt, name = MAP_ASK, "ask"
@@ -201,14 +203,16 @@ class SchemeCard:
             key = self.usable_key()
             if self.manual() and key:
                 prompt = lang.t(f"请打开游戏中的任务栏，然后按 {key}")
-            name, tip = "hint", lang.t("打开任务栏后，根据任务栏中的任务文字自动识别地图；也可点击上方的地图下拉框手动指定。")
+            name, tip = "hint", "打开任务栏后，根据任务栏中的任务文字自动识别地图；也可点击上方的地图下拉框手动指定。"
+        self.map_hint = (prompt, tip) if name == "hint" else ""
+        if name == "hint":
+            prompt, tip = "", ""
         if self.map_label.objectName() != name:
             self.map_label.setObjectName(name)
             _own_style(self.map_label, f"color:{C.WARN_COLOR if name == 'ask' else C.DIM_COLOR}")
         self.map_label.setText(prompt)  # 常量（MAP_ASK 等）和上面拼的那句都已按界面语言写好
         _set_tip(self.map_label, tip)
         self.set_map_buttons(choices)
-        self.map_dismiss.setVisible(name == "hint")
         # 还没进对局（没读到轮次）时打不开任务栏：全部展开、一行显示都不提示；一行显示时三选一界面开着也不提示（请用户选
         # 地图的按钮照常显示）
         entered = view.round is not None
@@ -217,6 +221,26 @@ class SchemeCard:
         self.map_entered = ask or entered
         self.map_prompt = ask or in_game
         self.map_key = f"{name}:{'、'.join(choices)}"
+
+    def opentasks_row(self, full: bool) -> tuple | None:
+        """提示打开任务栏的那一行（「提示」卡片里「识别」的事，键 opentasks）：（键, 文字, 级别, 按钮）；不显示时为 None。
+        出现与否照原来地图选择行的规矩：全部展开（full）时进入对局以后（map_entered），一行显示时另外要三选一没开着
+        （map_prompt）。带「关闭本条提示」（dismiss_map_hint，这一局不再提示）。说明级（边框不变色）。"""
+        if not self.map_on or not self.map_hint or not (self.map_entered if full else self.map_prompt):
+            return None
+        prompt, _ = self.map_hint
+        return ("opentasks", prompt, "info", [
+            (DISMISS, "", "dismiss_map_hint", "不打开任务栏，关闭本条提示（这一局不再提示；也可点击上方的地图下拉框手动指定地图）"),
+        ])
+
+    def opentasks_tip(self) -> str:
+        """那一行的悬停说明（没有时为空）。"""
+        return self.map_hint[1] if self.map_hint else ""
+
+    @property
+    def map_ask(self) -> bool:
+        """地图选择行请用户选地图（这一行还在「识别」卡片里）。"""
+        return self.map_on and self.map_key.startswith("ask:")
 
     def dismiss_map_hint(self) -> None:
         """关掉「打开任务栏」的提示：这一局不再提示（新的一局照常提示；地图之后被识别出来照常更新）。"""
@@ -280,8 +304,8 @@ class SchemeCard:
             for name in granted:
                 chip = self.db.chips[name]
                 shown = names.chip_name(chip)
-                btn = _button(shown, color=C.RARITY_COLOR.get(chip.rarity, C.TEXT_COLOR),
-                              tip=lang.t(f"补录：{shown}。{chip.effect}"))
+                btn = _chip_button(shown, C.RARITY_COLOR.get(chip.rarity, C.TEXT_COLOR),
+                                   tip=lang.t(f"补录：{shown}。{chip.effect}"), deep=True)
                 btn.clicked.connect(lambda _=False, n=name: self.add_owned(n))
                 buttons.append(btn)
             if buttons:

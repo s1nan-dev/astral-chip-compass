@@ -305,17 +305,17 @@ class NoticeModelTest(unittest.TestCase):
         self.assertEqual(notice_rows(notices.NoticeModel()), [])
 
     def test_midgame_new_game(self):
-        """对局中途判定的新一局：两行「需要您操作」，按钮是撤销；放在「识别」卡片最上面和「已有筹码」卡片。"""
+        """对局中途判定的新一局：只有一行「需要您操作」，按钮是撤销；排在「识别」的事的最前面（recog_top）。"""
         model = notices.NoticeModel()
         model.newgame_why, model.newgame_cause = "轮次变小", "round"
         rows = notice_rows(model)
-        self.assertEqual([(k, lvl) for k, _, lvl, _ in rows], [("newgame", "action"), ("newgame_owned", "action")])
+        self.assertEqual([(k, lvl) for k, _, lvl, _ in rows], [("newgame", "action")])
         self.assertEqual(rows[0][3][0][2], "undo")
-        self.assertEqual((model.area("newgame"), model.area("newgame_owned")), ("recog_top", "owned"))
+        self.assertEqual(model.group("newgame"), "recog_top")
         model.newgame_cause = "select"  # 从选角界面判定的：一行说明
         rows = notice_rows(model)
         self.assertEqual([(k, lvl) for k, _, lvl, _ in rows], [("newgame", "info")])
-        self.assertEqual(model.area("newgame"), "recog")
+        self.assertEqual(model.group("newgame"), "recog")
 
     def test_panel_prompt(self):
         """请用户打开「查看筹码」面板：暂停很久后的写法不同；选中队友页签时换成那一行；本局已结束时不提示。"""
@@ -329,8 +329,8 @@ class NoticeModelTest(unittest.TestCase):
         self.assertEqual(notice_rows(model, view_of(game_over=True)), [])
 
     def test_owned_unknown_advice(self):
-        """不知道已有筹码（一个都没记下、看着三选一记下了几个都一样）：三选一显示着才有这一行，放在「推荐」卡片里、排在撤销
-        那一行前面（卡片最上面），⚠ 橙色、不带按钮、边框不变色，只写一句、不写个数；三选一没显示、本局已结束、推荐知道已有
+        """不知道已有筹码（一个都没记下、看着三选一记下了几个都一样）：三选一显示着才有这一行，是「推荐」的事、排在撤销
+        那一行前面，⚠ 橙色、不带按钮、边框不变色，只写一句、不写个数；三选一没显示、本局已结束、推荐知道已有
         筹码时都不出。"""
         model = notices.NoticeModel()
         rows = notice_rows(model, live=True, owned_unknown=True, reverted_chip="标靶")
@@ -338,10 +338,9 @@ class NoticeModelTest(unittest.TestCase):
         self.assertEqual(rows[0][1], OWNED_UNKNOWN_ADVICE)
         self.assertEqual(rows[0][1], "⚠ 还不知道已有筹码，可能不准。")
         self.assertEqual(rows[0][3], [])
-        self.assertEqual(model.area("owned_unknown"), "advice")
+        self.assertEqual(model.group("owned_unknown"), "advice")
         model.notices = {r[0]: r for r in rows}
         self.assertFalse(model.needs_action())
-        self.assertIn(f"notice:owned_unknown:{OWNED_UNKNOWN_ADVICE}", model.keys("advice"))
         self.assertEqual(notice_rows(model, live=False, owned_unknown=True), [])
         self.assertEqual(notice_rows(model, view_of(game_over=True), live=True, owned_unknown=True), [])
         self.assertEqual(notice_rows(model, live=True), [])
@@ -355,8 +354,46 @@ class NoticeModelTest(unittest.TestCase):
         self.assertEqual([b[2] for b in rows[1][3]], ["add", "dismiss_gain"])
         model.notices = {r[0]: r for r in rows}
         self.assertTrue(model.needs_action())
-        self.assertEqual(model.keys("owned"), {f"notice:gain:{rows[1][1]}"})
+        self.assertEqual((model.group("unlocked3"), model.group("gain")), ("recog", "owned"))
         self.assertEqual(set(model.texts()), {"unlocked3", "gain"})
+
+    def test_card_rows_after_global_in_card_order(self):
+        """「提示」卡片里的先后：全局提示在前（内部先后不变），接着按卡片从上到下排各卡片的事：识别（对局中途的新一局、
+        截取方式在前）、筹码方案、推荐、已有筹码。"""
+        model = notices.NoticeModel()
+        model.newgame_why, model.newgame_cause = "轮次变小", "round"
+        model.removed, model.free_notice, model.recog_stopped = "标靶", "免费", True
+        view = SimpleNamespace(game_over=False, unrecorded=1, unsupported=["不支持"], map_switched=True,
+                               scheme_name="甲", saved_scheme_name="乙")
+        capture = ("截取方式", "说明")
+        rows = notice_rows(model, view, live=True, reverted_chip="书签", owned_unknown=True, capture=capture,
+                           unlocked=[(3, "解锁了", unlock.SECRETS[3])], hotkey="热键不可用")
+        self.assertEqual([k for k, *_ in rows],
+                         ["stopped", "hotkey", "free", "newgame", "capture", "unsupported0", "unlocked3", "map_switch",
+                          "owned_unknown", "reverted", "gain", "removed"])
+        self.assertEqual([model.group(k) for k, *_ in rows],
+                         ["global"] * 3 + ["recog_top"] * 2 + ["recog"] * 2 + ["scheme"] + ["advice"] * 2
+                         + ["owned"] * 2)
+
+    def test_card_prompts_in_their_groups(self):
+        """原来卡片自己画的三处（CardPrompts）排进各自的一组：提示打开任务栏在「识别」其余几条前面，请选角色在「推荐」其余
+        几条后面，补录行在「已有筹码」其余几条前面。"""
+        model = notices.NoticeModel()
+        model.panel_prompt, model.removed = True, "标靶"
+        prompts = notices.CardPrompts(opentasks=("opentasks", "打开任务栏", "info", []),
+                                      hero=("hero", "请选角色\n推荐已暂停。", "warn", []),
+                                      missed=("missed", "⚠ 请补录。", "warn", [("书签", "#ffd54a", ("pick_missed", "书签"), "")]))
+        rows = notice_rows(model, view_of(unsupported=["不支持"]), live=True, reverted_chip="书签", prompts=prompts)
+        self.assertEqual([k for k, *_ in rows],
+                         ["opentasks", "unsupported0", "reverted", "hero", "missed", "panel", "removed"])
+        self.assertEqual([model.group(k) for k in ("opentasks", "hero", "missed")], ["recog", "advice", "owned"])
+
+    def test_lane_only_keeps_card_rows(self):
+        """第二张悬浮窗：只留各卡片的事和「识别已停止」，全局提示不出（都在同一张「提示」卡片里，照旧按所属的一组筛）。"""
+        model = notices.NoticeModel(lane_only=True)
+        model.recog_stopped, model.free_notice, model.removed = True, "免费", "标靶"
+        rows = notice_rows(model, view_of(unrecorded=1), hotkey="热键不可用")
+        self.assertEqual([k for k, *_ in rows], ["stopped", "gain", "removed"])
 
     def test_global_rows_order(self):
         """全局提示：存不进个人目录、方案文件、图片下载、校准、诊断包，「免费软件」声明排在最后。"""
@@ -364,7 +401,7 @@ class NoticeModelTest(unittest.TestCase):
         model.storage_reason, model.calibrate_n, model.export_path, model.free_notice = "x", 21, "D:\\r", "免费"
         rows = notice_rows(model, schemes="方案文件读坏了", assets=("downloading", 1, 2, ""))
         self.assertEqual([k for k, *_ in rows], ["storage", "schemes", "assets", "calibrate", "export", "free"])
-        self.assertTrue(all(model.area(k) == "global" for k, *_ in rows))
+        self.assertTrue(all(model.group(k) == "global" for k, *_ in rows))
         tips = model.tips(logs="X:\\logs", assets_folder="assets", capture=None)
         self.assertIn("已累计 21 局（X:\\logs）", tips["calibrate"])
         model.storage_closed = model.calibrate_closed = True

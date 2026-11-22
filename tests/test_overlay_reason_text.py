@@ -425,12 +425,12 @@ class ReasonShortTest(unittest.TestCase):
         self.check(part_pill(late), late)
 
     def test_tendency_and_unrecorded(self):
-        """职业倾向（0 分，灰色）「职业倾向：卡牌（暂不加分）」；资料库未收录以分项名开头「未收录：按平均水平」，
+        """职业倾向（0 分，灰色）「筹码池倾向：卡牌（暂不加分）」；资料库未收录以分项名开头「未收录：按平均水平」，
         整句仍写全称「资料库未收录：按筹码池里各筹码的平均水平计算」（都不写中性分的数值）。"""
         part = self.part("职业倾向", "凛", "小猪存钱罐", db=self.scaled(0.5), round=1)
-        self.assertEqual(part_pill(part).text, "职业倾向：卡牌（暂不加分）")
+        self.assertEqual(part_pill(part).text, "筹码池倾向：卡牌（暂不加分）")
         self.assertEqual(part_pill(part).tone, "info")
-        self.assertTrue(part.reason.endswith("职业分值未达到 100，暂不加分"), part.reason)
+        self.assertTrue(part.reason.endswith("分值未达到 100，暂不加分"), part.reason)
         self.check(part_pill(part), part)
         e = advise(self.db, State(hero="凛", rerolls=2), ["星辰回响徽记", "书签", "标靶"]).evals[0]
         self.assertEqual(e.parts[0].reason, "资料库未收录：按筹码池里各筹码的平均水平计算")
@@ -937,7 +937,7 @@ class TipLinesTest(unittest.TestCase):
             self.assertNotIsInstance(_text_label("推荐", FONT_S), WrapLabel)  # 不换行的标签照旧
             window = Overlay(self.db, OverlaySession(self.db, UiSettings(hero="凛")), threading.Lock())
             try:
-                for w in (window.map_prompt, window.missed_label, window.recog_msg):
+                for w in (window.map_prompt, window.recog_msg):
                     self.assertIsInstance(w, WrapLabel)
                 window.map_prompt.setText(OPEN_TASKS)
                 self.assertEqual(window.map_prompt.text(), OPEN_TASKS)

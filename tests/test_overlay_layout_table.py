@@ -67,26 +67,14 @@ def reference(ov, view, clock, set_tip, set_accent) -> None:
     ov.global_area.setVisible(shown or bool(message))
 
     keys = set()
-    top = notices.keys("recog_top")
-    keys |= top
-    ov.recog_top.setVisible(bool(top))
     ov.status_box.setVisible(full)
-    if full:
-        ov.map_row.setVisible(ov._map_on and ov._map_entered)
-    else:
-        ov.map_row.setVisible(ov._map_on and ov._map_prompt)
-    if ov._map_on and ov._map_prompt:
+    ov.map_row.setVisible(ov._map_ask)  # 只剩请用户选地图；提示打开任务栏在「提示」卡片里
+    if ov._map_ask:
         keys.add(f"map:{ov._map_key}")
-    notes = notices.keys("recog")
-    keys |= notes
-    ov.recog_notices.setVisible(bool(notes))
     ov._set_message(ov.recog_msg, ov._area_message("recog", waiting) if full else "")
     ov._place_card(ov.recog_card, full or bool(keys), keys, ov._recog_summary())
 
     keys = {"hero"} if ov._hero_needed else set()
-    notes = notices.keys("scheme")
-    keys |= notes
-    ov.scheme_notices.setVisible(bool(notes))
     ov._set_message(ov.scheme_msg, ov._area_message("scheme", waiting) if full else "")
     ov._place_card(ov.scheme_card, full or ov._hero_needed or bool(keys), keys, ov._scheme_summary(view.hero))
 
@@ -117,26 +105,17 @@ def reference(ov, view, clock, set_tip, set_accent) -> None:
         ov._fix_close(fit=False)
     if not ov.fix_row.isHidden():
         keys.add("fix")
-    notes = notices.keys("advice")
-    keys |= notes
-    ov.advice_notices.setVisible(bool(notes))
     ov._set_message(ov.advice_msg, ov._area_message("advice", waiting) if full else "")
-    ov._place_card(ov.advice_card, full or live or prompt or bool(notes), keys, ov._advice_summary(waiting))
+    ov._place_card(ov.advice_card, full or live or prompt, keys, ov._advice_summary(waiting))
     ov._show_basis(view, stale)  # 卡片头那段「芬妮 · 银行卡流」：摆好卡片以后再定
 
     keys = set()
     ov.add_row.setVisible(ov._add_open)
     if ov._add_open:
         keys.add(f"add:{ov._add_seq}")
-    ov.missed.setVisible(ov._missed_on)
-    if ov._missed_on:
-        keys.add("missed:" + "、".join(str(n) for n in ov._missed_offer))
     ov.granted_row.setVisible(ov._granted_on)
     if ov._granted_on:
         keys.add("granted:" + "、".join(ov._granted_shown[1]))
-    notes = notices.keys("owned")
-    keys |= notes
-    ov.owned_notices.setVisible(bool(notes))
     ov._set_message(ov.owned_msg, ov._area_message("owned", waiting) if full else "")
     has_chips = bool(ov._owned_shown)
     unknown = notices.panel_prompt or notices.panel_tab is not None
@@ -178,11 +157,9 @@ class Box:
 
 
 WIDGETS = ("title", "head_spacer", "summary", "toggle_btn", "quick_add", "add_btn", "global_msg", "global_notices",
-           "global_area", "recog_top", "status_box", "map_row", "recog_notices", "recog_msg", "scheme_notices",
-           "scheme_msg", "body",
-           "refresh_pill", "picked_label", "question", "feedback_dismiss", "stale", "idle_label", "advice_notices",
-           "advice_msg",
-           "add_row", "missed", "granted_row", "owned_notices", "owned_msg", "owned_empty", "owned_scroll", "toolbar")
+           "global_area", "status_box", "map_row", "recog_msg", "scheme_msg", "body",
+           "refresh_pill", "picked_label", "question", "feedback_dismiss", "stale", "idle_label", "advice_msg",
+           "add_row", "granted_row", "owned_msg", "owned_empty", "owned_scroll", "toolbar")
 
 
 class FakeOverlay:
@@ -205,6 +182,7 @@ class FakeOverlay:
         self._hero_needed = c["hero_needed"]
         self._map_on, self._map_prompt, self._map_key = c["map_on"], c["map_prompt"], "低"
         self._map_entered = c["map_entered"]
+        self._map_ask = c["map_on"] and c["map_prompt"]  # 请用户选地图（「识别」卡片里还留着的那一种）
         self._pick = c["pick"]
         self._last_ev = c["last_ev"]
         self._feedback_until = c["feedback_until"]
@@ -219,7 +197,7 @@ class FakeOverlay:
                                       ask_until=self._ask_until, fix_slot=self._fix_slot, summary=self._advice_summary,
                                       question_state=self._question_state, show_stale=self._show_stale,
                                       fix_close=self._fix_close, show_basis=self._show_basis)
-        self.scheme = SimpleNamespace(map_on=self._map_on, map_prompt=self._map_prompt, map_entered=self._map_entered,
+        self.scheme = SimpleNamespace(map_on=self._map_on, map_prompt=self._map_prompt, map_entered=self._map_entered, map_ask=self._map_ask,
                                       map_key=self._map_key, granted_on=self._granted_on,
                                       granted_shown=self._granted_shown, summary=self._scheme_summary)
         self.owned = SimpleNamespace(missed_on=self._missed_on, missed_offer=self._missed_offer,

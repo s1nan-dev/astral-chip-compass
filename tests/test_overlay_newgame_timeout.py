@@ -49,19 +49,16 @@ class NewGameTimeoutBase(unittest.TestCase):
         return self.w._newgame_seq
 
     def assert_midgame_rows(self) -> None:
-        """对局中途判定的两行都在，各带一个「撤销」。"""
+        """对局中途判定的那一行在（只这一行），带一个「撤销」。"""
         texts = self.w.notice_model.texts()
         self.assertTrue(texts["newgame"].startswith("⚠ 对局中途判定为新的一局"), texts)
-        self.assertIn("newgame_owned", texts)
+        self.assertEqual([k for k in texts if k.startswith("newgame")], ["newgame"])
         self.assertEqual([b.text() for b in self.w.notices.buttons("newgame")], ["撤销"])
-        self.assertEqual([b.text() for b in self.w.notices.buttons("newgame_owned")], ["撤销"])
 
     def assert_no_newgame_rows(self) -> None:
         texts = self.w.notice_model.texts()
         self.assertNotIn("newgame", texts)
-        self.assertNotIn("newgame_owned", texts)
         self.assertEqual(self.w.notices.buttons("newgame"), [])
-        self.assertEqual(self.w.notices.buttons("newgame_owned"), [])
 
 
 class SelectNoticeExpiryTest(NewGameTimeoutBase):

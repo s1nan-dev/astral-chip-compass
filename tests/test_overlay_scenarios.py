@@ -45,7 +45,7 @@ from advisor.ui.winapi import GameProbe  # noqa: E402
 from advisor.ui.widgets import Pill  # noqa: E402
 from tests.test_engine import BANNED_WORDING  # noqa: E402
 from tests.support.fakes import FakeLogbook  # noqa: E402
-from tests.support.overlay_cases import (  # noqa: E402
+from tests.support.overlay_cases import (notice_block,   # noqa: E402
     BANNED, SCORE_NOTE, SCORE_TAIL, SCORE_WORDS, expire_flash, tip_text, unreadable,
 )
 from tests.support import qtenv, samples, sandbox  # noqa: E402
@@ -72,7 +72,6 @@ PANEL_PROMPT = "请点击游戏画面左下角的「查看筹码」按钮，打�
 OPEN_TASKS = "请点击游戏画面顶部进度条左端的任务按钮，打开任务栏"
 MISSED = "⚠ 未检测到上一次筹码三选一选择的筹码。请点击下方对应的筹码按钮补录。"
 MIDGAME = "⚠ 对局中途判定为新的一局（依据：{why}），已清空已有筹码、星数、轮次和地图。如果这一局还没有结束，请点击「撤销」。"
-MIDGAME_OWNED = "⚠ 已有筹码已随新的一局清空。如果这一局还没有结束，请点击「撤销」恢复。"
 SELECT_NEWGAME = "已判定为新的一局（依据：检测到选角界面），已清空上一局的已有筹码、星数、轮次和地图。"
 # 结算画面之后从选角界面开始的新一局（不可撤销，只作说明）
 NEXT_GAME = "已判定为新的一局（依据：上一局已结束，检测到选角界面），已清空上一局的已有筹码、星数、轮次和地图。"
@@ -253,7 +252,7 @@ SCRIPT = [
     ("选中后关闭", lambda g: (g.offer("212245", selected=True), g.close())),
     ("全队任务三选一", _team1),
     ("关闭时未检测到选择", lambda g: g.close()),
-    ("补录紫色飞星", lambda g: g.click(g.window.missed, "紫色飞星")),
+    ("补录紫色飞星", lambda g: g.click(notice_block(g.window, "missed"), "紫色飞星")),
     ("读到面板 2 个", _panel_two),
     ("任务三选一 2 级", lambda g: g.offer("213757")),
     ("刷新一次", lambda g: g.offer("213803")),
@@ -263,7 +262,7 @@ SCRIPT = [
     ("读到进度上限", _cap),
     ("第 9 轮任务三选一", _round9),
     ("刷新后关闭（漏记）", lambda g: (g.offer("214923"), g.close())),
-    ("补录银行卡-余额多", lambda g: g.click(g.window.missed, "银行卡-余额多")),
+    ("补录银行卡-余额多", lambda g: g.click(notice_block(g.window, "missed"), "银行卡-余额多")),
     ("任务三选一 3 级", lambda g: g.offer("214927")),
     ("选中医疗箱后关闭", lambda g: (g.offer("214931", selected=True), g.close())),
     ("升到 3 星", _levelup3),
@@ -366,7 +365,9 @@ class ScenarioBase(unittest.TestCase):
     # ---- 需要操作的提示看得见
 
     def assert_prompts_visible(self, prompts, action: bool | None = None, where: str = "") -> None:
-        """两种显示方式下：每条提示所在的卡片显示着、没有收起，提示和它的按钮都看得见。action 时边框变色。"""
+        """两种显示方式下：每条提示所在的卡片显示着、没有收起，提示和它的按钮都看得见。action 时边框变色。
+        提示行（notice_model 里正显示的）都在标题栏下方的「提示」卡片里：card 写的是它说的是哪张卡片的事，到「提示」卡片里
+        找；卡片自己画的几行（补录行、地图选择行等）到 card 那张卡片里找。"""
         w = self.w
         before = w.expanded
         for expanded in (False, True):
@@ -374,9 +375,14 @@ class ScenarioBase(unittest.TestCase):
             mode = "全部展开" if expanded else "一行显示"
             for text, card, names in prompts:
                 with self.subTest(step=where, mode=mode, prompt=text[:24]):
-                    self.assertTrue(w.card_open(card), f"「{card}」卡片被隐藏或收起")
-                    self.assertIn(text, shown_in(w, w.cards[card]))
-                    texts = [b.text() for b in visible_buttons(w, w.cards[card])]
+                    if any(text in t for t in w.notice_model.texts().values()):  # 提示行（请选角色那条的标题、正文各算）
+                        box = w.global_area
+                        self.assertFalse(box.isHidden(), "「提示」卡片被隐藏")
+                    else:
+                        box = w.cards[card]
+                        self.assertTrue(w.card_open(card), f"「{card}」卡片被隐藏或收起")
+                    self.assertTrue(any(text in t for t in shown_in(w, box)), (text, shown_in(w, box)))
+                    texts = [b.text() for b in visible_buttons(w, box)]
                     for name in names:
                         self.assertIn(name, texts)
             if action is not None:
@@ -516,8 +522,9 @@ class ScenarioBase(unittest.TestCase):
             row = notice_row(w, key)
             if level == "action" and row is not None and row.isVisibleTo(w.panel):
                 rows.append((text, row))
-        if w.missed.isVisibleTo(w.panel):
-            rows.append((w.missed_label.text(), w.missed))
+        for key in ("missed", "opentasks"):  # 补录行、提示打开任务栏：不是「需要您操作」级别，也要写明点哪里
+            if notice_block(w, key).isVisibleTo(w.panel):
+                rows.append((w.notice_model.texts()[key], notice_block(w, key)))
         if w.map_row.isVisibleTo(w.panel):
             rows.append((w.map_prompt.text(), w.map_row))
         for text, row in rows:
@@ -541,7 +548,10 @@ class ScenarioBase(unittest.TestCase):
                         self.assertGreaterEqual(btn.mapTo(w.panel, QPoint(0, 0)).x(),
                                                 label.mapTo(w.panel, QPoint(label.width(), 0)).x(), name)
                 if "下方" in text and w.isVisible():
-                    label = w.missed_label if row is w.missed else None
+                    # 补录行（提示块）：按钮在块里的文字下面
+                    texts = [lb for lb in row.findChildren(QLabel) if lb.isVisibleTo(w.panel)
+                             and (lb.objectName().startswith("notice_") or lb.objectName() == "noticeBody")]
+                    label = max(texts, key=lambda lb: y_of(w, lb)) if row.property("noticeBlock") and texts else None
                     if label is not None:
                         for btn in visible_buttons(w, row):
                             self.assertGreaterEqual(y_of(w, btn), y_of(w, label) + label.height(), btn.text())
@@ -586,10 +596,11 @@ class RealGameFlowTest(ScenarioBase):
         self.assertEqual(w.hero_state.tone, "muted")  # 还没进入对局：暗色，不算异常
 
     def test_entering_game_asks_for_panel(self):
-        """进入对局（读到轮次）、已有筹码未知：「已有筹码」卡片请用户打开「查看筹码」面板，卡片主体写「已有筹码待识别」，边框变色。"""
+        """进入对局（读到轮次）、已有筹码未知：「提示」卡片请用户打开「查看筹码」面板（地图还待识别，另有提示打开任务栏的
+        那一条），「已有筹码」卡片主体写「已有筹码待识别」，边框变色。"""
         play(self.game, "第 1 轮")
         w = self.w
-        self.assertEqual(w.notice_model.texts(), {"panel": PANEL_PROMPT})
+        self.assertEqual(w.notice_model.texts(), {"opentasks": OPEN_TASKS, "panel": PANEL_PROMPT})
         self.assertEqual(w.status.summary_plain, "第 1 轮 · 0 星")  # 难度还不知道；摘要不写地图
         self.assertEqual(w.hero_state.text(), "角色 已识别")
         self.assert_prompts_visible(PROMPTS["第 1 轮"], action=True, where="第 1 轮")
@@ -702,13 +713,13 @@ class RealGameFlowTest(ScenarioBase):
 
 @needs_labels
 class MidgameMisjudgeTest(ScenarioBase):
-    """对局中途（轮次、星数、角色）误判的新一局，「识别」卡片和「已有筹码」卡片各有一行「需要您操作」的提示和
-    「撤销」，边框变色；点任一个「撤销」都恢复，并自动保存不含截图的诊断包。"""
+    """对局中途（轮次、星数、角色）误判的新一局，「提示」卡片里一行「需要您操作」的提示和「撤销」（只这一行，「已有筹码」
+    的事里不另放），边框变色；点「撤销」恢复，并自动保存不含截图的诊断包。"""
 
     def test_notices_and_undo_each_button(self):
-        """三种依据各误判一次，分别点「识别」卡片和「已有筹码」卡片里的「撤销」：提示、边框、恢复、诊断包、推荐日志。"""
+        """三种依据各误判一次，点「撤销」：提示、边框、恢复、诊断包、推荐日志。"""
         for cause in MISJUDGE:
-            for key in ("newgame", "newgame_owned"):
+            for key in ("newgame",):
                 with self.subTest(cause=cause, button=key):
                     self.setUp()
                     try:
@@ -724,14 +735,13 @@ class MidgameMisjudgeTest(ScenarioBase):
         self.assertEqual(self.border_rgb(), ORANGE)
         texts = w.notice_model.texts()
         self.assertEqual(texts["newgame"], MIDGAME.format(why=why))
-        self.assertEqual(texts["newgame_owned"], MIDGAME_OWNED)
-        self.assertEqual(list(texts)[:2], ["newgame", "newgame_owned"])  # 排在提示行的最前面
-        for k in ("newgame", "newgame_owned"):
-            self.assertEqual(w.notice_model.notices[k][2], "action")
-            self.assertEqual([b.text() for b in w.notices.buttons(k)], ["撤销"])
-        prompts = [(texts["newgame"], "recog", ["撤销"]), (MIDGAME_OWNED, "owned", ["撤销"])]
+        self.assertNotIn("newgame_owned", texts)
+        self.assertEqual(list(texts)[:1], ["newgame"])  # 排在提示行的最前面（这时没有全局提示）
+        self.assertEqual(w.notice_model.notices["newgame"][2], "action")
+        self.assertEqual([b.text() for b in w.notices.buttons("newgame")], ["撤销"])
+        prompts = [(texts["newgame"], "recog", ["撤销"])]
         self.assert_prompts_visible(prompts, action=True, where=cause)
-        # 之后照常读到对局画面：已有筹码未知，另请用户打开面板；撤销的两行仍在
+        # 之后照常读到对局画面：已有筹码未知，另请用户打开面板；撤销的那一行仍在
         self.game.hud(s.settings.round)
         self.assertIn("panel", w.notice_model.texts())
         self.assert_prompts_visible(prompts + [(PANEL_PROMPT, "owned", ["关闭本条提示"])], action=True, where=cause)
@@ -741,7 +751,7 @@ class MidgameMisjudgeTest(ScenarioBase):
         self.assertEqual((s.settings.star, s.settings.star_read, s.settings.round), (2, True, 8))
         self.assertEqual((s.settings.map, s.settings.hero, s.game.seen_hero), ("异变图书馆", "芬妮", "芬妮"))
         self.assertEqual(s.game.progress_cap, 17)
-        for k in ("newgame", "newgame_owned", "panel"):
+        for k in ("newgame", "panel"):
             self.assertNotIn(k, w.notice_model.texts())
         self.assertFalse(w.panel.property("attention"))
         self.assertNotEqual(self.border_rgb(), ORANGE)
@@ -772,15 +782,15 @@ class MidgameMisjudgeTest(ScenarioBase):
 
     def test_chip_select_after_misjudge(self):
         """误判后（角色也被清空）紧接着出现三选一：推荐暂停，「推荐」卡片请用户在上方「筹码方案」卡片的角色下拉框选择角色，
-        「筹码方案」卡片（角色下拉框）和「识别」卡片的撤销提示两种显示方式下都看得见；点「撤销」后下一帧照常按恢复的状态
+        「筹码方案」卡片（角色下拉框）和「提示」卡片里的撤销提示两种显示方式下都看得见；点「撤销」后下一帧照常按恢复的状态
         给推荐。"""
         w = self.w
         why = self.misjudge("star")
         self.game.offer("214919")
         self.assertEqual(w.live_state.kind, "hero_needed")
-        prompts = [("请在上方「筹码方案」卡片的角色下拉框中选择当前角色", "advice", []),
+        prompts = [("请在下方「筹码方案」卡片的角色下拉框中选择当前角色", "advice", []),
                    ("角色：待识别，推荐已暂停。选择角色后立即计算推荐。", "advice", []),
-                   (MIDGAME.format(why=why), "recog", ["撤销"]), (MIDGAME_OWNED, "owned", ["撤销"]),
+                   (MIDGAME.format(why=why), "recog", ["撤销"]),
                    (PANEL_PROMPT, "owned", ["关闭本条提示"]), ("编辑方案", "scheme", ["编辑方案"])]
         self.assert_prompts_visible(prompts, action=True, where="误判后三选一")
         w.show()
@@ -792,7 +802,7 @@ class MidgameMisjudgeTest(ScenarioBase):
             self.assertEqual(w.hero_state.text(), "角色 待识别")
             self.assertLess(y_of(w, w.scheme_card), y_of(w, w.advice_card))  # 角色下拉框确实在「上方」
         w.set_expanded(False)
-        w.notices.buttons("newgame_owned")[0].click()
+        w.notices.buttons("newgame")[0].click()
         self.game.offer("214919")  # 三选一还开着：下一帧
         self.assertEqual(w.live_state.kind, "advice")
         self.assertEqual(self.game.advice[-1].state.owned, tuple(OWNED_BEFORE_MISJUDGE))
@@ -801,7 +811,8 @@ class MidgameMisjudgeTest(ScenarioBase):
         self.assertEqual(self.w.notice_model.texts().keys() - {"export"}, set())
 
     def test_cards_collapsed_still_show_undo(self):
-        """用户收起过「识别」「已有筹码」卡片：误判时两张卡片自动展开，「撤销」看得见。"""
+        """用户收起过「识别」「已有筹码」卡片：误判的提示在「提示」卡片里，「撤销」看得见；地图被清空以后提示打开任务栏的
+        那一条也在「提示」卡片里。两张卡片都照旧收起（提示行不让卡片展开）。"""
         w = self.w
         w.set_expanded(True)
         for key in ("recog", "owned"):
@@ -809,13 +820,17 @@ class MidgameMisjudgeTest(ScenarioBase):
             self.assertFalse(w.card_open(key))
         w.set_expanded(False)
         why = self.misjudge("star")
-        prompts = [(MIDGAME.format(why=why), "recog", ["撤销"]), (MIDGAME_OWNED, "owned", ["撤销"])]
+        prompts = [(MIDGAME.format(why=why), "recog", ["撤销"])]
         self.assert_prompts_visible(prompts, action=True, where="收起后误判")
+        w.set_expanded(True)
+        self.assertFalse(w.cards["owned"].is_open)
+        self.assertFalse(w.cards["recog"].is_open)
+        self.assertIn("opentasks", w.notice_model.texts())
 
-    # 对局中途误判清空了地图，「识别」卡片里还有地图选择行（请打开任务栏）。误判的警告放在卡片最上面单独的一块（recog_top），
-    # 在地图选择行和角色行之上（排在「识别」卡片最上面）
+    # 对局中途误判清空了地图，「识别」卡片里还有地图选择行（请打开任务栏）。误判的警告在「提示」卡片里（recog_top 一组，
+    # 排在「识别」的其余几条之前），「提示」卡片在「识别」卡片上面，所以也在地图选择行之上
     def test_midgame_notice_on_top_of_recog_card(self):
-        """对局中途误判的提示排在「识别」卡片最上面：一行显示时是卡片里的第一行，全部展开时在地图选择行等其他提示之上。"""
+        """对局中途误判的提示排在「识别」的事的最前面：在「提示」卡片里，在地图选择行和「识别」的其他提示之上。"""
         w = self.w
         self.misjudge("star")
         w.show()
@@ -824,14 +839,11 @@ class MidgameMisjudgeTest(ScenarioBase):
             APP.processEvents()
             row = notice_row(w, "newgame")
             self.assertTrue(row.isVisibleTo(w.panel))
+            self.assertIs(row.parentWidget(), w.global_notices)
             others = [x for x in (w.map_row, *(notice_row(w, k) for k in w.notice_model.notices if k != "newgame"
-                                              and w.notice_model.area(k) == "recog")) if x is not None and x.isVisibleTo(w.panel)]
+                                              and w.notice_model.group(k) == "recog")) if x is not None and x.isVisibleTo(w.panel)]
             for other in others:
                 self.assertLess(y_of(w, row), y_of(w, other), "全部展开" if expanded else "一行显示")
-            if not expanded:
-                rows = [x for x in w.recog_card.body.findChildren(QWidget)
-                        if x.parent() is w.recog_card.body and x.isVisibleTo(w.panel)]
-                self.assertIs(min(rows, key=lambda x: y_of(w, x)), w.recog_top)  # 卡片最上面单独的一块
 
     def test_select_screen_new_game_is_info_only(self):
         """没看到结算画面（结束时游戏在后台等）、直接看到选角界面的新一局：可以撤销，「识别」卡片里一行说明（不带 ⚠、
@@ -971,7 +983,8 @@ class KeyTextTest(ScenarioBase):
         def grab(name):
             for text in w.notice_model.texts().values():
                 seen.setdefault(text, name)
-            for text in (w.status.status_text(), w.status.summary_plain, w.missed_label.text(), w.map_prompt.text()):
+            for text in (w.status.status_text(), w.status.summary_plain, w.notice_model.texts().get("missed", ""),
+                         w.notice_model.texts().get("opentasks", ""), w.map_prompt.text()):
                 for part in re.split(r"｜| · ", text):  # 状态胶囊连成一行时用「｜」，一行显示的摘要用「 · 」
                     seen.setdefault(part, name)
 
@@ -1007,7 +1020,7 @@ class KeyTextTest(ScenarioBase):
         # 补录行筹码按钮的悬停说明
         self.setUp()
         play(self.game, "关闭时未检测到选择")
-        tips = {b.text(): tip_text(b.toolTip()) for b in visible_buttons(self.w, self.w.missed)}
+        tips = {b.text(): tip_text(b.toolTip()) for b in visible_buttons(self.w, notice_block(self.w, "missed"))}
         self.assertEqual(tips["紫色飞星"], "补录：紫色飞星")
 
 
@@ -1062,7 +1075,7 @@ class EveryStepTest(ScenarioBase):
                     where=name)
             for key, (_, text, level, btns) in w.notice_model.notices.items():
                 if level == "action":
-                    area = w.notice_model.area(key)
+                    area = w.notice_model.group(key)
                     self.assert_prompts_visible([(text, area, [b[0] for b in btns])], action=True, where=name)
                     checked.add("提示行")
             if w.live_state.on and w.live_state.kind == "advice":
@@ -1793,12 +1806,12 @@ class WeirdEventTest(unittest.TestCase):
             s, w = self.window(False, False)
             s.game.missed_offer = [None, LONG, "不存在的筹码", "书签"]
             w.handle(Event("missed_pick", offer=list(s.game.missed_offer), raw=[None, LONG]))
-            self.assertEqual([b.text() for b in visible_buttons(w, w.missed)], ["书签", "关闭本条提示"])
+            self.assertEqual([b.text() for b in visible_buttons(w, notice_block(w, "missed"))], ["书签", "关闭本条提示"])
             self.assertIn(f"「{LONG}」无法识别", w.owned.missed_buttons_text())
             self.assertEqual(w.width(), 459)
             w.set_expanded(True)
-            next(b for b in visible_buttons(w, w.missed) if b.text() == "关闭本条提示").click()
-            self.assertTrue(w.missed.isHidden())
+            next(b for b in visible_buttons(w, notice_block(w, "missed")) if b.text() == "关闭本条提示").click()
+            self.assertNotIn("missed", w.notice_model.texts())
             self.assertIsNone(s.game.missed_offer)
 
     def test_session_unknown_and_long_chip_names(self):

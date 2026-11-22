@@ -21,7 +21,7 @@ from advisor.ui.overlay_parts.app import OverlaySession, UiSettings
 from advisor.ui.overlay import Overlay
 from advisor.ui.services import Services
 from tests.support import qtenv, sandbox
-from tests.support.overlay_cases import frame
+from tests.support.overlay_cases import notice_block, frame
 
 APP = qtenv.app()
 # 带上版本模块：第一次启动的「免费软件」声明（带链接的提示行，notices.check_free_notice）取的就是它的文字
@@ -123,7 +123,7 @@ class OverlayLabelTest(unittest.TestCase):
         self.session.on_frame(None)
         w.handle(self.session.on_frame(None))
         self.settle()
-        self.assertFalse(w.missed.isHidden())
+        self.assertIn("missed", w.notice_model.texts())
         self.assertIn("「某某某」无法识别", w.owned.missed_buttons_text())
         assert_plain_beside_links(self, w, "补录行")
 

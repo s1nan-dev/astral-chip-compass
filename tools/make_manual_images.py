@@ -444,7 +444,10 @@ def shot_prompts(ctx: Context):
         clock[0] += 3.0
         feed(w, session, fn, arg)
     show(w, expanded=False)
-    marks = [Mark(1, rect_in(w.recog_card, w)), Mark(2, rect_in(w.owned_card, w))]
+    # 两条都排在「提示」卡片里（各自一个小块，部件名 notice-<键>）：①请打开任务栏 ②请打开「查看筹码」面板
+    from PySide6.QtWidgets import QWidget
+    blocks = [w.findChild(QWidget, name) for name in ("notice-opentasks", "notice-panel")]
+    marks = [Mark(i, rect_in(b, w)) for i, b in enumerate(blocks, 1) if b is not None]
     return grab(w), marks, None
 
 

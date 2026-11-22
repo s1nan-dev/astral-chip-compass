@@ -84,6 +84,199 @@ class SplitTest(unittest.TestCase):
         self.assertEqual(NB.sentences(body)[-1], W.UPDATE_VERIFY)
 
 
+def comma_heads() -> dict[str, str]:
+    """标题在逗号处断开的几种提示（按程序排出的文字）：键 → 原文。"""
+    from advisor.ui.overlay_parts.notices import few_failed_text
+
+    return {
+        "assets_blocked": "⚠ " + W.DOWNLOAD_BLOCKED.format(time="15:42", n=120),
+        "assets_failed": "⚠ " + W.DOWNLOAD_FAILED.format(n=4),
+        "assets_few": "⚠ " + few_failed_text(2),
+        "assets_few_later": "⚠ " + few_failed_text(2, later=True),
+        **{f"capture_{k}": v for k, v in W.CAPTURE_NOTICE.items()},
+        "dpi": "⚠ " + W.DPI_CHANGED.format(exe="app\\ACC.exe"),
+        "folder": "⚠ " + W.FOLDER_UNWRITABLE,
+        "gain": W.GAIN_TEXT.format(why="星数由 1 星增加为 3 星，未检测到对应的筹码三选一界面", n=" 2 个筹码"),
+        "newgame": W.NEWGAME_TEXT.format(why="检测到选角界面"),
+        "newgame_midgame": W.NEWGAME_MIDGAME.format(why="星数由 1 星增加为 2 星"),
+        "panel": W.PROMPT_PANEL,
+        "panel_resume": W.PROMPT_PANEL_RESUME,
+        **{f"schemes_{k}": v.format(file="schemes.json", backup="b", broken="c") for k, v in W.SCHEMES_NOTICE.items()},
+        "unlocked": W.UNLOCKED_NOTICE.format(name="碳纤流光", condition=W.UNLOCKED_CONDITIONS["carbon_flow"]),
+    }
+
+
+class HeadCommaTest(unittest.TestCase):
+    """在逗号处断开的标题显示时不写末尾的「，」（正文照旧另起一行）；以冒号、句号结尾的照写；原文不变。"""
+
+    @staticmethod
+    def shown_head(text: str) -> str:
+        head, _ = NB.split_head(text)
+        return plain_html(NB.head_html(head)).replace(KEEP_JOINER, "").replace("​", "")
+
+    def test_comma_dropped(self):
+        for key, text in comma_heads().items():
+            with self.subTest(key=key):
+                head, body = NB.split_head(text)
+                self.assertTrue(head.endswith("，"), head)  # 原文的标题确实在逗号处断开
+                self.assertTrue(body.strip())
+                self.assertEqual(self.shown_head(text), head[:-1])
+                self.assertEqual(head + "".join(NB.sentences(body)), text)  # 原文照旧拼得回去
+
+    def test_colon_and_period_kept(self):
+        for text in all_texts():
+            head, _ = NB.split_head(text)
+            with self.subTest(text=text[:30]):
+                self.assertEqual(NB.head_shown(head), head[:-1] if head.endswith("，") else head)
+        for head in ("诊断包已保存：", "新版本已下好：", "已经是最新版本（1.2.3）。"):
+            self.assertEqual(NB.head_shown(head), head)
+        colon = "诊断包已保存：D:\\很长很长很长很长很长很长很长的文件夹\\诊断包.zip。后面一句。"
+        self.assertTrue(NB.split_head(colon)[0].endswith("："))
+        self.assertTrue(self.shown_head(colon).endswith("："))
+
+    def test_block_keeps_original_text(self):
+        """排成块以后：标题标签不以「，」结尾，块上记的原文（noticeText）不变。"""
+        view = SimpleNamespace(action=lambda action: (lambda: None), open_link=lambda href: None)
+        for key, text in comma_heads().items():
+            with self.subTest(key=key):
+                frame, _, _ = NB.build_block(view, key, text, "warn", [], "")
+                self.assertEqual(frame.property("noticeText"), text)
+                from PySide6.QtWidgets import QLabel
+
+                title = frame.findChildren(QLabel)[0]
+                shown = plain_html(title.text()).replace(KEEP_JOINER, "").replace("​", "")
+                self.assertFalse(shown.endswith("，"), shown)
+                frame.deleteLater()
+
+
+class ShownTextTest(unittest.TestCase):
+    """只改显示的两处：免费声明两个链接中间的「；」显示成「 · 」；有新版本那一条有资料日期时标题只写到版本号。"""
+
+    @staticmethod
+    def block_texts(name: str, text: str) -> tuple[str, str, str]:
+        from PySide6.QtWidgets import QLabel
+
+        view = SimpleNamespace(action=lambda action: (lambda: None), open_link=lambda href: None)
+        frame, _, _ = NB.build_block(view, name, text, "info", [], "")
+        labels = frame.findChildren(QLabel)
+        plain = [plain_html(lb.text()).replace(KEEP_JOINER, "").replace("​", "").replace("\xa0", " ")
+                 for lb in labels]
+        original = frame.property("noticeText")
+        frame.deleteLater()
+        return plain[0], plain[1] if len(plain) > 1 else "", original
+
+    def test_free_notice_separator(self):
+        _, body, original = self.block_texts("free", FREE)
+        self.assertEqual(original, FREE)  # 原文不变
+        self.assertIn(" ；", app_version.FREE_NOTICE)
+        self.assertNotIn("；", body)
+        self.assertRegex(body, r"下载镜像 *· *源代码和发布页面")
+        _, other, _ = self.block_texts("export", "已保存。甲 ；乙。")  # 别的提示照旧
+        self.assertIn("；", other)
+
+    def test_update_available_head(self):
+        row = update_rows([UpdateNotice("available", version="1.3.1", data_date="2026-10-17", auto=True,
+                                        delta=True, size=89000000)])[0]
+        head, body, _ = self.block_texts("update", row[1])
+        self.assertEqual(head, "拾星助手有新版本 1.3.1")
+        self.assertTrue(body.startswith("资料同步到 2026-10-17。\n") or body.startswith("资料同步到 2026-10-17。"), body)
+        self.assertNotIn("（资料同步到", row[1])
+        manual = update_rows([UpdateNotice("available", version="1.3.1", data_date="2026-10-17", auto=False)])[0]
+        self.assertEqual(NB.split_head(manual[1])[0], "拾星助手有新版本 1.3.1")
+        plain = update_rows([UpdateNotice("available", version="1.3.1", auto=True, size=1 << 20)])[0]
+        self.assertEqual(NB.split_head(plain[1])[0], "拾星助手有新版本 1.3.1。")  # 没有资料日期时照旧
+
+
+class MissedRowTest(unittest.TestCase):
+    """补录行排成提示块：筹码按钮的字按稀有度着色（按钮文字和原来一样），无法识别的候选只写一段字（不是按钮），「关闭本条提示」
+    照旧；点了按钮调用 (动作, 筹码名)。"""
+
+    def test_colored_buttons_and_label(self):
+        from PySide6.QtWidgets import QLabel, QPushButton
+
+        calls = []
+        view = SimpleNamespace(action=lambda action: (lambda a=action: calls.append(a)), open_link=lambda href: None)
+        btns = [("书签", "#ffd54a", ("pick_missed", "书签"), "补录：书签"),
+                ("「xx」无法识别", "", None, ""),
+                (W.DISMISS, "", ("pick_missed", None), "不补录，关闭本条提示")]
+        frame, grid, widgets = NB.build_block(view, "missed", W.MISSED_PROMPT, "warn", btns, "")
+        # 按钮是 QPushButton 的子类（factory.OutlineButton：皮肤给了描边颜色时字画成描边字），标签就是 QLabel
+        self.assertEqual([isinstance(x, QPushButton) for x in widgets], [True, False, True])
+        self.assertIs(type(widgets[1]), QLabel)
+        self.assertEqual([x.text() for x in widgets], ["书签", "「xx」无法识别", W.DISMISS])
+        self.assertIn("#ffd54a", widgets[0].styleSheet().lower())
+        for b in (widgets[0], widgets[2]):
+            b.click()
+        self.assertEqual(calls, [("pick_missed", "书签"), ("pick_missed", None)])
+        frame.deleteLater()
+
+
+class LightSkinTextTest(unittest.TestCase):
+    """浅色皮肤上的几处字色：补录行筹码按钮的字（CHIP_BUTTON_TEXT，框线照旧稀有度颜色）、浅色卡片上的筹码名（RARITY_TEXT）、
+    白字的描边（NAME_OUTLINE、ACCENT_OUTLINE）、提示的正文（NOTICE_BODY_COLOR）；没写这些字段的皮肤照旧。"""
+
+    def setUp(self):
+        from advisor.ui import theme
+
+        self.theme = theme
+        self.addCleanup(theme.set_skin, "default")
+
+    def test_chip_button_deep_text(self):
+        from advisor.ui.overlay_parts.factory import _chip_button
+        from advisor.ui.theme import COMMON as C
+
+        for key, deep in (("classic_white", "#b86e00"), ("classic_inverse", "#b06400"), ("classic_black", None)):
+            with self.subTest(skin=key):
+                self.theme.set_skin(key)
+                gold = C.RARITY_COLOR["金"]
+                sheet = _chip_button("书签", gold, deep=True).styleSheet().lower()
+                self.assertIn(f"color:{(deep or gold).lower()};", sheet)
+                self.assertIn(f"border:2px solid {gold.lower()}", sheet)  # 框线照旧
+                plain = _chip_button("书签", gold).styleSheet().lower()  # 不打开 deep：字照旧稀有度颜色
+                self.assertIn(f"color:{gold.lower()};", plain)
+        self.theme.set_skin("default")
+        gold = C.RARITY_COLOR["金"]
+        self.assertIn(gold.lower(), _chip_button("书签", gold, deep=True).styleSheet().lower())
+
+    def test_rarity_text(self):
+        from advisor.ui.overlay_parts.factory import _rarity_text
+        from advisor.ui.theme import COMMON as C
+
+        self.theme.set_skin("classic_white")
+        self.assertEqual((_rarity_text("金"), _rarity_text("蓝")), ("#b86e00", "#0a78c2"))
+        self.assertEqual(_rarity_text("紫"), C.RARITY_COLOR["紫"])  # 没写的稀有度照 RARITY_COLOR
+        self.assertEqual(_rarity_text(None), C.TEXT_COLOR)
+        for key in ("default", "classic_inverse", "white_seaview"):
+            self.theme.set_skin(key)
+            self.assertEqual(_rarity_text("金"), C.RARITY_COLOR["金"], key)
+
+    def test_outline_buttons(self):
+        from PySide6.QtGui import QColor
+
+        from advisor.ui.overlay_parts.factory import OutlineButton, _button
+
+        self.theme.set_skin("classic_white")
+        ink = self.theme.current().overlay.ACCENT_OUTLINE
+        self.assertTrue(ink)
+        accent, plain, name = _button("撤销", accent="primary"), _button("撤销"), OutlineButton("书签", role="name")
+        self.assertEqual((accent.outline_color(), plain.outline_color(), name.outline_color()), (ink, "", ink))
+        accent.setStyleSheet(self.theme.overlay_style())
+        accent.resize(120, 36)
+        img = accent.grab().toImage()
+        dark = sum(1 for x in range(20, 100) for y in range(8, 28) if QColor(img.pixel(x, y)).lightness() < 60)
+        self.assertGreater(dark, 10)  # 描边画出来了（橙色按钮上一圈深色）
+        for key in ("default", "classic_black", "white_seaview"):
+            self.theme.set_skin(key)
+            self.assertEqual((accent.outline_color(), name.outline_color()), ("", ""), key)
+
+    def test_notice_body_color(self):
+        for key, color in (("classic_white", "#6e6e6e"), ("classic_inverse", "#6b6b75"), ("white_seaview", "#687087")):
+            self.theme.set_skin(key)
+            self.assertIn(f"QLabel#noticeBody {{ color: {color}; }}", self.theme.overlay_style(), key)
+        self.theme.set_skin("default")
+        self.assertRegex(self.theme.overlay_style(), r"QLabel#noticeBody \{ color: rgba\(")
+
+
 class LinkTest(unittest.TestCase):
     def test_labeled_and_bare(self):
         """「说法：网址」→ 链接「说法」，地址是原网址；单独的网址照写成链接。"""

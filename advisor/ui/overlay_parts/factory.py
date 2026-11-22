@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QEvent, QRectF, QSize, Qt
-from PySide6.QtGui import QColor, QIcon, QPainter, QTextDocument
+from PySide6.QtGui import QColor, QFontInfo, QIcon, QPainter, QPalette, QTextDocument
 from PySide6.QtWidgets import (
     QFrame,
+    QScrollArea,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -47,9 +48,67 @@ def _pill_tip(text: str) -> str:
     return tip_paragraphs_html(text) if "\n" in text else tip_html(text)
 
 
+class OutlineButton(QPushButton):
+    """悬浮窗的按钮：皮肤给了描边颜色时，字画成描边字（亮色底上的白字靠一圈深色细边看清）；没给时照样式表画，和
+    QPushButton 一样。role 为 accent 时按 OverlayLook.ACCENT_OUTLINE（只有强调的按钮：accent 为 map、primary、capture，
+    按钮的 accent 可以中途换），name 时按 NAME_OUTLINE（整块铺稀有度颜色的筹码名按钮）。按钮的底、框线、字的颜色和字体
+    照旧按样式表，描边字只换掉画字这一步。"""
+
+    ACCENTS = ("map", "primary", "capture")
+
+    def __init__(self, text: str = "", role: str = "accent", parent=None):
+        super().__init__(text, parent)
+        self.role = role
+
+    def outline_color(self) -> str:
+        if self.role == "name":
+            return O.NAME_OUTLINE if O.NAME_FILL else ""
+        return O.ACCENT_OUTLINE if (self.property("accent") or "") in self.ACCENTS else ""
+
+    def paintEvent(self, event) -> None:
+        ink = self.outline_color()
+        if not ink:
+            super().paintEvent(event)
+            return
+        from .. import decor
+
+        opt = QStyleOptionButton()
+        self.initStyleOption(opt)
+        text = opt.text.replace("&&", "&")
+        opt.text = ""
+        p = QStylePainter(self)
+        p.drawControl(QStyle.CE_PushButton, opt)  # 只画底和框线
+        rect = QRectF(self.style().subElementRect(QStyle.SE_PushButtonContents, opt, self))
+        px = QFontInfo(self.font()).pixelSize()
+        # 描边宽度按字号：线宽的一半压在字外，小字约 1 像素、首推的大字约 1.4 像素，不糊字
+        decor.outlined_text(p, rect, text, self.font(), opt.palette.color(QPalette.ButtonText), ink,
+                            max(2.0, px * 0.15))
+        p.end()
+
+
+class OutlineLabel(QLabel):
+    """写成描边字的标签（亮色胶囊上的白字，例如「刷新」）：样式表照常画底色、圆角和内边距，字的颜色设成透明，再在上面
+    按 ink、outline 画描边字。描边宽度同 OutlineButton。"""
+
+    def __init__(self, text: str, ink: str, outline: str):
+        super().__init__(text)
+        self.ink, self.outline = ink, outline
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        from .. import decor
+
+        p = QPainter(self)
+        px = QFontInfo(self.font()).pixelSize()
+        decor.outlined_text(p, QRectF(self.contentsRect()), self.text(), self.font(), self.ink, self.outline,
+                            max(2.0, px * 0.15))
+        p.end()
+
+
 def _button(text: str, accent: str = "", color: str | None = None, tip: str = "") -> QPushButton:
-    """有底色和框线的按钮（样式见悬浮窗样式表 theme.overlay_style）。accent 选一种强调色，color 只改文字颜色。"""
-    btn = QPushButton(text)
+    """有底色和框线的按钮（样式见悬浮窗样式表 theme.overlay_style）。accent 选一种强调色，color 只改文字颜色。
+    强调的按钮在皮肤给了 ACCENT_OUTLINE 时字画成描边字（OutlineButton）。"""
+    btn = OutlineButton(text)
     if accent:
         btn.setProperty("accent", accent)
     if color:
@@ -61,6 +120,30 @@ def _button(text: str, accent: str = "", color: str | None = None, tip: str = ""
 
     chrome.cut_corners(btn)  # 皮肤要切角时（碳纤流光）按钮画成切角的框；别的皮肤照样式表画
     return btn
+
+
+def _chip_button(text: str, color: str, tip: str = "", deep: bool = False) -> QPushButton:
+    """写着筹码名、字按稀有度颜色（color）写的按钮（补录行、地图发放的筹码）。皮肤给了 CHIP_BUTTON_BG 时（按钮本身铺满
+    粉、蓝、绿这类颜色的几套，稀有度颜色的字在上面看不清）按钮底换成它、字和框线用稀有度颜色；没给时照普通按钮、只改字色。
+    deep：字换成 OverlayLook.CHIP_BUTTON_TEXT 里这个稀有度的颜色（浅底上深一档），框线照旧用 color。"""
+    if not O.CHIP_BUTTON_BG:
+        return _button(text, color=color, tip=tip)
+    ink = color
+    if deep:
+        rarity = next((r for r, c in C.RARITY_COLOR.items() if c.lower() == color.lower()), "")
+        ink = O.CHIP_BUTTON_TEXT.get(rarity, color)
+    btn = _button(text, tip=tip)
+    cls = btn.metaObject().className()
+    pad = f" padding:{O.CHIP_BUTTON_PADDING};" if O.CHIP_BUTTON_PADDING else ""
+    btn.setStyleSheet(f".{cls} {{ color:{ink}; background-color:{O.CHIP_BUTTON_BG}; border:2px solid {color};{pad} }}"
+                      f" .{cls}:hover {{ background-color:{O.CHIP_BUTTON_HOVER_BG}; }}")
+    return btn
+
+
+def _rarity_text(rarity, fallback: str | None = None) -> str:
+    """写在浅色卡片上的筹码名的颜色：皮肤给了 OverlayLook.RARITY_TEXT 时用它（深一档），否则照 RARITY_COLOR；
+    稀有度不明时为 fallback（默认 TEXT_COLOR）。"""
+    return O.RARITY_TEXT.get(rarity) or C.RARITY_COLOR.get(rarity, fallback or C.TEXT_COLOR)
 
 
 def _set_accent(btn: QPushButton, accent: str) -> None:
@@ -255,6 +338,55 @@ def _message_label() -> QLabel:
     label.setObjectName("msg")
     label.hide()
     return label
+
+
+class CardsScroll(QScrollArea):
+    """卡片区（「提示」「识别」「筹码方案」「推荐」「已有筹码」五张卡片）外面套的滚动区：平时高度就是卡片区的高度、不滚动，
+    和直接排在面板上一样；悬浮窗压过「已有筹码」卡片还比屏幕高时（Overlay.fit_height），给它一个上限（cap），卡片区整体在
+    里面上下滚动，标题栏、底栏照旧露在外面。底色透明，面板的底纹照常透出来。"""
+
+    def __init__(self, inner: QWidget):
+        super().__init__()
+        self.setObjectName("cardsScroll")
+        self.setFrameShape(QFrame.NoFrame)
+        self.setWidgetResizable(True)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.viewport().setAutoFillBackground(False)
+        inner.setAutoFillBackground(False)
+        self.setWidget(inner)
+        policy = QSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+        policy.setHeightForWidth(True)
+        self.setSizePolicy(policy)
+        self.cap = 0  # 高度上限；0 为不限（不滚动）
+
+    def set_cap(self, cap: int) -> None:
+        if cap != self.cap:
+            self.cap = cap
+            self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn if cap else Qt.ScrollBarAlwaysOff)
+            self.updateGeometry()
+
+    def content_height(self, width: int) -> int:
+        """卡片区按 width 宽排下来要的高度（不滚动时）。"""
+        inner = self.widget()
+        lay = inner.layout()
+        if lay is not None and lay.hasHeightForWidth():
+            return lay.totalHeightForWidth(width)
+        return inner.sizeHint().height()
+
+    def hasHeightForWidth(self) -> bool:  # noqa: N802  Qt 的虚函数
+        return True
+
+    def heightForWidth(self, width: int) -> int:  # noqa: N802
+        height = self.content_height(width)
+        return min(height, self.cap) if self.cap else height
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        width = self.width() or 400
+        return QSize(width, self.heightForWidth(width))
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        return QSize(0, min(self.cap, 40) if self.cap else self.heightForWidth(self.width() or 400))
 
 
 class _Panel(QFrame):

@@ -469,7 +469,7 @@ class WordingTest(unittest.TestCase):
         self.assertEqual(W.update_size_text(SIZE, True), "最多约 85 MB，只下载变了的部分时更少")
         self.assertEqual(W.update_progress_text(NEW, 34 * MB - 1, SIZE), "正在下载新版本 99.0.0（33 / 85 MB）")
         self.assertEqual(W.update_progress_text(NEW, None, SIZE), "正在下载新版本 99.0.0（0 / 85 MB）")
-        self.assertEqual(W.update_date_text("2030-01-15"), "（资料同步到 2030-01-15）")
+        self.assertEqual(W.update_date_text("2030-01-15"), "\n资料同步到 2030-01-15")
         self.assertEqual((W.update_date_text(None), W.update_date_text("")), ("", ""))
 
     def test_download_steps(self):
@@ -504,7 +504,7 @@ class WordingTest(unittest.TestCase):
         self.assertEqual(W.UPDATE_DONE.format(version="1.2.3"), "拾星助手已更新到 1.2.3。")
         self.assertEqual(W.UPDATE_ERROR.format(err_file="app\\.tmp\\overlay_err.txt"),
                          "出了意外的错误，详细信息已写入错误记录（app\\.tmp\\overlay_err.txt）")
-        self.assertEqual((W.NOTICE_AREA["update"], W.NOTICE_AREA["updated"]), ("global", "global"))
+        self.assertEqual((W.NOTICE_GROUP["update"], W.NOTICE_GROUP["updated"]), ("global", "global"))
         # 识别出错、识别图片下载后处理失败的提示指向设置窗口的「检查更新」（按钮的字照设置窗口里的写）
         tail = f"多次出现请点击「设置」窗口中的「{st.UPDATE_BUTTON}」按钮，更新到最新版拾星助手。"
         for text in (W.RECOG_ITEM, W.RECOG_FRAME, W.RECOG_CAPTURE, W.RECOG_STARTUP, W.DOWNLOAD_CROP_FAILED):
@@ -527,7 +527,7 @@ class RowsTest(unittest.TestCase):
         资料同步日期时不写那一段。"""
         note = UpdateNotice("available", version=NEW, data_date="2030-01-15", size=SIZE)
         self.assertEqual(update_rows([note]), [(
-            "update", "拾星助手有新版本 99.0.0（资料同步到 2030-01-15）。点击「更新」开始下载（约 85 MB），下载期间照常使用，"
+            "update", "拾星助手有新版本 99.0.0\n资料同步到 2030-01-15。点击「更新」开始下载（约 85 MB），下载期间照常使用，"
                       "下好后自动重启换上。",
             "info", [("更新", "primary", "update_start",
                       "下载新版本（约 85 MB），下好后自动重启换上；对局中下好的，等对局结束再重启"),
@@ -544,7 +544,7 @@ class RowsTest(unittest.TestCase):
     def test_available_with_manifest(self):
         """这一版有文件清单（只下变了的部分）：那一句和「更新」的悬停说明里大小写成上限。"""
         row = update_rows([UpdateNotice("available", version=NEW, data_date="2030-01-15", delta=True, size=SIZE)])[0]
-        self.assertEqual(row[1], "拾星助手有新版本 99.0.0（资料同步到 2030-01-15）。点击「更新」开始下载（最多约 85 MB，只下载"
+        self.assertEqual(row[1], "拾星助手有新版本 99.0.0\n资料同步到 2030-01-15。点击「更新」开始下载（最多约 85 MB，只下载"
                                  "变了的部分时更少），下载期间照常使用，下好后自动重启换上。")
         self.assertEqual(row[3][0], ("更新", "primary", "update_start",
                                      "下载新版本（最多约 85 MB，只下载变了的部分时更少），下好后自动重启换上；对局中下好的，"
@@ -1975,11 +1975,11 @@ def database():
 
 def notice_row(w: Overlay, key: str):
     """悬浮窗上键为 key 的提示行（排在框里的那一个；换下来、还没删掉的不算）。"""
-    for box in w.notices.boxes.values():
-        for i in range(box.count()):
-            row = box.itemAt(i).widget()
-            if row is not None and row.objectName() == f"notice-{key}":
-                return row
+    box = w.notices.box
+    for i in range(box.count()):
+        row = box.itemAt(i).widget()
+        if row is not None and row.objectName() == f"notice-{key}":
+            return row
     return None
 
 
@@ -2362,7 +2362,7 @@ class OverlayTest(ErrorsCase):
         keys = [k for k in w.notice_model.texts() if k in ("updated", "update", "free")]
         self.assertEqual(keys, ["updated", "update", "free"])
         for key in ("updated", "update"):
-            self.assertEqual(w.notice_model.area(key), "global")
+            self.assertEqual(w.notice_model.group(key), "global")
             self.assertEqual(w.notice_model.notices[key][2], "info")
         self.assertEqual(w.diagnostic_state()["update"], {"state": "available", "version": NEW, "failure": None,
                                                           "reason": None})

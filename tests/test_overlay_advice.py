@@ -113,7 +113,7 @@ class ReasonDisplayTest(unittest.TestCase):
         self.assertIn(tag, reason_pills(e, 2))
         part = next(p for p in e.parts if p.label == "标签分")
         self.assertGreaterEqual(part.score, 0.5)
-        self.assertEqual(tag.tip, part.reason)  # 悬停显示整句「筹码标签「辅助」与角色当前职业相符」，不带「（+N）」
+        self.assertEqual(tag.tip, part.reason)  # 悬停显示整句「筹码标签「辅助」与角色当前筹码池相符」，不带「（+N）」
         self.assertEqual(score_marks(tag.tip), [])
         lines = reason_lines(e, 2)
         self.assertFalse(any(r.startswith(part.reason) for r in lines))  # 不再重复占一行
@@ -310,12 +310,12 @@ class ScoreFreeDisplayTest(unittest.TestCase):
         """绝对值相同时按理由（按分项原来的顺序）、标签分、前瞻的顺序。"""
         e = chip_eval(self.db, "标靶", [
             Part("推荐流派", 20.0, "「标记」是该角色的推荐流派", short="推荐流派：标记"),
-            Part("标签分", 20.0, "筹码标签「攻击」与角色当前职业相符"),
+            Part("标签分", 20.0, "筹码标签「攻击」与角色当前筹码池相符"),
             Part("组合", -20.0, "与已持有的「磨刀石」效果冲突", short="与磨刀石冲突"),
         ], lookahead=-20.0, reason=self.LOOK, short="前瞻：标记喷罐 19%→31%")
         self.assertEqual([p.text for p in reason_pills(e, 2)],
                          ["推荐流派：标记", "与磨刀石冲突", "标签：攻击 ✓", "前瞻：标记喷罐 19%→31%"])
-        self.assertEqual(tag_pill(e), ReasonPill("标签：攻击 ✓", "plus", "筹码标签「攻击」与角色当前职业相符"))
+        self.assertEqual(tag_pill(e), ReasonPill("标签：攻击 ✓", "plus", "筹码标签「攻击」与角色当前筹码池相符"))
         # 前瞻的绝对值不到门槛时不出标签（悬停明细里照列，见 test_breakdown_rows）
         small = chip_eval(self.db, "标靶", [Part("推荐流派", 20.0, "「标记」是该角色的推荐流派", short="推荐流派：标记")],
                           lookahead=LOOKAHEAD_MIN - 0.01, reason=self.LOOK, short="前瞻：标记喷罐 19%→31%")

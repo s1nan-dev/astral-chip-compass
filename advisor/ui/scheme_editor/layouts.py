@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, Qt
 from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
@@ -367,6 +367,55 @@ def game_frame(ed, *head_widgets) -> QVBoxLayout:
     return body
 
 
+class _EdgeFade(QWidget):
+    """横排的方案列表一排放不下时（横向能滚动），在还有内容被挡住的那一头画一截渐隐（暗到透明）和一个小箭头：
+    最后一张页签不再像是被齐刷刷截断，也看得出能往那边翻。盖在列表的可视区上，不接鼠标；滚动、改大小时跟着重画。"""
+
+    WIDTH = 36
+
+    def __init__(self, lst: QListWidget):
+        # 挂在列表本身上、盖住可视区那一块：挂在可视区上的话，列表滚动时会把它跟内容一起挪走
+        super().__init__(lst)
+        self._lst = lst
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        bar = lst.horizontalScrollBar()
+        bar.valueChanged.connect(self.update)
+        bar.rangeChanged.connect(lambda *_: self.update())
+        lst.viewport().installEventFilter(self)
+        self.raise_()
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802  Qt 的虚函数
+        if event.type() in (QEvent.Resize, QEvent.Move):
+            self.setGeometry(obj.geometry())
+            self.raise_()
+        return False
+
+    def paintEvent(self, event) -> None:
+        from PySide6.QtGui import QColor, QLinearGradient, QPainter
+
+        bar = self._lst.horizontalScrollBar()
+        if bar.maximum() <= 0:
+            return
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        h, w = self.height(), self.width()
+        for left, show in ((True, bar.value() > bar.minimum()), (False, bar.value() < bar.maximum())):
+            if not show:
+                continue
+            x0, x1 = (0, self.WIDTH) if left else (w, w - self.WIDTH)
+            grad = QLinearGradient(x0, 0, x1, 0)
+            grad.setColorAt(0, QColor(0, 0, 0, 200))
+            grad.setColorAt(1, QColor(0, 0, 0, 0))
+            p.fillRect(min(x0, x1), 0, self.WIDTH, h, grad)
+            p.setPen(QColor(255, 255, 255, 220))
+            f = p.font()
+            f.setBold(True)
+            f.setPixelSize(max(12, h // 2))
+            p.setFont(f)
+            p.drawText(min(x0, x1) + (2 if left else self.WIDTH - 16), 0, 14, h, Qt.AlignCenter, "‹" if left else "›")
+        p.end()
+
+
 def game_list(ed, delegate, horizontal: bool) -> QListWidget:
     """画成卡片的方案列表（delegate：_SchemeCardDelegate 横排一行、_SchemeTileDelegate 竖排）。"""
     from PySide6.QtWidgets import QListView
@@ -382,6 +431,7 @@ def game_list(ed, delegate, horizontal: bool) -> QListWidget:
         lst.setWrapping(False)
         lst.setFixedHeight(_SchemeCardDelegate.HEIGHT + 14)
         lst.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        _EdgeFade(lst)  # 一排放不下时，两头被挡住的那一边画一截渐隐和箭头，看得出还能往那边翻
     else:
         lst.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
     lst.currentItemChanged.connect(ed._list_changed)

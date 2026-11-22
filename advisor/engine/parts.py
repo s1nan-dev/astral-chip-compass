@@ -254,7 +254,7 @@ def official_parts(sc: Scorer, name: str, owned, rnd: int | None, scale: float |
     matched = [t for t in chip.tags if t in classes]
     if matched:
         # ui.text.tag_pill 从这句里找职业名，句中必须保留职业名
-        out.append(Part("标签分", o["tag"] * k, f"筹码标签「{matched[0]}」与角色当前职业相符"))
+        out.append(Part("标签分", o["tag"] * k, f"筹码标签「{matched[0]}」与角色当前筹码池相符"))
     if chip.school in o["keyword_schools"] and chip.school in owned_schools(db, owned):
         out.append(Part("关键词分", o["keyword"] * k, f"已持有「{chip.school}」流派的筹码", short=f"已持有{chip.school}流派"))
     return out
@@ -286,8 +286,8 @@ def _tendency_part(sc: Scorer, chip: Chip, official: list[Part]) -> Part | None:
     line = sc.db.rules["official"]["class_threshold"]
     return Part(
         "职业倾向", 0.0,
-        f"筹码标签「{match[0]}」与角色的职业倾向（{match[0]} {value}）相符；职业分值未达到 {line}，暂不加分",
-        short=f"职业倾向：{match[0]}（暂不加分）",
+        f"筹码标签「{match[0]}」与角色的筹码池倾向（{match[0]} {value}）相符；分值未达到 {line}，暂不加分",
+        short=f"筹码池倾向：{match[0]}（暂不加分）",
     )
 
 

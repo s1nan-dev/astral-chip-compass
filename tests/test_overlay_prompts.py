@@ -20,7 +20,7 @@ from advisor.ui.overlay_parts.app import UiSettings, OverlaySession
 from advisor.ui.services import Services  # noqa: E402
 from advisor.ui.text import tip_lines, tip_paragraphs_html, TIP_CHAR, TIP_BLANK_GAP, TIP_LINE  # noqa: E402
 from tests.support.fakes import FakeLogbook  # noqa: E402
-from tests.support.overlay_cases import APP, BANNED, PROJECT, button, buttons, choose_hero, expire_flash, flat, frame, name_buttons, plain_html, qt_lines, qt_tip, score_marks, shown, tip_text
+from tests.support.overlay_cases import notice_block, APP, BANNED, PROJECT, button, buttons, choose_hero, expire_flash, flat, frame, name_buttons, plain_html, qt_lines, qt_tip, score_marks, shown, tip_text
 
 
 class OverlayPromptTest(unittest.TestCase):
@@ -56,11 +56,11 @@ class OverlayPromptTest(unittest.TestCase):
         self.assertIn("panel", w.notice_model.texts())
         self.assertIn("「查看筹码」按钮", w.notice_model.texts()["panel"])
         self.assertTrue(w.panel.property("attention"))
-        # 放在「已有筹码」卡片里，一行显示时也看得到（卡片只显示这一行提示）
-        self.assertFalse(w.owned_card.isHidden())
-        self.assertFalse(w.owned_notices.isHidden())
-        self.assertTrue(w.owned_scroll.isHidden() and w.owned_empty.isHidden())
-        self.assertIn("「查看筹码」按钮", shown(w, w.owned_card))
+        # 放在「提示」卡片里，一行显示时也看得到；「已有筹码」卡片不因为它出现
+        self.assertFalse(w.global_area.isHidden())
+        self.assertFalse(w.global_notices.isHidden())
+        self.assertTrue(w.owned_card.isHidden())
+        self.assertIn("「查看筹码」按钮", shown(w, w.global_area))
         ev = Event("panel_read")
         ev.owned = ["书签", "标靶"]
         self.session.set_owned(ev.owned)
@@ -106,13 +106,13 @@ class OverlayPromptTest(unittest.TestCase):
         self.assertTrue(first.owned_unknown)
         self.handle_all(first)
         self.assertEqual(w.notice_model.texts().get("owned_unknown"), OWNED_UNKNOWN_ADVICE)
-        self.assertIn("还不知道已有筹码，可能不准。", shown(w, w.advice_card))
+        self.assertIn("还不知道已有筹码，可能不准。", shown(w, w.global_area))
         self.assertEqual(len(name_buttons(w)), 3)  # 推荐照常显示
         self.assertEqual(w.notice_model.notices["owned_unknown"][2], "warn")  # 这一行本身不改边框颜色
         w.show()
         APP.processEvents()
-        self.assertTrue(w.advice_notices.isVisibleTo(w.panel))
-        self.assertLess(w.advice_notices.geometry().top(), w.body.geometry().top())  # 在推荐内容的上面
+        self.assertTrue(w.global_notices.isVisibleTo(w.panel))
+        self.assertLess(w.global_area.geometry().bottom(), w.advice_card.geometry().top())  # 「提示」卡片在卡片区上面
         w.hide()
         # 选了第 1 个、三选一关掉：这一行跟着收起
         s.on_frame(None)
@@ -124,7 +124,7 @@ class OverlayPromptTest(unittest.TestCase):
         self.handle_all(s.on_frame(frame(["电击手套", "额外电池", "鹰眼瞄具"])))
         self.assertTrue(w.live_state.owned_unknown)
         self.assertEqual(w.notice_model.texts().get("owned_unknown"), OWNED_UNKNOWN_ADVICE)
-        self.assertIn("还不知道已有筹码，可能不准。", shown(w, w.advice_card))
+        self.assertIn("还不知道已有筹码，可能不准。", shown(w, w.global_area))
         self.assertNotIn("按记下的", shown(w, w.advice_card))
         # 三选一开着时读到面板：按面板上的筹码重算，这一行收起
         read = s.on_panel(self.own_panel(["书签", "大背包"]))
@@ -134,7 +134,7 @@ class OverlayPromptTest(unittest.TestCase):
         self.assertTrue(w.live_state.on)
         self.assertFalse(w.live_state.owned_unknown)
         self.assertNotIn("owned_unknown", w.notice_model.texts())
-        self.assertNotIn("还不知道", shown(w, w.advice_card))
+        self.assertNotIn("还不知道", shown(w, w.global_area))
         self.assertEqual(len(name_buttons(w)), 3)
         self.assertEqual(tuple(w.advice.last_ev.state.owned), ("书签", "大背包"))
 
@@ -171,8 +171,8 @@ class OverlayPromptTest(unittest.TestCase):
         self.assertEqual(ev.kind, "hero_needed")
         w.handle(ev)
         advice = shown(w, w.advice_card)
-        self.assertIn(PROMPT_HERO, advice)
-        self.assertEqual(PROMPT_HERO, "请在上方「筹码方案」卡片的角色下拉框中选择当前角色")
+        self.assertIn(PROMPT_HERO, shown(w, w.global_area))  # 请选角色那一条在「提示」卡片里
+        self.assertEqual(PROMPT_HERO, "请在下方「筹码方案」卡片的角色下拉框中选择当前角色")
         self.assertIn("候选筹码：", advice)
         self.assertFalse(w.scheme_card.isHidden())  # 角色下拉框在上方的「筹码方案」卡片里
         self.assertTrue(w.card_open("scheme"))
@@ -208,6 +208,21 @@ class OverlayPromptTest(unittest.TestCase):
         self.assertEqual(w.live_state.kind, "advice")
         self.assertFalse(w.live_state.hero_needed)
         self.assertTrue(w.scheme_card.isHidden())
+
+    def test_hero_restore_recomputes_live_advice(self):
+        """三选一显示着时手动换了角色、再点「恢复自动识别」：推荐当场按自动识别的角色重算，「推荐」卡片头的角色和「识别」
+        卡片一致，不等下一帧。"""
+        w = self.window
+        self.session.on_hero(SimpleNamespace(hero="凛"))
+        w.handle(self.session.on_frame(frame(["标靶", "大背包", "缓冲盾牌"])))
+        self.assertEqual(w.live_state.kind, "advice")
+        choose_hero(w, "阿尔")
+        self.assertIn("阿尔", w.advice.basis_label.text())
+        w.hero_restore.click()
+        self.assertEqual((self.session.settings.hero, self.session.hero_source), ("凛", "auto"))
+        self.assertEqual(w.live_state.kind, "advice")
+        self.assertIn("凛", w.advice.basis_label.text())
+        self.assertNotIn("阿尔", w.advice.basis_label.text())
 
     def test_undo_new_game_restores_panel_prompt_state(self):
         """撤销新一局后，「请打开查看筹码面板」按恢复后的 Session 决定是否显示。"""
@@ -253,7 +268,7 @@ class OverlayPromptTest(unittest.TestCase):
         self.assertEqual(self.session.settings.owned, [])
         w.handle(ev)
         self.assertIn("已判定为新的一局（依据：检测到选角界面）", w.notice_model.texts()["newgame"])
-        self.assertIn("已判定为新的一局", shown(w, w.recog_card))  # 新一局（撤销）在「识别」卡片里
+        self.assertIn("已判定为新的一局", shown(w, w.global_area))  # 新一局（撤销）在「提示」卡片里
         btns = w.notices.buttons("newgame")
         self.assertEqual([b.text() for b in btns], ["撤销"])
         self.assertEqual(btns[0].property("accent"), "primary")  # 有底色
@@ -279,25 +294,26 @@ class OverlayPromptTest(unittest.TestCase):
         self.assertNotIn("newgame", self.window.notice_model.texts())
 
     def test_midgame_new_game_needs_action(self):
-        """对局中途（轮次、星数、角色）判定的新一局排在最上面、边框变色，「已有筹码」卡片里另有一个「撤销」。"""
+        """对局中途（轮次、星数、角色）判定的新一局：「提示」卡片里只这一条、带「撤销」，边框变色。"""
         w = self.window
         self.session.set_owned(["书签", "标靶"])
         self.session.settings.round = 8
         w.handle(self.session._auto_new_game("round", 1, "轮次由第 8 轮变为第 1 轮"))
         texts = w.notice_model.texts()
         self.assertTrue(texts["newgame"].startswith("⚠ 对局中途判定为新的一局（依据：轮次由第 8 轮变为第 1 轮）"))
-        self.assertEqual(list(texts)[:2], ["newgame", "newgame_owned"])
+        self.assertEqual(list(texts)[:1], ["newgame"])
+        self.assertNotIn("newgame_owned", texts)
         self.assertTrue(w.panel.property("attention"))
         self.assertTrue(w.needs_attention())
-        # 一行显示时「已有筹码」卡片也出现（只显示这一行提示），里面有「撤销」
-        self.assertFalse(w.owned_card.isHidden())
-        self.assertIn("已有筹码已随新的一局清空", shown(w, w.owned_card))
-        owned_btns = w.notices.buttons("newgame_owned")
-        self.assertEqual([b.text() for b in owned_btns], ["撤销"])
-        owned_btns[0].click()
+        # 一行显示时也在「提示」卡片里看得到，「已有筹码」卡片不因为它出现
+        self.assertFalse(w.global_area.isHidden())
+        self.assertTrue(w.owned_card.isHidden())
+        self.assertIn("对局中途判定为新的一局", shown(w, w.global_area))
+        btns = w.notices.buttons("newgame")
+        self.assertEqual([b.text() for b in btns], ["撤销"])
+        btns[0].click()
         self.assertEqual(self.session.settings.owned, ["书签", "标靶"])
         self.assertNotIn("newgame", w.notice_model.texts())
-        self.assertNotIn("newgame_owned", w.notice_model.texts())
         self.assertFalse(w.panel.property("attention"))
 
     def test_star_and_hero_new_game_are_midgame(self):
@@ -307,7 +323,7 @@ class OverlayPromptTest(unittest.TestCase):
                 self.session.set_owned(["书签"])
                 w.handle(self.session._auto_new_game(kind, None, why))
                 self.assertIn("对局中途判定为新的一局", w.notice_model.texts()["newgame"])
-                self.assertIn("newgame_owned", w.notice_model.texts())
+                self.assertNotIn("newgame_owned", w.notice_model.texts())
                 w.undo_new_game()
 
     def test_select_screen_new_game_stays_info(self):
@@ -320,14 +336,14 @@ class OverlayPromptTest(unittest.TestCase):
         self.assertFalse(w.panel.property("attention"))
 
     def test_unrecorded_gain_and_search(self):
-        """星数增加却没有三选一记录：「已有筹码」卡片里提示补录；补录栏可以输入筹码名搜索。"""
+        """星数增加却没有三选一记录：「提示」卡片里提示补录；补录栏可以输入筹码名搜索。"""
         w = self.window
         self.session.game.unrecorded = 1  # Session 记下了待补录的筹码数
         ev = Event("unrecorded_gain", why="星数由 1 星增加为 2 星，未检测到对应的筹码三选一界面", count=1)
         w.handle(ev)
         self.assertIn("gain", w.notice_model.texts())
         self.assertIn("星数由 1 星增加为 2 星", w.notice_model.texts()["gain"])
-        self.assertIn("星数由 1 星增加为 2 星", shown(w, w.owned_card))
+        self.assertIn("星数由 1 星增加为 2 星", shown(w, w.global_area))
         self.assertTrue(w.panel.property("attention"))
         self.assertEqual([b.text() for b in w.notices.buttons("gain")], ["补录筹码", "关闭本条提示"])
         w.notices.buttons("gain")[0].click()
@@ -357,17 +373,17 @@ class OverlayPromptTest(unittest.TestCase):
             w.handle(ev)
         self.assertEqual(s.settings.owned, [])
         self.assertIn("已撤销刚记录的「书签」", w.notice_model.texts()["reverted"])
-        self.assertIn("已撤销刚记录的「书签」", shown(w, w.advice_card))
-        self.assertTrue(w.missed.isHidden())
+        self.assertIn("已撤销刚记录的「书签」", shown(w, w.global_area))
+        self.assertNotIn("missed", w.notice_model.texts())
         s.on_frame(None)
         w.handle(s.on_frame(None))  # 这一次也没看到绿框
         self.assertNotIn("reverted", w.notice_model.texts())
-        self.assertFalse(w.missed.isHidden())
-        self.assertIn("已撤销刚记录的「书签」", w.missed_label.text())
+        self.assertIn("missed", w.notice_model.texts())
+        self.assertIn("已撤销刚记录的「书签」", w.notice_model.texts()["missed"])
         self.assertEqual(w.owned.missed_buttons_text(), [*offer, "关闭本条提示"])
-        button(w.missed, "标靶").click()
+        button(notice_block(w, "missed"), "标靶").click()
         self.assertEqual(s.settings.owned, ["标靶"])
-        self.assertTrue(w.missed.isHidden())
+        self.assertNotIn("missed", w.notice_model.texts())
 
     def test_granted_chips_dragon_palace(self):
         """龙宫游乐园：阵营筹码记下一个后，只留帮助同一方的特殊任务筹码。放在「已有筹码」卡片里。"""
@@ -542,24 +558,24 @@ class OverlayPromptTest(unittest.TestCase):
         w, s = self.window, self.session
         w.refresh()
         self.assertEqual(s.hero_source, "pending")
-        self.assertNotIn("职业", self.status())
-        self.assertNotIn("职业：", w.status.status_tip_text)
+        self.assertNotIn("筹码池", self.status())
+        self.assertNotIn("筹码池：", w.status.status_tip_text)
         s.game.seen_hero = "凛"
         w.refresh()
-        self.assertIn("职业 无 · 倾向 卡牌 80", self.status())
-        self.assertIn("职业：", w.status.status_tip_text)
+        self.assertIn("筹码池 无 · 倾向 卡牌 80", self.status())
+        self.assertIn("筹码池：", w.status.status_tip_text)
 
     def test_map_hint_waits_for_game(self):
-        """地图待识别时「打开任务栏」的提示：还没进对局（没读到轮次）时全部展开也不显示，进了对局以后显示；请用户选地图的
-        那种一直显示。"""
+        """地图待识别时「打开任务栏」的提示（在「提示」卡片里）：还没进对局（没读到轮次）时全部展开也不显示，进了对局以后
+        显示；请用户选地图的那种（「识别」卡片的地图选择行）一直显示。"""
         w, s = self.window, self.session
         w.set_expanded(True)
         self.assertIsNone(s.settings.round)
-        self.assertTrue(w.map_row.isHidden())
+        self.assertNotIn("opentasks", w.notice_model.texts())
         s.settings.round = 2
         w.refresh()
-        self.assertFalse(w.map_row.isHidden())
-        self.assertEqual(w.map_prompt.text(), OPEN_TASKS)
+        self.assertEqual(w.notice_model.texts().get("opentasks"), OPEN_TASKS)
+        self.assertTrue(w.map_row.isHidden())
         s.settings.round = None
         s.game.map_candidates, s.game.map_ask = ["魔法学院", "海选赛运动场"], True
         w.refresh()
@@ -569,7 +585,7 @@ class OverlayPromptTest(unittest.TestCase):
         w = self.window
         self.session.game.seen_hero = "凛"  # 角色已认出：职业胶囊照这个角色写
         w.refresh()
-        self.assertIn("职业 无 · 倾向 卡牌 80", self.status())
+        self.assertIn("筹码池 无 · 倾向 卡牌 80", self.status())
         self.session.game.teammates = [{"hero": "邦妮", "bot": False}, {"hero": None, "bot": True}]
         self.session.game.mutators = ["暴雨"]
         self.session.set_unsupported("small_window", True, size="900×506")
@@ -578,7 +594,7 @@ class OverlayPromptTest(unittest.TestCase):
         self.assertIn("队友：邦妮、待识别（电脑）", tip)
         self.assertIn("畸变组件：暴雨", tip)
         self.assertIn("⚠ 游戏窗口过小（900×506 像素）", " ".join(w.notice_model.texts().values()))
-        self.assertIn("游戏窗口过小", shown(w, w.recog_card))  # 不支持的情况在「识别」卡片里
+        self.assertIn("游戏窗口过小", shown(w, w.global_area))  # 不支持的情况在「提示」卡片里
         self.assertIn("队友：邦妮", w.status.summary_tip_text)
 
     def test_buttons_have_frames(self):
@@ -704,7 +720,7 @@ class GameOverTest(unittest.TestCase):
         self.assertFalse(w.needs_attention())
         self.assertFalse(w.panel.property("attention"))
         self.assertTrue(w.map_row.isHidden())
-        self.assertTrue(w.missed.isHidden())
+        self.assertNotIn("missed", w.notice_model.texts())
         # 「未选择首推的原因」照常问（一行显示时也问）；上一次推荐、已有筹码保留
         self.assertIn(f"未选择「{best}」的原因？", shown(w, w.advice_card))
         self.assertEqual(w._waiting_text(), GAME_OVER_WAITING)

@@ -100,7 +100,7 @@ class MapReadBranchTest(BehaviorBase):
         self.hud(1)
         self.hud(1)  # 进入对局，地图待识别：提示打开任务栏
         self.w.set_expanded(True)
-        self.assertIn(OPEN_TASKS, self.texts("recog"))
+        self.assertIn(OPEN_TASKS, self.texts("tips"))  # 提示打开任务栏在「提示」卡片里
         out = self.hud(None, map="异变图书馆", map_confidence="high", map_candidates=["异变图书馆"],
                        tasks_seen=["击倒魔法茶壶"])
         self.assertIn("map_read", self.kinds(out))
@@ -156,7 +156,7 @@ class UndoAfterRoomEndTest(BehaviorBase):
         self.assertEqual(self.w.gain_pending(), 1)
         self.assertEqual(self.w.owned.missed_buttons_text(), [*OFFER, DISMISS])
         self.w.set_expanded(True)
-        self.assertIn(REVERTED_PROMPT.format(chip=chip), self.texts("owned"))
+        self.assertIn(REVERTED_PROMPT.format(chip=chip), self.texts("tips"))
         self.w.set_expanded(False)
 
     def test_prompts_back_and_real_game_over_logged_again(self):

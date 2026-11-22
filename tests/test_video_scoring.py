@@ -55,7 +55,7 @@ class Base(unittest.TestCase):
 
 
 class ClassPointsTest(Base):
-    """职业分值累加：升星和筹码商店最左格选职业池的权重 = 角色初始职业分值 + 已拿筹码的职业分值（pool.class_weights）。"""
+    """职业分值累加：升星和筹码商店最左格选职业池的权重 = 角色初始分值 + 已拿筹码的职业分值（pool.class_weights）。"""
 
     def test_class_weights(self):
         hero = self.db.heroes["邦妮"]
@@ -115,12 +115,12 @@ class ClassPointsTest(Base):
         self.assertLess(with_acc, without - 1)
 
     def test_lookahead_explains_class_shift(self):
-        # 主力输出拿 ATM机：前瞻为负，整句写明职业分值的变化；短句写出现率下降最多的高适配度筹码或「更常出现辅助职业的筹码」，
+        # 主力输出拿 ATM机：前瞻为负，整句写明职业分值的变化；短句写出现率下降最多的高适配度筹码或「更常出现辅助筹码池的筹码」，
         # 短句的要点都取自整句（不带来新流派的筹码前瞻为负时短句也不空）
         sc = self.scorer("邦妮", star=1, round=3)
         self.assertLess(sc.lookahead("ATM机", ()), 0)
         reason = sc.lookahead_reason("ATM机", ())
-        self.assertIn("选择后辅助职业分值 +50，之后升星和筹码商店的三选一更常出现辅助职业的筹码", reason)
+        self.assertIn("选择后辅助分值 +50，之后升星和筹码商店的三选一更常出现辅助筹码池的筹码", reason)
         short = sc.lookahead_short("ATM机", ())
         self.assertTrue(short.startswith("前瞻："), short)
         point = short[len("前瞻："):]
@@ -130,10 +130,10 @@ class ClassPointsTest(Base):
             self.assertIn(f"{name}下次出现率 {a}% → {b}%", reason)
             self.assertLess(int(b), int(a))
         else:
-            self.assertEqual(point, "更常出现辅助职业的筹码")
+            self.assertEqual(point, "更常出现辅助筹码池的筹码")
             self.assertIn(point, reason)
         # 两个职业：美工刀-初级（攻击 +30、生存 +10）
-        self.assertIn("选择后攻击职业分值 +30、生存职业分值 +10，", sc.lookahead_reason("美工刀-初级", ()))
+        self.assertIn("选择后攻击分值 +30、生存分值 +10，", sc.lookahead_reason("美工刀-初级", ()))
         # 关掉累加时不写
         off = self.with_rules("pool", accumulate_class_points=False)
         self.assertNotIn("职业分值", self.scorer("邦妮", db=off, star=1, round=3).lookahead_reason("ATM机", ()))

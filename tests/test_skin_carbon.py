@@ -274,7 +274,8 @@ class CarbonDataTest(unittest.TestCase):
                 self.assertNotIn("cut", set(w.TONE_SHAPE.values()))
                 self.assertEqual((s.TILE_CUT, s.ITEM_BARS), (0, {}))
                 self.assertNotEqual(lst.BLOCK_TAG_SHAPE, "bar")
-                if skin.key not in (theme.NEON_STICKER_KEY, theme.WHITE_SEAVIEW_KEY):
+                # 经典主题-反色的个数写在黑色胶囊里，另写了浅色
+                if skin.key not in (theme.NEON_STICKER_KEY, theme.WHITE_SEAVIEW_KEY, theme.CLASSIC_INVERSE_KEY):
                     self.assertEqual(o.OWNED_COUNT_COLORS, ())
                 self.assertEqual(c.SEARCH_GLYPH, "")
 

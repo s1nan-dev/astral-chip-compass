@@ -49,8 +49,8 @@ from ..text import (
 from ..theme import COMMON as C
 from ..theme import OVERLAY as O
 from ..widgets import FlowLayout, Pill, Separator
-from .factory import (_capsule, _clear_layout, _column_widget, _pill_tip, _rich_label, _rgba, _set_tip, _text_label,
-                      _text_rules)
+from .factory import (OutlineButton, OutlineLabel, _capsule, _clear_layout, _column_widget, _pill_tip, _rarity_text, _rich_label, _rgba,
+                      _set_tip, _text_label, _text_rules)
 from .option_widgets import (
     REROLL_ICON,
     _AdviceBox,
@@ -146,6 +146,7 @@ class AdviceCard:
         self.pick: dict | None = None
         self.feedback_done = ""
         self.feedback_dismissed = False  # 点了「×」不选原因：这一次不再问
+        self.new_hero: str | None = None  # 角色待识别时立绘认出的新角色（hero_needed_view 记下，hero_row 用）
         self.feedback_until = 0.0  # 一行显示时「已记录：X」显示到什么时候
         self.ask_until = 0.0  # 一行显示时「未选择「X」的原因？」那一块挂到什么时候（三选一关闭后 QUESTION_LINE_MS）
         self.fix_slot: int | None = None
@@ -262,7 +263,11 @@ class AdviceCard:
         else:
             # 刷新不能在这里点，只是一个选项；回看的上一次推荐也不能改正：都不做成按钮
             name = _text_label(lang.t(opt.label), size, opt.color, bold=opt.best)
-            if opt.reroll and O.REROLL_BG:  # 皮肤把「刷新」写在胶囊里
+            if opt.reroll and O.REROLL_BG and O.REROLL_OUTLINE:  # 亮色胶囊上的白字画成描边字
+                name = OutlineLabel(lang.t(opt.label), O.REROLL_TEXT or opt.color, O.REROLL_OUTLINE)
+                name.setTextInteractionFlags(Qt.NoTextInteraction)
+                _capsule(name, _text_rules(size, "transparent", True), O.REROLL_BG, O.MARK_PADDING)
+            elif opt.reroll and O.REROLL_BG:  # 皮肤把「刷新」写在胶囊里
                 _capsule(name, _text_rules(size, O.REROLL_TEXT or opt.color, True), O.REROLL_BG, O.MARK_PADDING)
             if not opt.reroll:
                 name.setToolTip(self.name_tooltip(opt.slot, ev, live=False, mates=mates))
@@ -427,7 +432,7 @@ class AdviceCard:
 
     def name_button(self, opt, ev) -> QPushButton:
         """筹码名按钮：稀有度颜色的文字和边框，点了改正这个候选筹码，悬停显示全部理由。首推大一号。"""
-        btn = QPushButton(lang.t(opt.label))
+        btn = OutlineButton(lang.t(opt.label), role="name")  # 皮肤给了 NAME_OUTLINE 时白字画成描边字
         btn.setCursor(Qt.PointingHandCursor)
         size = C.FONT_XL if opt.best else C.FONT_L
         weight = O.NAME_WEIGHT_BEST if opt.best else O.NAME_WEIGHT
@@ -570,7 +575,7 @@ class AdviceCard:
             line_widget = QWidget()
             line = FlowLayout(line_widget, 8, 2)
             line.addWidget(_text_label(lang.t(f"第 {row.slot + 1} 个候选筹码："), C.FONT_M, C.DIM_COLOR))
-            btn = QPushButton(lang.t(row.text))
+            btn = OutlineButton(lang.t(row.text), role="name")  # 同 name_button：铺色的胶囊上白字画成描边字
             btn.setCursor(Qt.PointingHandCursor)
             border = (_rgba(C.WARN_COLOR, O.UNREADABLE_BORDER_ALPHA) if row.unreadable
                       else _rgba(row.color, O.NAME_BORDER_ALPHA))
@@ -599,22 +604,30 @@ class AdviceCard:
         return view
 
     def hero_needed_view(self, offer, new_hero: str | None = None) -> QWidget:
-        """三选一出现了，但角色待识别：推荐暂停，请用户选角色。候选筹码按稀有度着色列出。new_hero：立绘认出的是新角色
-        （资料里还没有她的推荐规则）时是她的名字，大字改写「这个角色是新出的，请更新拾星助手」（NEW_HERO），下面那行「选择
-        角色后立即计算推荐」（HERO_PAUSED）不显示：手动选别的角色算出来的推荐对她并不对，不引着玩家去选；角色下拉框照旧能选。"""
+        """三选一出现了，但角色待识别：推荐暂停。这里只列候选筹码（按稀有度着色）；请用户选角色的那一条在「提示」卡片里
+        （hero_row）。new_hero 记下来给 hero_row 用。"""
+        self.new_hero = new_hero
         view, box = _column_widget(4)
-        box.addWidget(_text_label(NEW_HERO if new_hero else PROMPT_HERO, C.FONT_L, C.WARN_COLOR, wrap=True))
-        if not new_hero:
-            box.addWidget(_text_label(HERO_PAUSED, C.FONT_M, C.DIM_COLOR, wrap=True))
         listed = [n for n in offer if n]
         if listed:
             segs = [(lang.t("候选筹码："), C.DIM_COLOR)]
             for i, n in enumerate(listed):
                 if i:
                     segs.append(("、", C.DIM_COLOR))
-                segs.append((names.chip_in(self.db, n), self.chip_color(n)))
+                chip = self.db.chips.get(n)  # 写在浅色卡片上：皮肤给了深一档的稀有度字色时用它
+                color = _rarity_text(chip.rarity) if chip is not None else self.chip_color(n)
+                segs.append((names.chip_in(self.db, n), color))
             box.addWidget(_rich_label(rich(segs)))
         return view
+
+    def hero_row(self) -> tuple | None:
+        """三选一出现了、角色待识别（推荐暂停）时请用户选角色的那一条（「提示」卡片里「推荐」的事，键 hero）：（键, 文字, 级别,
+        按钮）；不是这种时候为 None。标题是 PROMPT_HERO，正文是 HERO_PAUSED，⚠ 橙色、没有按钮。立绘认出的是新角色（资料里
+        还没有她的推荐规则，new_hero）时只写「这个角色是新出的，请更新拾星助手」（NEW_HERO），不写「选择角色后立即计算推荐」：
+        手动选别的角色算出来的推荐对她并不对，不引着玩家去选；角色下拉框照旧能选。"""
+        if not (self.live.on and self.live.hero_needed):
+            return None
+        return ("hero", NEW_HERO if self.new_hero else PROMPT_HERO + "\n" + HERO_PAUSED, "warn", [])
 
     def show_stale(self, now) -> None:
         """三选一界面已关闭：回看上一次推荐（筹码名不是按钮；悬停说明里的队友按这一轮刷新的快照 now）。"""
@@ -886,10 +899,16 @@ class AdviceCard:
         self.fix_box.setFocus()
         self.fix_box.lineEdit().selectAll()
 
+    _fix_error = ""  # 改正栏里输错名字时显示的那句提示（收起改正栏时一起收起）
+
     def fix_close(self, fit: bool = True) -> None:
+        """收起改正栏。改正栏里输错名字的那句提示跟着收起：改正栏都关了，不留一句要照着改的话。"""
         self.fix_box.clearFocus()
         self.fix_row.hide()
         self.fix_slot = None
+        if self._fix_error and self.message.text == self._fix_error:
+            self.message.say("", "advice")
+        self._fix_error = ""
         if fit:
             self.fit_height()
 
@@ -914,6 +933,9 @@ class AdviceCard:
         if slot is None:
             return
         typed = self.fix_box.currentText().strip()
+        if not typed:  # 什么都没填：不出「「」不在筹码表中」这种空话，等用户输入
+            self.fix_box.setFocus()
+            return
         index = self.fix_box.currentIndex()
         # 从列表里选的：用 itemData 里的简体名；自己输入的（可编辑）：按文字另行匹配（繁体名也能认出）
         selected = self.fix_box.currentData()
@@ -921,7 +943,8 @@ class AdviceCard:
         try:
             name = self.db.resolve_chip(text).name
         except KeyError:
-            self.set_status(lang.t(f"「{text}」不在筹码表中，请输入完整的筹码名或从列表中选择"), "advice")
+            self._fix_error = lang.t(f"「{text}」不在筹码表中，请输入完整的筹码名或从列表中选择")
+            self.set_status(self._fix_error, "advice")
             return
         with self.lock, self.taking() as extra:  # 这次重算放进待取队列的事件，下面当场交出
             outdated = self.fix_outdated(self.session.raw_seen)

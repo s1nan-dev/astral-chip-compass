@@ -25,6 +25,7 @@ from .factory import _set_tip
 from .state import EV_REFRESHING
 from .wording import (
     BLOCKED,
+    CLASS_BIT,
     CAPSULE_KEYS,
     GAME_OVER_BIT,
     GAME_OVER_TIP,
@@ -184,7 +185,7 @@ def in_game(view, live: bool) -> bool:
 
 
 def class_value(db, hero: str, owned: list[str]) -> str:
-    """「卡牌」；没有达到门槛的职业时写倾向：「无 · 倾向 攻击 80」。"""
+    """「卡牌」；没有达到门槛的职业时写倾向：「无 · 倾向 攻击 80」（玩家看到的说法是「筹码池」，CLASS_BIT）。"""
     classes = hero_classes(db, hero, owned)
     if classes:
         return lang.t("、".join(c for c in CLASSES if c in classes))
@@ -259,7 +260,7 @@ def status_bits(view, db, *, ask, live: bool, plan, blocked: bool, stopped: bool
         bits.append(Bit(lang.t("待识别"), lang.t("地图"), pending, "map"))
     if view.hero in db.heroes and view.hero_source != "pending":
         # 角色待识别时不写职业：Session 记着的还是上一次的角色，按它算的职业不一定是这一局的
-        bits.append(Bit(class_value(db, view.hero, [n for n in view.owned if n in db.chips]), lang.t("职业"), key="class"))
+        bits.append(Bit(class_value(db, view.hero, [n for n in view.owned if n in db.chips]), lang.t(CLASS_BIT), key="class"))
     difficulty = shown_bit(difficulty_bit(view.difficulty))
     if difficulty is not None:
         bits.append(difficulty)
@@ -313,8 +314,8 @@ def status_tip(view, db, *, plan, blocked: bool, live: bool, stopped: bool = Fal
     line = db.rules.get("official", {}).get("class_threshold")
     if line is not None and view.hero_source != "pending":  # 角色待识别时不写职业胶囊，这一句也不写
         lines.append(
-            f"职业：角色的初始职业分值加上已持有筹码的职业分值，达到 {line} 的职业；"
-            "均未达到时为「无」，后面是分值最高的职业（倾向）。"
+            f"筹码池：角色的初始分值加上已持有筹码的分值，达到 {line} 的那一类；"
+            "均未达到时为「无」，后面是分值最高的那一类（倾向）。"
         )
     if view.map is not None:
         shown_map = names.map_in(db, view.map)

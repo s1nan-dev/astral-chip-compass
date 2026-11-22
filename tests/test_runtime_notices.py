@@ -47,7 +47,7 @@ from advisor.ui.overlay_parts.app import OverlaySession, UiSettings
 from advisor.ui.overlay_parts.watcher import Watcher
 from advisor.ui.overlay_parts.wording import (ASSETS_TIP, ASSETS_TIP_FAILED, CAPSULE_KEYS, DOWNLOAD_FAILED,
                                               DOWNLOAD_UNWRITABLE, DPI_CHANGED, FOLDER_UNWRITABLE, NO_DOWNLOAD_ENV,
-                                              NOTICE_AREA, PAUSED_BIT, RECOG_FRAME, RECOG_STARTUP, RECOG_STOPPED,
+                                              NOTICE_GROUP, PAUSED_BIT, RECOG_FRAME, RECOG_STARTUP, RECOG_STOPPED,
                                               RECOG_STOPPED_WAITING, RUNNING, RUNNING_BIT, STOPPED, STOPPED_BIT)
 from advisor.ui.services import Services
 from advisor.ui.text import SUMMARY_RUNNING
@@ -119,7 +119,7 @@ class WordingTest(unittest.TestCase):
         self.assertEqual(DPI_CHANGED.format(exe="app\\ACC.exe"),
                          "检测到「替代高 DPI 缩放行为」被改过，识别会认错：请在 app\\ACC.exe 的属性 → 兼容性 → "
                          "更改高 DPI 设置里取消勾选")
-        self.assertEqual({NOTICE_AREA[k] for k in ("stopped", "dpi", "folder")}, {"global"})
+        self.assertEqual({NOTICE_GROUP[k] for k in ("stopped", "dpi", "folder")}, {"global"})
 
 
 # ------------------------------------------------------------ 识别线程停下了
@@ -373,7 +373,7 @@ class PersistentRowsTest(OverlayCase):
         for key, text, level, buttons in rows[:3]:
             with self.subTest(key=key):
                 self.assertTrue(text.startswith("⚠ "))
-                self.assertEqual((level, buttons, model.area(key)), ("warn", [], "global"))
+                self.assertEqual((level, buttons, model.group(key)), ("warn", [], "global"))
         model.notices = {r[0]: r for r in rows}
         self.assertFalse(model.needs_action())
 

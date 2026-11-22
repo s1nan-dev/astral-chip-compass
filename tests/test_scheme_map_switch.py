@@ -504,15 +504,15 @@ class SchemeMapNoticeTest(unittest.TestCase):
         row = self.row()
         self.assertEqual((row[0], row[1], row[2]), ("map_switch", MAP_SCHEME_TEXT.format(name="L1"), "info"))
         self.assertEqual(row[1], "本局按地图换用了「L1」")
-        self.assertEqual(w.notice_model.area("map_switch"), "scheme")
+        self.assertEqual(w.notice_model.group("map_switch"), "scheme")
         btns = w.notices.buttons("map_switch")
         self.assertEqual([b.text() for b in btns], [MAP_SCHEME_REVERT])
         self.assertEqual(btns[0].text(), "换回原来的")
         self.assertEqual(tip_text(btns[0].toolTip()), MAP_SCHEME_REVERT_TIP.format(name="U"))
         self.assertEqual(tip_text(btns[0].toolTip()), "换回「U」，这一局不再按地图自动换")
-        self.assertIn("本局按地图换用了「L1」", shown(w, w.scheme_notices))
-        self.assertIn("本局按地图换用了「L1」", shown(w, w.scheme_card))
-        self.assertIn("换回原来的", shown(w, w.scheme_card))
+        self.assertIn("本局按地图换用了「L1」", shown(w, w.global_notices))
+        self.assertIn("本局按地图换用了「L1」", shown(w, w.global_area))
+        self.assertIn("换回原来的", shown(w, w.global_area))
 
     def test_saved_default_tip(self):
         """保存的是默认推荐：悬停说明写默认推荐的叫法（text.SCHEME_DEFAULT）。"""
@@ -578,8 +578,8 @@ class SchemeMapNoticeTest(unittest.TestCase):
         from PySide6.QtGui import QTextDocument
 
         out = []
-        for lb in w.scheme_notices.findChildren(QLabel):
-            if lb.text() and lb.isVisibleTo(w.scheme_notices):
+        for lb in w.global_notices.findChildren(QLabel):
+            if lb.text() and lb.isVisibleTo(w.global_notices):
                 doc = QTextDocument()
                 doc.setHtml(lb.text())
                 out.append(doc.toPlainText().replace("\u2060", "").replace("\u200b", ""))
@@ -602,22 +602,23 @@ class SchemeMapNoticeTest(unittest.TestCase):
                          ["L1", "M1", "两张图"])
 
     def test_one_line_and_collapsed(self):
-        """一行显示、全部展开、卡片收起时照「移出」那一行：一行显示时「筹码方案」卡片随这一行出现；全部展开时卡片收起着，
-        又换了一套（这一行的文字变了）时自动展开。"""
+        """这一行在「提示」卡片里：一行显示时「提示」卡片带着它出现，「筹码方案」卡片不随它出现；全部展开时「筹码方案」卡片
+        收起着、又换了一套（这一行的文字变了）时，「提示」卡片里换成新的一句，「筹码方案」卡片照旧收起。"""
         w = self.w
         self.assertTrue(w.scheme_card.isHidden())
         self.recognize(LONG)
-        self.assertFalse(w.scheme_card.isHidden())
+        self.assertTrue(w.scheme_card.isHidden())
+        self.assertIn("本局按地图换用了「L1」", shown(w, w.global_area))
         w.set_expanded(True)
         w.scheme_card.toggle.click()  # 用户收起
         self.assertFalse(w.card_open("scheme"))
         self.assertEqual(plain_html(w.scheme_card.summary.text()), "芬妮 · L1")
         w.set_expanded(False)
-        self.assertFalse(w.scheme_card.isHidden())
+        self.assertTrue(w.scheme_card.isHidden())
         w.set_expanded(True)
-        w._map_changed(MAGIC)  # 地图改判、又换了一套：这一行变了，卡片自动展开
-        self.assertTrue(w.card_open("scheme"))
-        self.assertIn("本局按地图换用了「M1」", shown(w, w.scheme_notices))
+        w._map_changed(MAGIC)  # 地图改判、又换了一套：这一行变了
+        self.assertFalse(w.card_open("scheme"))
+        self.assertIn("本局按地图换用了「M1」", shown(w, w.global_area))
 
 
 if __name__ == "__main__":
