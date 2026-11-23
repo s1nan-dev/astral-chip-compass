@@ -328,7 +328,8 @@ class OverlayMapSchemeTest(unittest.TestCase):
 
     def test_revert(self):
         """「换回原来的」（revert_map_scheme）：换回保存的那套、按它立即重算，提示 MAP_SCHEME_REVERTED，不改方案文件；识别记录
-        记一条 scheme（via 为 map_revert，带地图名）。之后改判地图也不再换；已经换回了再调用什么都不做。"""
+        记一条 scheme（via 为 map_revert，带地图名）。这一局按地图、按已进入的流派都不再自动换；之后改判地图也不再换；
+        已经换回了再调用什么都不做。"""
         w, k = self.w, self.k
         w.handle(self.session.on_frame(frame(OFFER_FENNI)))
         self.recognize(LONG)
@@ -336,11 +337,11 @@ class OverlayMapSchemeTest(unittest.TestCase):
         self.assertTrue(w.revert_map_scheme())
         self.assertEqual(self.advice(), ("U", "大背包"))
         message = MAP_SCHEME_REVERTED.format(name="U")
-        self.assertEqual(message, "已换回「U」，这一局不再按地图自动换方案")
+        self.assertEqual(message, "已换回「U」，这一局不再自动换方案")
         self.assertEqual(w.message.text, message)
         self.assertEqual(w.scheme_box.currentText(), "U")
         self.assertFalse(take_view(self.session).map_switched)
-        self.assertTrue(self.session.game.map_scheme_off)
+        self.assertEqual((self.session.game.map_scheme_off, self.session.game.school_scheme_off), (True, True))
         self.assertEqual(calls, [])
         self.assertEqual(self.store.current(HERO), k.u)
         reverted = self.records(via="map_revert")
@@ -509,7 +510,7 @@ class SchemeMapNoticeTest(unittest.TestCase):
         self.assertEqual([b.text() for b in btns], [MAP_SCHEME_REVERT])
         self.assertEqual(btns[0].text(), "换回原来的")
         self.assertEqual(tip_text(btns[0].toolTip()), MAP_SCHEME_REVERT_TIP.format(name="U"))
-        self.assertEqual(tip_text(btns[0].toolTip()), "换回「U」，这一局不再按地图自动换")
+        self.assertEqual(tip_text(btns[0].toolTip()), "换回「U」，这一局不再自动换方案")
         self.assertIn("本局按地图换用了「L1」", shown(w, w.global_notices))
         self.assertIn("本局按地图换用了「L1」", shown(w, w.global_area))
         self.assertIn("换回原来的", shown(w, w.global_area))
@@ -522,7 +523,7 @@ class SchemeMapNoticeTest(unittest.TestCase):
         self.recognize(LONG)
         self.assertEqual(self.row()[1], "本局按地图换用了「L1」")
         self.assertEqual(tip_text(w.notices.buttons("map_switch")[0].toolTip()),
-                         "换回「默认推荐」，这一局不再按地图自动换")
+                         "换回「默认推荐」，这一局不再自动换方案")
 
     def test_revert_click(self):
         """点「换回原来的」：调用了换回（提示、重算、打标记都在那里），这一行收起，这一局不再按地图换。"""

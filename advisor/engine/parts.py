@@ -2,7 +2,8 @@
 
 分项 = 适配分（玩家思路或自动层、组合、队友、难度、收入折算）+ 推荐流派分，另有不加分的职业倾向说明。
 游戏内置推荐分不计入总分（official.scale 为 0）时连这几项也不列，公式留着只用来判断游戏的推荐角标。
-各分项的先后由 _build_parts 定：玩家思路、循环往复、自动层三者只取其一；带「已持有」条件的规则不再叠加组合；
+各分项的先后由 _build_parts 定：玩家思路、循环往复、自动层三者只取其一（大数据跟着自动层，排在它后面）；
+带「已持有」条件的规则不再叠加组合；
 开套预判、美工刀按还没有治愈来源算的两项排在组合之后；方案模式不加推荐流派分；收入折算要看到前面所有分项；
 职业倾向排在最后。
 总分和收入折算的 base 都按这个先后求和，先后会影响浮点末位，调整时要连同基准一起核对。
@@ -13,7 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from ..data import LEVEL_NIGHTMARE, NORMAL, SCHOOLS, TIER_LABEL, TIERS, Chip, Rule
+from ..data import BIGDATA_ORIGIN, LEVEL_NIGHTMARE, NORMAL, SCHOOLS, TIER_LABEL, TIERS, Chip, Rule
 from ..pool import expected_best, expected_max_with, owned_schools, player_pool
 from .advice_text import (SCHEME_TIER_WORD, SHORT_LIMIT, chance_text, fill_mates_short, free_short, mates_short,
                           origin_short, origin_text, shown_int)
@@ -96,7 +97,9 @@ class Part:
     """总分里的一项。reason 为空的项不出现在理由里；score 为 0 的项只作说明（例如职业倾向），不写分值。
 
     label 是分项的名称，可以直接显示（不含特性名）：基础分、成长分、角色分、标签分、关键词分、玩家思路、
-    角色专属规则、特性、其他特性、推荐流派、锁流派、组合、队友、难度、收入折算、循环往复、职业倾向、未收录。
+    角色专属规则、特性、其他特性、大数据、推荐流派、锁流派、组合、队友、难度、收入折算、循环往复、职业倾向、未收录。
+    「大数据」（origin 为 data.BIGDATA_ORIGIN，全体的和角色的两层每条各一项）只计分，悬浮窗上不显示（ui.text 跳过），
+    命令行和诊断包照写。
     origin 是内部记录（规则来自哪个特性、哪条组合规则、玩家思路的来源），不显示。
     short 是推荐卡片理由标签上的短句（例如「收入剩余 14 轮」）；
     为空时界面按 reason 的长度决定：不超过 SHORT_LIMIT 个字照写，超过时写分项名。整句 reason 不受影响（悬停、命令行、诊断包照用）。
@@ -187,6 +190,7 @@ def _build_parts(sc: Scorer, name: str, owned, rnd: int | None, map_name) -> lis
     else:
         auto, heal = _auto_parts(sc, name, owned_set, rnd, map_name)
         layer.extend(auto)
+        layer.extend(_bigdata_parts(sc, name, owned_set, rnd, map_name))
     if not cond:  # 玩家思路里带「已持有」「有来源」条件的规则已经考虑了组合关系，不再叠加组合规则
         layer.extend(_combo_parts(sc, name, owned_set, map_name))
         school = _school_anticipation(sc, name, owned_set, map_name)
@@ -554,6 +558,26 @@ def _auto_parts(sc: Scorer, name: str, owned_set: frozenset, rnd: int | None,
     return out, _heal_parts(sc, name, owned_set, map_name, positive, shares)
 
 
+def _bigdata_parts(sc: Scorer, name: str, owned_set: frozenset, rnd: int | None, map_name) -> list[Part]:
+    """大数据规则（照真实玩家对局的统计加减的分）的分项：适用的每条各成一项「大数据」，分值照写。两层都算，先全体的
+    （DB.bigdata_rules，照适配表里的先后），后这个角色的（HeroSynergy.bigdata_rules）；全体的对每个角色都算，适配表里没有这名
+    角色时也算，另外要满足只看角色的条件（Rule.fits_hero：角色分组、这张筹码是不是这个角色的推荐流派）。
+    是对整体结果的校正，不进自动层的合并（不受 [synergy] cap、extra_rule_factor 影响，不合成「其他特性」，没有净效果），
+    条件和自动层的规则一样按 Rule.applies 判断。和自动层在同样的情形下算（_build_parts：玩家思路或方案档位命中、
+    循环往复时都不算）。只计分、不在悬浮窗上显示（ui.text 按 BIGDATA_ORIGIN 跳过）。"""
+    rules = []
+    if sc.db.bigdata_rules:
+        schools = sc.hs.schools if sc.hs else ()
+        school = sc.db.chips[name].school
+        rules = [r for r in sc.db.bigdata_rules if name in r.chips and r.fits_hero(sc.hero.group, schools, school)]
+    rules += [r for r in (sc.hs.bigdata_rules if sc.hs else ()) if name in r.chips]
+    if not rules:
+        return []
+    held = sc.held_sources(owned_set)
+    return [Part(BIGDATA_ORIGIN, r.score, r.reason, BIGDATA_ORIGIN, short=r.short or free_short(sc.db, r.reason))
+            for r in rules if r.applies(map_name, owned_set, rnd, sc.st.difficulty, held)]
+
+
 def _heal_parts(sc: Scorer, name: str, owned_set: frozenset, map_name, positive, shares: dict) -> list[Part]:
     """美工刀还没有治愈来源时的两项：提前加分（_heal_advance）和折算（_heal_discount）。
     条件：[heal_knife] traits 那条特性给这把美工刀实际计入了分，没有治愈来源（chances.has_heal_source），不带 exclude_traits。"""
@@ -850,7 +874,7 @@ def _income(sc: Scorer, chip: Chip, parts: list[Part], rnd: int | None, owned=fr
       没读到当前格、或当前格等于轮次时两者相同。
     - 自己满 3 星后，非经济型角色的收入再乘 after_max_star（星币不再用于升星）。
     折算的对象是这个筹码的正分（不含成长分，成长分本身已按轮次取消；也不含默认推荐给必选筹码的分：
-    必选是对这个筹码的整体判断，不随剩余的兑现次数变）乘以收入占比（rules.toml [income]）。
+    必选是对这个筹码的整体判断，不随剩余的兑现次数变；大数据那一项同理不含）乘以收入占比（rules.toml [income]）。
     带 exempt_traits 特性的角色（星光层数直接换成属性）的星光收入占比再乘 exempt_factor；已持有 exempt_owned 里的筹码
     （金色飞星：星光层数还会增加对首领的伤害）时同样乘一次 exempt_factor，两种都满足时只乘一次。
     [income] late 里的筹码（银行卡）在那一轮及以后获得时，两种折算系数再乘 late_factor（整句接 LATE_INCOME_NOTE）；
@@ -872,9 +896,11 @@ def _income(sc: Scorer, chip: Chip, parts: list[Part], rnd: int | None, owned=fr
     if by_trait or by_owned:
         star_share *= cfg["exempt_factor"]
     core = sc.db.rules["synergy"]["core"]
-    # 自己方案的必选和默认推荐的必选同一口径（SCHEME_CORE_ORIGIN）：也不扣
+    # 自己方案的必选和默认推荐的必选同一口径（SCHEME_CORE_ORIGIN）：也不扣。大数据（BIGDATA_ORIGIN）是照玩家实际选择对整体结果
+    # 的校正，同样不随剩余的兑现次数变，不扣
     base = sum(p.score for p in parts if p.score > 0 and p.label != "成长分"
-               and not (p.label == "玩家思路" and p.score >= core) and p.origin != SCHEME_CORE_ORIGIN)
+               and not (p.label == "玩家思路" and p.score >= core)
+               and p.origin not in (SCHEME_CORE_ORIGIN, BIGDATA_ORIGIN))
     if base <= 0:
         return None
     cap = sc.cap

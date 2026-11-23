@@ -8,6 +8,8 @@
 之后的几次三选一和前瞻一样按次数分开算（context.split_picks）：剩下的升星一定会来，按下一星的升星；已拿循环往复、额外
 那次还没给时那一次按任务来源；其余是任务和筹码商店，按两者在一局里的占比混合。
 三个预判的口径不同是有意的：美工刀预判的系数（rules.toml [heal_knife] anticipation_factor）是按它现在的口径定的。
+按自己的方案计算时，「选了会拿不到的必选、推荐之后来不来」（scheme_rank.lost_chance）也用 take_chance：筹码池按现在的
+已有筹码，会选的是那几张方案筹码本身（不按总分筛）。
 另有 [heal_knife] 的几项设置（heal_knife、layer_value、has_heal_source、knife_school_bonus）。
 把概率折成分项（治愈来源的提前加分和折算、美工刀预判、开套预判）在 parts；这里给之后的候选打分时经 Scorer.score、
 Scorer.parts，不直接导入 parts（parts 要用这里的概率），也不导入 lookahead（它导入 parts）。

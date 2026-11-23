@@ -35,7 +35,7 @@ from .engine import (CHAIN_NOTE, REROLL_P, REROLL_P_TOP, REROLL_SLOT, SPARE_NOTE
                      reroll_cost_note)
 from .engine import (BASIS_UNMARKED, LEVEL_KEYS, LOSS_NOW, LOSS_TIP, LOST_CORE, MOVE_AHEAD, MOVE_BEHIND, MOVE_LAST,
                      MOVE_LEAD, MOVE_MIXED, MOVE_NEAR, PLACE_UNMARKED_TEXT, SCHEME_TIER_WORD, Loss, RerollView,
-                     chance_text, place_text, rival_word, shown_percent_texts)
+                     below_line_texts, chance_text, place_text, rival_word, shown_percent_texts)
 from .pool import State, Teammate
 
 SOURCE_LABEL = {"levelup": "升星", "shop": "筹码商店", "task": "任务"}
@@ -212,6 +212,8 @@ SCHEME_LOSS_BEHIND = "；另选{names}能保住{what}，排在{them}后面"  # {
 # 排在它前面的都保不住时：能保住的只有排在最后的不选、其他流派（Loss.keep_last），或者选哪张都会少拿
 SCHEME_LOSS_KEEP_LAST = "；另选{names}能保住{what}，但{them}按不选排在最后"
 SCHEME_LOSS_NO_KEEP = "；这次的候选选哪张都会少拿"
+# 选了确实少拿、只是选了才拿不到的几张之后出现的机会不到线（Loss.slim）：灰色后接这一句，同悬浮窗的悬停（ui.text.LOSS_SLIM_TIP）
+SCHEME_LOSS_SLIM = "；选这张才拿不到的{what}之后至少出现一张的机会{p}，不到 {line}，不往后排"
 SCHEME_AHEAD = "档位前瞻 {value:+.1f}：{reason}"
 SCHEME_DEMOTED = "收入降档：{brief}，当作{low}排（只按剩余兑现次数算，收入扣掉 {cut:.0%}）"
 SCHEME_MOVES = {
@@ -247,9 +249,13 @@ def scheme_reroll_lines(adv: Advice, view: RerollView) -> list[str]:
 def loss_line(loss: Loss, names=()) -> str:
     """选了这张之后拿不到的必选、推荐（engine.Loss）：算拿不到（橙色）的后接排在它前面、能保住的几张（names 是各候选的
     筹码名，和 Advice.evals 同序）；前面没有能保住的时写能保住的只有排在最后的不选、其他流派（Loss.keep_last），或者选哪张
-    都会少拿。不算拿不到的「只能再进入一个」（LOSS_TIP）只写在悬停说明里。"""
+    都会少拿。选了才拿不到的几张之后出现的机会不到线（Loss.slim，灰色）的后接这个机会。不算拿不到的「只能再进入一个」
+    （LOSS_TIP）只写在悬停说明里。"""
     color = "橙色" if loss.warn else "灰色"
     tail = ""
+    if loss.slim and loss.chance is not None:
+        p, line = below_line_texts(loss.chance, loss.chance_line)
+        tail = SCHEME_LOSS_SLIM.format(what="、".join(SCHEME_TIER_WORD[t] for t in loss.slim), p=p, line=line)
     if loss.warn:
         what = SCHEME_TIER_WORD["core"] if loss.lost == LOST_CORE else SCHEME_TIER_WORD["first"]
         tail = SCHEME_LOSS_NO_KEEP if loss.alone else ""
@@ -444,7 +450,9 @@ def to_json(adv: Advice) -> dict:
             "kind": loss.kind, "warn": loss.warn, "enter": list(loss.enter), "gone": list(loss.gone),
             "chips": [[c, SCHEME_TIER_WORD[t]] for c, t in loss.chips], "lost": loss.lost,
             "behind": [names[i] for i in loss.behind if 0 <= i < len(names)],
-            "keep_last": [names[i] for i in loss.keep_last if 0 <= i < len(names)], "alone": loss.alone}
+            "keep_last": [names[i] for i in loss.keep_last if 0 <= i < len(names)], "alone": loss.alone,
+            "slim": [SCHEME_TIER_WORD[t] for t in loss.slim],
+            "chance": None if loss.chance is None else round(loss.chance, 4)}
         ahead = ranking.aheads[k] if k < len(ranking.aheads) else None
         item["tier_lookahead"] = None if ahead is None else round(ahead.value, 1)
         demoted = ranking.demotions[k] if k < len(ranking.demotions) else None

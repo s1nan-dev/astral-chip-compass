@@ -52,7 +52,8 @@ def fake_session(**fields):
                               game_over_info=None, games=0, unsupported=[], can_undo_new_game=False,
                               can_restore_chip=False, difficulty_info=None, next_star_cost=lambda: None,
                               take_ledger=lambda: [], scheme_choice=lambda hero=None: SchemeChoice(),
-                              take_map_switch=lambda: None, hant_game=False, game_quiet=False)
+                              take_map_switch=lambda: None, take_school_switch=lambda: None, hant_game=False,
+                              game_quiet=False)
     for name, value in fields.items():
         setattr(game if name in _STATE_FIELDS else session, name, value)
     return session
@@ -199,6 +200,25 @@ class TakeViewTest(unittest.TestCase):
         self.assertEqual((broken.scheme, broken.map_switch, broken.hero), (None, None, HERO))
         self.assertEqual(taken, [1])
         self.assertIn("RuntimeError: 坏了", broken.read_error)
+
+    def test_school_choice(self):
+        """按已进入的流派换着：快照里有已进入的流派和换之前的那套，按地图那一行不显示（scheme_map 为 None）；刚按流派换上的
+        那一次同样是「取走」式的读，只在要的时候取。"""
+        saved, before_used = SimpleNamespace(id="u", name="甲"), SimpleNamespace(id="l", name="龙")
+        used = SimpleNamespace(id="b", name="乙")
+        choice = SchemeChoice(saved, used, None, ("标记",), SchemeChoice(saved, before_used, "龙宫游乐园"))
+        taken = []
+        session = fake_session(scheme_choice=lambda hero=None: choice,
+                               take_school_switch=lambda: taken.append(1) or choice)
+        view = state.take_view(session)
+        self.assertEqual((taken, view.school_switch), ([], None))
+        self.assertEqual((view.school_switched, view.map_switched), (True, False))
+        self.assertEqual((view.scheme_schools, view.scheme_name, view.before_scheme_name), (("标记",), "乙", "龙"))
+        view = state.take_view(session, switch=True)
+        self.assertEqual(taken, [1])
+        self.assertIs(view.school_switch, choice)
+        plain = state.take_view(fake_session(), switch=True)
+        self.assertEqual((plain.school_switched, plain.before_scheme, plain.school_switch), (False, None, None))
 
 
 def view_of(**fields) -> state.SessionView:

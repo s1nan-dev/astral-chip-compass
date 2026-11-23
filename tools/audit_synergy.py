@@ -54,7 +54,8 @@ def chips_for_audit(db):
 
 
 def trait_only_db(db):
-    """资料库的副本：各角色去掉角色专属规则，自动层只剩特性规则（推荐流派、保住、组合规则、队友调分照旧）。"""
+    """资料库的副本：各角色去掉角色专属规则，自动层只剩特性规则（推荐流派、保住、组合规则、队友调分照旧）。
+    大数据规则（角色的 HeroSynergy.bigdata_rules、全体的 DB.bigdata_rules）不是角色专属规则，两边都保留（replace 只换 rules）。"""
     return dataclasses.replace(db, hero_synergy={
         name: dataclasses.replace(hs, rules=tuple(r for r in hs.rules if r.origin != "角色"))
         for name, hs in db.hero_synergy.items()})

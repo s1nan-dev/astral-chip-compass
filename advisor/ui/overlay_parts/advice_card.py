@@ -189,7 +189,9 @@ class AdviceCard:
         else:
             view, box = _column_widget(0)
         adv = ev.advice
-        for i, opt in enumerate(option_views(adv, self.fixed() if live else ())):
+        # 选了以后会按已进入的流派换用另一套方案的候选（推荐事件上的 switch_tags）：理由标签里多一个灰色标签，先后不变
+        tags = getattr(ev, "switch_tags", None) or ()
+        for i, opt in enumerate(option_views(adv, self.fixed() if live else (), tags)):
             if i:
                 if O.ENTRY_BARS:  # 皮肤把每一条画成一张小卡片（白色海景房）：卡片之间留一点空，不画分隔线
                     box.addSpacing(6)

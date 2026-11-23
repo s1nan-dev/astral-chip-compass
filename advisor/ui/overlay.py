@@ -16,7 +16,9 @@
                 方案存在 advisor/schemes.py 的 SchemeStore（悬浮窗、编辑窗口、导入/导出窗口共用一个），Session 按 scheme_for
                 取当前角色保存的方案、按 schemes_of 取它的全部方案，推荐按这一局实际用的那套计算（Session.scheme_choice）：
                 对局里认出地图以后，这一局自动换用这个角色标了这张地图的方案（不改方案文件），出一次性提示；点「换回原来的」
-                （revert_map_scheme）或在悬浮窗上手动换了方案，这一局就不再按地图换；对局结束回到保存的那套。切换方案、按地图
+                （revert_map_scheme）或在悬浮窗上手动换了方案，这一局就不再按地图换；对局结束回到保存的那套。拿了方案外流派的
+                筹码、方案走偏时，同样自动换用已进入的流派都列进了方案的一套（另一行、另一个「换回原来的」：revert_school_scheme），
+                候选筹码选了以后会这样换、又是那套里的必选或推荐时，卡片上多一个灰色标签（Event.switch_tags）。切换方案、按地图
                 换了方案、编辑或删除正在用的方案后，按当前三选一的画面立即重算（手动模式也一样，Session.recompute）。
                 换用方案有三处，都走 _use_scheme：方案下拉框里选，编辑窗口里给当前角色新建、复制（scheme_added），导入/导出
                 窗口里导入以后点「使用这套方案」（use_requested；别的角色只记下）。三处角色下拉框按六类加不能选的组名
@@ -107,6 +109,8 @@ from .overlay_parts.wording import (
     RESTART_FAILED,
     SCHEME_SET,
     SCHEME_SWITCHED,
+    SCHOOL_SCHEME_REVERTED,
+    SCHOOL_SCHEME_SWITCHED,
     SETTINGS_GLYPH_PX,
     SHUTDOWN_DOWNLOAD_S,
     SHUTDOWN_WATCHER_S,
@@ -427,7 +431,8 @@ class Overlay(QWidget):
             dismiss_unlock=self.records.dismiss_unlock, assets=lambda: self.background.assets_state,
             actions={"undo": self.undo_new_game, "add": self.open_add, "retry_download": self.start_download,
                      "dismiss_download": lambda: self.background.dismiss_failed(), "undo_remove": self.undo_remove,
-                     "revert_map_scheme": self.revert_map_scheme, "change_hotkey": self.change_hotkey,
+                     "revert_map_scheme": self.revert_map_scheme, "revert_school_scheme": self.revert_school_scheme,
+                     "change_hotkey": self.change_hotkey,
                      "switch_hant": self.switch_to_hant, "dismiss_ocr_check": lambda: self.ocr_check.dismiss(),
                      "ocr_check_accept": lambda: self.ocr_check.accept(),
                      "ocr_check_decline": lambda: self.ocr_check.decline(),
@@ -1440,13 +1445,16 @@ class Overlay(QWidget):
 
     def _use_scheme(self, hero: str, scheme_id: str | None, *, announce: bool = False, via: str = "") -> bool | None:
         """悬浮窗换用一套方案（scheme_id；None 为默认推荐）：记下 hero 用这套（SchemeStore.set_current，改动即存；方案文件
-        只读时只在这次运行生效），这一局不再按地图自动换方案（Session.stop_map_scheme：这一局里自己换过了），按当前三选一的
+        只读时只在这次运行生效），这一局不再按地图、按流派自动换方案（Session.stop_map_scheme、stop_school_scheme：这一局里
+        自己换过了），按当前三选一的
         画面立即重算（手动模式也一样），重算出了推荐就出一次性提示 SCHEME_SWITCHED；announce 为真时没有重算出推荐也出提示
         （SCHEME_SET，SCHEME_SWITCHED 的前半句）。识别记录记一条 scheme（via：从哪里换的，editor 编辑窗口里新建、复制，import
         导入后点「使用这套方案」；方案下拉框里选的不写）。开着的编辑窗口跟着重标「使用中」。
         方案下拉框、编辑窗口、导入/导出窗口三处换用都走这里。比的是这一局实际用的那套（Session.scheme_choice）：选的就是它
-        时什么都不做（编辑窗口新建、导入后使用的那套正好是按地图换上的时除外：照样记下这个角色用它，这一局不再按地图换）；
-        按地图换着的时候选回保存的那套，等于点了「换回原来的」（revert_map_scheme，不用 set_current：保存的本来就是它）。
+        时什么都不做（编辑窗口新建、导入后使用的那套正好是按地图、按流派换上的时除外：照样记下这个角色用它，这一局不再自动换）；
+        按流派换着的时候选回换之前的那套（按地图那一步定出来的），等于点了按流派那一行的「换回原来的」（revert_school_scheme：
+        只停按流派换）；按地图换着的时候选回保存的那套，等于点了「换回原来的」（revert_map_scheme：两种都停；不用
+        set_current：保存的本来就是它）。
         记下新方案和重算在同一次持锁里做（_recompute 的 change）：识别线程插不到两者之间，不会先按新方案算了这一帧、
         让这里重算不出新的推荐而不出提示。
         返回 True 换用了（换回了）；None 这套就是这一局正在用的，什么都没做；False 用不了：没有方案存储、角色资料库未收录或
@@ -1457,8 +1465,12 @@ class Overlay(QWidget):
             return False
         with self.lock:
             choice = self.session.scheme_choice(hero)
-        if _scheme_id(choice.used) == scheme_id and not (via and choice.map is not None):
+        before = getattr(choice, "before", None)
+        switched = choice.map is not None or before is not None
+        if _scheme_id(choice.used) == scheme_id and not (via and switched):
             return None
+        if before is not None and _scheme_id(before.used) == scheme_id:
+            return True if self.revert_school_scheme() else None
         if choice.map is not None and _scheme_id(choice.saved) == scheme_id:
             return True if self.revert_map_scheme() else None
         scheme = store.get(scheme_id) if scheme_id else None
@@ -1470,6 +1482,7 @@ class Overlay(QWidget):
         def change() -> None:
             store.set_current(hero, scheme_id)
             self.session.stop_map_scheme()
+            self.session.stop_school_scheme()
 
         with self._batch():
             self._recompute(SCHEME_SWITCHED.format(name=name), change=change,
@@ -1480,11 +1493,12 @@ class Overlay(QWidget):
         return True
 
     def revert_map_scheme(self) -> bool:
-        """「换回原来的」：这一局按地图换着方案时，换回保存的那套（不改方案文件：保存的本来就是它），这一局不再按地图自动换
-        方案（Session.stop_map_scheme），按它立即重算（同手动换方案的 _recompute：手动模式也一样），出一次性提示
-        MAP_SCHEME_REVERTED（重算没重算都出），识别记录记一条 scheme（via 为 map_revert，带上地图名）。「筹码方案」卡片里
-        「本局按地图换用了……」那一行的按钮接这里（提示行的动作名 revert_map_scheme）；换着的时候在方案下拉框里选回保存的
-        那套也走这里（_use_scheme）。
+        """「换回原来的」：这一局按地图换着方案时，换回保存的那套（不改方案文件：保存的本来就是它），这一局不再自动换方案：
+        按地图、按已进入的流派两种都停（Session.stop_map_scheme、stop_school_scheme）。只停按地图换的话，保存的那套这时已经
+        走偏时会立刻又按流派换走（标了当前地图的那套排在前面，多半就换回刚才那套），等于没换回。按它立即重算（同手动换方案
+        的 _recompute：手动模式也一样），出一次性提示 MAP_SCHEME_REVERTED（重算没重算都出），识别记录记一条 scheme（via 为
+        map_revert，带上地图名）。「筹码方案」卡片里「本局按地图换用了……」那一行的按钮接这里（提示行的动作名
+        revert_map_scheme）；换着的时候在方案下拉框里选回保存的那套也走这里（_use_scheme）。
         返回换回了没有：这会儿没有按地图换着（已经换回、本局结束、地图改判成没有专用方案的等）时什么都不做。"""
         with self.lock:
             choice = self.session.scheme_choice()
@@ -1495,7 +1509,32 @@ class Overlay(QWidget):
         self._trace_user("scheme", hero=choice.used.hero, scheme=_scheme_id(saved), name=name, via="map_revert",
                          map=choice.map)
         text = MAP_SCHEME_REVERTED.format(name=name)
-        self._recompute(text, change=self.session.stop_map_scheme, quiet=text)
+
+        def change() -> None:
+            self.session.stop_school_scheme()
+            self.session.stop_map_scheme()
+
+        self._recompute(text, change=change, quiet=text)
+        return True
+
+    def revert_school_scheme(self) -> bool:
+        """按流派换着时的「换回原来的」：换回按地图那一步定出来的那套（没按地图换时就是保存的；不改方案文件），这一局不再按
+        已进入的流派自动换方案（Session.stop_school_scheme；按地图换不受影响），按它立即重算（同 revert_map_scheme），出一次性
+        提示 SCHOOL_SCHEME_REVERTED（重算没重算都出），识别记录记一条 scheme（via 为 school_revert，带上已进入的流派）。「筹码方案」
+        卡片里「本局按已进入的流派换用了……」那一行的按钮接这里（提示行的动作名 revert_school_scheme）；换着的时候在方案下拉框里
+        选回换之前的那套也走这里（_use_scheme）。换回以后仍按地图换着的，卡片里那一行换成按地图的那一句。
+        返回换回了没有：这会儿没有按流派换着（已经换回、已有筹码改掉以后不走偏了、本局结束等）时什么都不做。"""
+        with self.lock:
+            choice = self.session.scheme_choice()
+        before = getattr(choice, "before", None)
+        if before is None:
+            return False
+        back = before.used
+        name = back.name if back is not None else SCHEME_DEFAULT
+        self._trace_user("scheme", hero=choice.used.hero, scheme=_scheme_id(back), name=name, via="school_revert",
+                         schools=list(choice.schools))
+        text = SCHOOL_SCHEME_REVERTED.format(name=name)
+        self._recompute(text, change=self.session.stop_school_scheme, quiet=text)
         return True
 
     def _follow_scheme(self, view: SessionView) -> None:
@@ -1505,7 +1544,9 @@ class Overlay(QWidget):
         新方案。换了角色时不在这里重算（照旧：用户选的角色当场重算，识别出的角色下一帧重算）。界面线程自己换方案时已经重算过，
         这里再算一次也不会重复给推荐（画面和方案都没变，Session 不重算）。
         这一局刚按地图换上一套、还没告诉过用户时（快照的 map_switch，Session.take_map_switch）出一次性提示
-        MAP_SCHEME_SWITCHED（在重算交出推荐以后出，不被推荐事件清掉），识别记录记一条 scheme（via 为 map，带上地图名）。
+        MAP_SCHEME_SWITCHED（在重算交出推荐以后出，不被推荐事件清掉），识别记录记一条 scheme（via 为 map，带上地图名）；刚按
+        已进入的流派换上一套时（快照的 school_switch，Session.take_school_switch）同样出 SCHOOL_SCHEME_SWITCHED，识别记录的 via 为
+        school，带上已进入的流派。
         快照里方案那几项没读到时这一轮不比。方案下拉框和卡片里那一行都照快照画，不在这里。"""
         if not view.scheme_read:
             return
@@ -1518,6 +1559,13 @@ class Overlay(QWidget):
             scheme = news.used
             self._trace_user("scheme", hero=scheme.hero, scheme=scheme.id, name=scheme.name, via="map", map=news.map)
             self._flash(lang.t(MAP_SCHEME_SWITCHED.format(name=scheme.name)), "scheme")  # 方案名显示时照界面语言
+        news = view.school_switch
+        if news is not None:
+            scheme = news.used
+            self._trace_user("scheme", hero=scheme.hero, scheme=scheme.id, name=scheme.name, via="school",
+                             schools=list(news.schools))
+            schools = "".join(f"「{s}」" for s in news.schools)
+            self._flash(lang.t(SCHOOL_SCHEME_SWITCHED.format(schools=schools, name=scheme.name)), "scheme")
 
     def _recompute_now(self) -> None:
         """_follow_scheme 用：在锁里按最近一次三选一的画面立即重算（Session.recompute，同 _recompute，不出提示），放进待取
@@ -2175,8 +2223,10 @@ class Overlay(QWidget):
 
     def _schemes_state(self) -> dict | None:
         """诊断包用：方案存储的状态（方案文件的位置、读取结果、是否只读、保存出错、个人目录存不进的原因）和当前角色的方案：
-        current 这一局实际用的、saved 保存的（按地图换着时两者不同）、map 按哪张地图换的（没换时为 None）、map_off 这一局
-        不再按地图换（Session.stop_map_scheme）；没有方案存储时为 None。路径里的用户名由诊断包统一换成 %USERPROFILE%。"""
+        current 这一局实际用的、saved 保存的（按地图、按流派换着时两者不同）、map 按哪张地图换的（没换、或在那之上又按流派
+        换着时为 None）、map_off 这一局不再按地图换（Session.stop_map_scheme）；school 按已进入的哪些流派换的（没按流派换时为
+        None）、school_from 按流派换之前的那套（按地图那一步定出来的；没按流派换时为 None）、school_off 这一局不再按流派换
+        （Session.stop_school_scheme）；没有方案存储时为 None。路径里的用户名由诊断包统一换成 %USERPROFILE%。"""
         store = self.store
         if store is None:
             return None
@@ -2185,6 +2235,8 @@ class Overlay(QWidget):
         with self.lock:
             choice = self.session.scheme_choice()
             off = bool(self.session.game.map_scheme_off)
+            school_off = bool(getattr(self.session.game, "school_scheme_off", False))
+        before = getattr(choice, "before", None)
 
         def brief(scheme):
             return {"id": scheme.id, "name": scheme.name} if scheme is not None else None
@@ -2199,6 +2251,9 @@ class Overlay(QWidget):
             "saved": brief(choice.saved),
             "map": choice.map,
             "map_off": off,
+            "school": list(choice.schools) if before is not None else None,
+            "school_from": brief(before.used) if before is not None else None,
+            "school_off": school_off,
         })
 
     # ------------------------------------------------------------ 截取方式、设置窗口、关于、托盘

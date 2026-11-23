@@ -70,6 +70,11 @@
 这一局实际用的那套计算（scheme_choice、scheme_plan）：认出地图以后，保存的方案没标这张地图、这个角色另有标了它的方案时，
 这一局换用标了它的第一套（每次现算，不存盘；对局结束、新的一局回到保存的方案）。点了「换回原来的」或在悬浮窗上手动换了方案，
 这一局就不再按地图换（stop_map_scheme）。
+在按地图定出来的那套之上再按已进入的流派换：它是一套自己的方案、按已有筹码走偏了（engine.scheme_drift，和推荐区出橙色
+方案附注同一个判断）时，换用这个角色已进入的流派都列进了方案的一套（标了别的地图的不算；标了当前地图的优先、其次没标地图的，
+地图还没认出来时没标地图的优先，各按方案下拉框的先后），找不到就不换；同样每次现算，已有筹码改掉以后不走偏了就换回去。这是另一个开关（stop_school_scheme），和按地图换的
+互不影响；刚换上、还没告诉过用户的那一次各有各的取走式接口（take_map_switch、take_school_switch）。候选筹码选了以后会按流派
+换用另一套、而它在那套里是必选或推荐时，switch_tags 给出那套方案和档位（推荐的先后、分值都不变）。
 方案内容参与「是不是同一个三选一」的判断，切换方案、编辑正在用的方案、地图改判换了方案后下一帧就会重算，recompute() 按最近
 一次三选一的画面立即重算（手动模式也一样，不用等下一帧、不用再按热键）。按方案计算时另算一次默认推荐的首推
 （Advice.default_best，推荐日志记它）；用的方案变了时记一条识别记录（scheme）。
@@ -93,8 +98,8 @@ from ..prefs import (GAME_FIELDS, SETTINGS_INT_LIMIT, SETTINGS_ORPHAN, SETTINGS_
                      _file_key, _fits, _parse_settings, _write_settings)
 from .core import (CHIP_SOURCE_LABEL, CONFIDENCE_LABEL, FOREIGN_CONFIRM, GAIN_GRACE, HERO_SELECT_LOG_S, LEDGER_KEEP,
                    MAP_SCREEN_SOURCES, MAP_SOURCE_LABEL, MATE_CONFIRM, ROUND_OVER_PROGRESS, SOURCE_CUE_S, STAR_COSTS,
-                   STAR_MIN_CONFIDENCE, TABLE_STATS, TABLE_WAIT_S, UNSUPPORTED_ORDER, UNSUPPORTED_TEXT, WHOLE_GAME_ROUND,
-                   SchemeChoice, Session, WatchHints)
+                   STAR_MIN_CONFIDENCE, SWITCH_MAP, SWITCH_SCHOOL, TABLE_STATS, TABLE_WAIT_S, UNSUPPORTED_ORDER,
+                   UNSUPPORTED_TEXT, WHOLE_GAME_ROUND, SchemeChoice, Session, SwitchTag, WatchHints)
 from .difficulty import DIFFICULTY_SOURCE_LABEL, DifficultyInfo, resolve_difficulty
 from .events import FIRST_KINDS, HISTORY, KINDS, Event, EventLog, _event_record, _jsonable, split_extra
 from .game_state import GameState, PendingNextGame, UndoPoint

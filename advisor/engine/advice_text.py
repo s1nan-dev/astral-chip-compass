@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import math
 import re
 from typing import TYPE_CHECKING
 
@@ -125,6 +126,24 @@ def chance_text(p: float) -> str:
     if shown >= 100:
         return CHANCE_OVER
     return f"{shown}%"
+
+
+def about_chance(p: float) -> str:
+    """概率在整句里的写法：「约 11%」；取整后为 0、100 时用 chance_text（「不到 1%」「超过 99%」）。自己的方案里「选这张
+    才拿不到的……之后至少出现一张的机会」（悬浮窗的悬停、诊断包和命令行）用它。"""
+    shown = shown_int(p)
+    return f"约 {shown}%" if 0 < shown < 100 else chance_text(p)
+
+
+def below_line_texts(p: float, line: float) -> tuple[str, str]:
+    """机会 p 不到线 line 时这两个数在整句里的写法（「约 11%」「20%」，接成「机会约 11%，不到 20%」）。取整后机会不比线低时
+    （例如 0.197 对 0.2）两个都写到小数点后一位，机会往下取、线往上取（「约 19.7%」「20%」），不写成「约 20%，不到 20%」。
+    自己的方案里「选这张才拿不到的……之后至少出现一张的机会」（悬浮窗的悬停、诊断包和命令行）用它。"""
+    if shown_int(p) < shown_int(line):
+        return about_chance(p), f"{shown_int(line)}%"
+    low = math.floor(round(p * 1000, 6)) / 10  # 和 tie_key 同样先舍掉浮点末位：p 不到线时 low 一定比 high 小
+    high = math.ceil(round(line * 1000, 6)) / 10
+    return f"约 {low:g}%", f"{high:g}%"
 
 
 def shown_percents(adv) -> dict[int, int]:

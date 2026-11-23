@@ -1413,6 +1413,24 @@ class SchemeOptionTextTest(unittest.TestCase):
                                           "（先保必选、再保推荐），所以照原来的先后排。")
         final = dataclasses.replace(many, final=True)
         self.assertEqual(ui_text.loss_pills(final, "银行卡流")[0].tip, head + "本次之后预计没有筹码三选一，这一项不影响先后。")
+        # 选了确实少拿、只是选了才拿不到的几张之后出现的机会不到线（Loss.slim）：灰色，悬停后接这个机会和线
+        slim = dataclasses.replace(many, slim=("core",), chance=0.109, chance_line=0.2)
+        pill = ui_text.loss_pills(slim, "银行卡流")[0]
+        self.assertEqual((pill.text, pill.tone), ("选择后无法获得必选：银行卡-用不完等 3 个", INFO))
+        self.assertEqual(pill.tip, head + "选这张才拿不到的必选之后在三选一里至少出现一张的机会约 11%，不到 20%，"
+                                          "所以不因此排到后面。")
+        both = dataclasses.replace(slim, slim=("core", "first"), chance=0.004)
+        self.assertTrue(ui_text.loss_pills(both, "银行卡流")[0].tip.endswith(
+            "选这张才拿不到的必选、推荐之后在三选一里至少出现一张的机会不到 1%，不到 20%，所以不因此排到后面。"))
+        # 取整后机会和线一样时写到小数点后一位（机会往下取），不写成「约 20%，不到 20%」
+        for chance, shown in ((0.197, "约 19.7%"), (0.19999, "约 19.9%"), (0.195, "约 19.5%")):
+            near = dataclasses.replace(slim, chance=chance)
+            self.assertTrue(ui_text.loss_pills(near, "银行卡流")[0].tip.endswith(
+                f"至少出现一张的机会{shown}，不到 20%，所以不因此排到后面。"), chance)
+        self.assertEqual(ui_text.below_line_texts(0.2049, 0.205), ("约 20.4%", "20.5%"))
+        self.assertEqual(ui_text.below_line_texts(0.194, 0.2), ("约 19%", "20%"))
+        self.assertEqual(ui_text.loss_pills(dataclasses.replace(slim, final=True), "银行卡流")[0].tip,
+                         head + ui_text.LOSS_FINAL_TIP)
         names = ["标靶", "书签", "银行卡-余额少"]
         lost = dataclasses.replace(many, warn=True, lost=LOST_CORE, behind=(1, 0))
         pill = ui_text.loss_pills(lost, "银行卡流", names)[0]
@@ -1443,6 +1461,12 @@ class SchemeOptionTextTest(unittest.TestCase):
                          "筹码方案「银行卡流」：推荐，顺位 2\n选择后进入「治愈」流派，「标记」「充能」只能再进入一个。"
                          + ui_text.LOSS_UNAVOIDABLE_TIP)
         self.assertEqual(ui_text.place_tip(Place("marked", "first", 2), "银行卡流", many), "筹码方案「银行卡流」：推荐，顺位 2")
+        # 机会不到线的 LOSS_TIP：照样只写在位次的悬停里，后接机会和线
+        thin = dataclasses.replace(tip, slim=("first",), chance=0.17, chance_line=0.2)
+        self.assertEqual(ui_text.loss_pills(thin, "银行卡流"), [])
+        self.assertEqual(ui_text.place_tip(Place("unmarked"), "银行卡流", thin),
+                         "筹码方案「银行卡流」：未标记，按角色特性计算\n选择后进入「治愈」流派，「标记」「充能」只能再进入一个。"
+                         "选这张才拿不到的推荐之后在三选一里至少出现一张的机会约 17%，不到 20%，所以不因此排到后面。")
         # 算拿不到的 LOSS_TIP：做成橙色标签，位次的悬停不另写
         warned = Loss(LOSS_TIP, True, ("充能",), ("治愈", "标记"), (("鹰眼瞄具", "first"),),
                       (("标记", ("鹰眼瞄具",)),), lost=LOST_FIRST, behind=(0,))

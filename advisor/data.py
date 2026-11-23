@@ -18,6 +18,7 @@ import difflib
 import json
 import logging
 import math
+import os
 import re
 import tomllib
 from collections.abc import Iterable
@@ -43,6 +44,15 @@ TIER_LABEL = {"core": "必选", "first": "推荐", "second": "可选", "avoid": 
 SOURCE_GUIDE = "攻略"
 SOURCES = (SOURCE_GUIDE,)
 GENERAL_TRAIT = "通用"
+# 照真实玩家对局的统计给筹码加减的分（大数据规则）：规则的 origin、分项名都写它。分两层：对所有角色的（适配表最外层的
+# [[bigdata]]，DB.bigdata_rules，可以带角色分组、本流派两种条件）和某名角色的（[[hero]] 下的 [[hero.bigdata]]，HeroSynergy.bigdata_rules），
+# 命中的各条相加。和照机制推出来的角色专属规则、特性规则分开放，每条单独相加，不进自动层「取最高、其余按比例」
+# 的合并（engine.parts._bigdata_parts）。只计分、不在悬浮窗上显示（ui.text 按 Part.origin 跳过），命令行、诊断包、审查清单照写
+BIGDATA_ORIGIN = "大数据"
+# 载入时读不读大数据规则（load_db 的 bigdata_rules 不给时）：这个环境变量为 "0" 时不读，没设或别的值都照常读。程序和工具
+# 一律照常读；只有跑测试的进程默认设成 "0"（tests/__init__.py），照机制定分数的测试不随每个版本重算的大数据规则变，
+# 要真规则的测试显式写 load_db(bigdata_rules=True)
+BIGDATA_RULES_ENV = "ACC_BIGDATA_RULES"
 # 筹码标签里的「通用」：不是职业，游戏内置推荐的标签分不给它；同系列的严格上位替代比标签时不计它（strict_problems）
 GENERAL_TAG = "通用"
 UNRECORDED = "资料库未收录"
@@ -175,7 +185,7 @@ class Rule:
     chips: frozenset[str]
     score: float
     reason: str
-    origin: str  # 特性名、「角色」或「玩家思路」
+    origin: str  # 特性名、「角色」、「玩家思路」或 BIGDATA_ORIGIN（大数据规则）
     maps: frozenset[str] = frozenset()
     needs_owned: frozenset[str] = frozenset()
     max_round: int | None = None
@@ -196,6 +206,20 @@ class Rule:
     # 这两个条件。两个条件成对写在同一筹码的两条规则上时，任何局面恰好命中一条（有来源时一个分值、没有时另一个）
     needs_source: str | None = None
     without_source: str | None = None
+    # 只看角色的两个条件，只用于全体的大数据规则（适配表最外层的 [[bigdata]]，DB.bigdata_rules）：hero_groups 非空时只对这几类
+    # 角色生效（Hero.group，HERO_GROUPS 之一）；own_school 为真时只在这张筹码属于这个角色的推荐流派（HeroSynergy.schools）
+    # 时生效，一条规则列了几张筹码时逐张判断。别的规则都不写，按 fits_hero 判断时恒为满足
+    hero_groups: frozenset[str] = frozenset()
+    own_school: bool = False
+
+    def fits_hero(self, group: str, schools, school: str | None) -> bool:
+        """只看角色的两个条件（hero_groups、own_school）是否满足。group 是角色的分组（Hero.group），schools 是这个角色的
+        推荐流派（HeroSynergy.schools，适配表里没有这名角色时为空），school 是要算的那张筹码的流派（Chip.school）。"""
+        if self.hero_groups and group not in self.hero_groups:
+            return False
+        if self.own_school and not (school and school in schools):
+            return False
+        return True
 
     def applies(self, map_name: str | None, owned: frozenset[str], rnd: int | None,
                 difficulty: str | None = None, sources: frozenset[str] = frozenset()) -> bool:
@@ -244,6 +268,10 @@ class HeroSynergy:
     # 用它代替一条条写扣分的规则。筹码照旧算这个流派的筹码（要保的流派扣分、开套预判照旧），只是不拿推荐流派的分。
     # 只用于默认推荐；推荐流派来自玩家思路时不起作用（engine.parts._build_parts）
     school_skip: tuple[str, ...] = ()
+    # 大数据规则（适配表 [[hero]] 下的 [[hero.bigdata]]，origin 为 BIGDATA_ORIGIN）：照真实玩家对局的统计加减的分。不并进 rules
+    # （rules 是自动层的规则，会按「取最高、其余按比例」合并），在自动层算分的同样情形下每条各成一项、单独相加
+    # （engine.parts._bigdata_parts）。对所有角色生效的一层另在 DB.bigdata_rules，命中的两层各条相加
+    bigdata_rules: tuple[Rule, ...] = ()
 
 
 @dataclass(frozen=True, eq=False)
@@ -503,6 +531,10 @@ class DB:
     starlight_uses: tuple[StarlightUse, ...] = ()
     # rules.toml [sources]：体系名 → 来源（Source；适配表规则的 needs_source、without_source 引用这里的名字）
     sources: dict[str, Source] = field(default_factory=dict)
+    # 全体的大数据规则（适配表最外层的 [[bigdata]]，origin 为 BIGDATA_ORIGIN）：不挂在某个角色下面，对每个角色都算（包括适配表里
+    # 没有 [[hero]] 一节的角色），可以带只看角色的条件（Rule.hero_groups、Rule.own_school）。和角色那一层
+    # （HeroSynergy.bigdata_rules）在同样的情形下算，命中的各条各成一项、相加（engine.parts._bigdata_parts）
+    bigdata_rules: tuple[Rule, ...] = ()
 
     # ------------------------------------------------------------ 名称匹配
 
@@ -747,6 +779,73 @@ def _check_net(rule: Rule, raw: dict, where: str, trait_names, warn) -> Rule:
     return rule
 
 
+_HERO_CONDITIONS = ("hero_groups", "own_school")  # 只有全体的大数据规则能写的两个条件（Rule.hero_groups、Rule.own_school）
+
+
+def _bigdata_rules(raw, owner: str, check_chips, check_source, warn, chips: dict | None = None) -> tuple[Rule, ...]:
+    """大数据规则：一名角色的（[[hero]] 下的 [[hero.bigdata]]，HeroSynergy.bigdata_rules，owner 写「角色 X 的大数据规则」），
+    或全体的（最外层的 [[bigdata]]，DB.bigdata_rules，owner 写「全体的大数据规则」，同时给 chips）。字段、检查和角色专属规则
+    相同（_valid_rules、_check_difficulty、check_source、check_chips）。不支持 net：每条单独成一项，不和别的分项合成标签，
+    写了就记警告、忽略这个字段。
+
+    全体的规则另外：
+    - 可以写只看角色的两个条件：hero_groups（角色分组的列表，HERO_GROUPS 之一；写错的记警告、这条规则不收）、
+      own_school（true / false；写在不属于任何流派的筹码上时，对那张筹码永远不生效，记警告）；
+    - 不支持 exclude（某个角色不适用时在那个角色的 [[hero.bigdata]] 里加一条反向的分），写了记警告、忽略这个字段。
+    角色的规则写了 hero_groups、own_school 时记警告、忽略这个字段。"""
+    raw_rules = _valid_rules(raw, owner, warn, key="bigdata")
+    out = []
+    for r in raw_rules:
+        where = f"{owner}（{'、'.join(r['chips'])}）"
+        rule = _rule(r, BIGDATA_ORIGIN)
+        if "net" in r:
+            warn(f"{where}：大数据规则不支持 net，已忽略这一项")
+            rule = replace(rule, net={})
+        if chips is None:
+            for key in _HERO_CONDITIONS:
+                if key in r:
+                    warn(f"{where}：{key} 只能写在最外层的 [[bigdata]] 里，已忽略这一项")
+        else:
+            if "exclude" in r:
+                warn(f"{where}：全体的大数据规则不支持 exclude，已忽略这一项")
+                rule = replace(rule, exclude=frozenset())
+            rule = _hero_conditions(rule, r, where, chips, warn)
+            if rule is None:
+                continue
+        _check_difficulty(r, where, warn)
+        check_source(r, where)
+        check_chips(rule.chips | rule.needs_owned, owner)
+        out.append(rule)
+    return tuple(out)
+
+
+def _hero_conditions(rule: Rule, raw: dict, where: str, chips: dict, warn) -> Rule | None:
+    """全体的大数据规则上只看角色的两个条件（hero_groups、own_school）：写对的记进规则；类型不对、分组名写错时记警告，
+    整条不收（返回 None）。own_school 写在不属于任何流派的筹码上时只记警告，规则照收（对那张筹码不生效，Rule.fits_hero）。"""
+    groups = raw.get("hero_groups")
+    if groups is not None:
+        if not _is_names(groups) or not groups:
+            warn(f"{where}：hero_groups 应为角色分组的列表，这条规则不生效")
+            return None
+        bad = [g for g in groups if g not in HERO_GROUPS]
+        if bad:
+            warn(f"{where}：hero_groups 里的分组「{'」「'.join(bad)}」不存在（只能写「{'」「'.join(HERO_GROUPS)}」），"
+                 "这条规则不生效")
+            return None
+        rule = replace(rule, hero_groups=frozenset(groups))
+    own = raw.get("own_school")
+    if own is not None:
+        if not isinstance(own, bool):
+            warn(f"{where}：own_school 应写 true 或 false，这条规则不生效")
+            return None
+        if own:
+            for n in sorted(rule.chips):
+                if n in chips and not chips[n].school:
+                    warn(f"{where}：筹码「{n}」不属于任何流派，own_school 对它永远不生效")
+        rule = replace(rule, own_school=own)
+    return rule
+
+
 class DataError(ValueError):
     """推荐离不开的资料（chips.json、heroes.json、rules.toml）整份读不出来：消息写明文件名和出错的位置（第几行第几列，
     或最外层的结构不对）。随程序发布的资料有测试把关，只在手改或文件损坏时出现；消息只进错误记录，启动失败的弹窗按 file
@@ -919,10 +1018,11 @@ def _rule_problem(raw) -> str | None:
     return None
 
 
-def _valid_rules(raw, where: str, warn) -> list:
-    """一段下面的规则（rule）里写得对的几条（_rule_problem）：写错的一条记警告、跳过；rule 不是数组时整段忽略。"""
+def _valid_rules(raw, where: str, warn, key: str = "rule") -> list:
+    """一段下面的规则（rule，大数据规则是 bigdata）里写得对的几条（_rule_problem）：写错的一条记警告、跳过；
+    不是数组时整段忽略。key 是这一组规则在适配表里的键名，只用于警告。"""
     if not isinstance(raw, list):
-        warn(f"{where}：rule 应写成规则的数组，已忽略")
+        warn(f"{where}：{key} 应写成规则的数组，已忽略")
         return []
     out = []
     for i, r in enumerate(raw, 1):
@@ -1452,9 +1552,24 @@ def _load_sources(raw, chips: dict[str, Chip], heroes: dict[str, Hero], warn) ->
     return out
 
 
+def bigdata_rules_default() -> bool:
+    """load_db 不给 bigdata_rules 时读不读大数据规则：环境变量 BIGDATA_RULES_ENV 为 "0" 时不读，其余照常读。"""
+    return os.environ.get(BIGDATA_RULES_ENV) != "0"
+
+
+def load_db(data_path: str | None = None, bigdata_rules: bool | None = None) -> DB:
+    """读 data 文件夹（不给时为 paths.data_dir()）里的资料。怎么降级、什么时候抛 DataError 见模块说明。
+
+    bigdata_rules：读不读适配表里的大数据规则（最外层的 [[bigdata]] 和各角色的 [[hero.bigdata]]）。不给时按 bigdata_rules_default()
+    （环境变量 BIGDATA_RULES_ENV），给了真假时照参数。不读时两层都为空（DB.bigdata_rules、HeroSynergy.bigdata_rules），这两段写得
+    对不对也不核对、不记警告；其余资料照常读。同一份资料带不带大数据规则各缓存一份，同一个进程里两种都可以要。"""
+    if bigdata_rules is None:
+        bigdata_rules = bigdata_rules_default()
+    return _load_db(data_path, bool(bigdata_rules))
+
+
 @lru_cache(maxsize=None)
-def load_db(data_path: str | None = None) -> DB:
-    """读 data 文件夹（不给时为 paths.data_dir()）里的资料。怎么降级、什么时候抛 DataError 见模块说明。"""
+def _load_db(data_path: str | None, bigdata_rules: bool) -> DB:
     base = Path(data_path) if data_path else data_dir()
     warnings: list[str] = []
 
@@ -1537,6 +1652,10 @@ def load_db(data_path: str | None = None) -> DB:
     if GENERAL_TRAIT not in trait_rules:
         warn(f"适配表缺少「{GENERAL_TRAIT}」特性")
 
+    # 全体的大数据规则（最外层的 [[bigdata]]）：不挂在某个角色下面，和角色的 [[hero.bigdata]] 同样检查；不读大数据规则时两层都空
+    global_bigdata = (_bigdata_rules(syn.get("bigdata", []), "全体的大数据规则", check_chips, check_source, warn, chips=chips)
+                   if bigdata_rules else ())
+
     hero_synergy: dict[str, HeroSynergy] = {}
     for i, h in enumerate(_section(syn, "hero", warn), 1):
         if not isinstance(h, dict) or not _is_name(h.get("name")):
@@ -1554,6 +1673,8 @@ def load_db(data_path: str | None = None) -> DB:
             check_source(r, f"角色 {name} 的规则（{'、'.join(r['chips'])}）")
         for r in own:
             check_chips(r.chips | r.needs_owned, f"角色 {name}")
+        hero_bigdata = (_bigdata_rules(h.get("bigdata", []), f"角色 {name} 的大数据规则", check_chips, check_source, warn)
+                     if bigdata_rules else ())
         hero_traits = _names_or_empty(h, "traits", f"角色 {name}", warn)
         schools = _names_or_empty(h, "schools", f"角色 {name}", warn)
         collected = list(own)
@@ -1581,6 +1702,7 @@ def load_db(data_path: str | None = None) -> DB:
             keep_schools=keep,
             keep_schools_penalty=penalty,
             school_skip=skip,
+            bigdata_rules=hero_bigdata,
         )
     for name in heroes:
         if name not in hero_synergy:
@@ -1732,6 +1854,7 @@ def load_db(data_path: str | None = None) -> DB:
         needs=needs,
         starlight_uses=starlight_uses,
         sources=sources,
+        bigdata_rules=global_bigdata,
     )
 
 
@@ -1771,6 +1894,7 @@ _RULES_OPTIONAL = {
     "endless_cycle": {"star_rate": "num"},
     "income": {"exempt_traits": "traits", "exempt_owned": "chip_texts", "late": "chip_rounds", "late_factor": "num"},
     "advice": {"series_near": "num"},
+    "scheme": {"lost_min_chance": "num", "lost_chance_min_star": "num"},
     "difficulty": {"cap_untrusted": "maps"},
     "map_hints": {"markers": "map_texts"},
 }

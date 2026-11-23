@@ -6,6 +6,11 @@
 画面上读到的概率行。局面按游戏规则生成：已有筹码和候选筹码都取自当时的筹码池（不超过两个流派、不出别的地图的专属筹码）。
 被同系列严格上位替代的候选（data/series.toml）不参与比较，推荐度为 0：首推和「适配度均偏低」的检查都不算它（compared）。
 本次之后预计没有筹码三选一时，「刷新」按最多连续刷新到剩余次数用完估值（RerollEval.chain），不低于只算刷新一次的估值。
+
+这些约束和具体分数无关，所以带着随程序发布的大数据规则算（load_db(bigdata_rules=True)；跑测试的进程默认不读，见
+tests/__init__.py），看真规则和程序合在一起照样成立。照机制定了谁该比谁高的几处（辅助角色的金色飞星和星币锤、
+加分最高的筹码首推、同系列低一级总分更高的固定局面）不是不变量，大数据规则每个版本重算都可能改变它们，这几处照旧
+不带大数据规则算（MECHANISM = True 的几个类、SeriesSanityTest 的固定局面、UnrecordedTest 的必拿补分那一条）。
 """
 import contextlib
 import dataclasses
@@ -23,6 +28,7 @@ from unittest import mock
 
 import advisor.engine as engine_mod
 from advisor.data import (
+    BIGDATA_ORIGIN,
     LEVEL_HARD,
     LEVEL_HARD_PLUS,
     LEVEL_NIGHTMARE,
@@ -47,7 +53,7 @@ CASES_PER_HERO = 10  # 每个角色的随机局面数；第 0、1 个固定为�
 OFFICIAL = {"基础分", "成长分", "角色分", "标签分", "关键词分"}
 ALLOWED_LABELS = OFFICIAL | {
     "玩家思路", "角色专属规则", "特性", "其他特性", "推荐流派", "锁流派", "组合", "队友", "难度", "收入折算", "循环往复",
-    "职业倾向", "未收录",
+    "职业倾向", "未收录", BIGDATA_ORIGIN,
 }
 # 适配表给的加分（玩家思路层，或没有列入玩家思路时的自动层）
 SYNERGY_LAYER = {"玩家思路", "角色专属规则", "特性", "其他特性"}
@@ -206,9 +212,12 @@ def unrelated_blues(db, hero: str) -> list[str]:
 
 
 class Base(unittest.TestCase):
+    # 为真时这个类查的是照机制定的先后（谁该比谁高），不带大数据规则算；否则带着随程序发布的大数据规则（见模块说明）
+    MECHANISM = False
+
     @classmethod
     def setUpClass(cls):
-        cls.db = load_db()
+        cls.db = load_db(bigdata_rules=not cls.MECHANISM)
 
     def by_name(self, adv):
         return {e.chip.name: e for e in adv.evals}
@@ -496,7 +505,7 @@ class CrossLaunchTest(Base):
         "from advisor.data import load_db\n"
         "from advisor.engine import advise\n"
         "from advisor.pool import State\n"
-        "db = load_db()\n"
+        "db = load_db(bigdata_rules=True)\n"  # 和本进程的 Base.db 一样带大数据规则（子进程继承了不读的环境变量）
         "out = []\n"
         "for c in json.loads(sys.stdin.read()):\n"
         "    adv = advise(db, State(**c['state']), c['offer'], c['rarity'])\n"
@@ -632,9 +641,9 @@ class SeriesSanityTest(Base):
         # 邦妮那一组（美工刀-初级 / -锋利）在推荐流派只留标记、内置分不计入以后不再倒挂
     )
 
-    def check_pair(self, st: State, offer, low_name: str, high_name: str, plain_db) -> bool:
-        """一个局面的检查；返回没有同系列筹码表时低一级的总分是否更高。"""
-        adv = advise(self.db, st, list(offer))
+    def check_pair(self, st: State, offer, low_name: str, high_name: str, db, plain_db) -> bool:
+        """一个局面的检查（plain_db 是 db 去掉同系列筹码表的副本）；返回没有同系列筹码表时低一级的总分是否更高。"""
+        adv = advise(db, st, list(offer))
         plain = advise(plain_db, st, list(offer))
         ev, before = self.by_name(adv), self.by_name(plain)
         low = ev[low_name]
@@ -660,7 +669,10 @@ class SeriesSanityTest(Base):
         rng = random.Random(SEED + 7)
         strict = [p for p in self.db.series if p.strict]
         plain_db = dataclasses.replace(self.db, series=())
-        fixed = [self.check_pair(st, offer, low, high, plain_db) for st, offer, low, high in self.INVERTED]
+        # 固定的局面是照机制算出来的「低一级更高」，不带大数据规则（见模块说明）；随机局面带着真规则查
+        mech = load_db(bigdata_rules=False)
+        mech_plain = dataclasses.replace(mech, series=())
+        fixed = [self.check_pair(st, offer, low, high, mech, mech_plain) for st, offer, low, high in self.INVERTED]
         self.assertEqual(fixed, [True] * len(self.INVERTED))  # 固定的两个局面确实是低一级更高
         checked = 0
         for hero in self.db.heroes:
@@ -673,7 +685,7 @@ class SeriesSanityTest(Base):
                 offer = [p.low, p.high, rng.choice(pool)]
                 rng.shuffle(offer)
                 checked += 1
-                self.check_pair(st, offer, p.low, p.high, plain_db)
+                self.check_pair(st, offer, p.low, p.high, self.db, plain_db)
         self.assertGreaterEqual(checked, 100)
 
 
@@ -778,13 +790,14 @@ class UnrecordedTest(Base):
         dict(hero="阿尔", star=0, round=None, map="星趴·梦想号", rerolls=2),
     )
 
-    def same_rarity_scores(self, st: State, rarity):
-        """计算用的每张地图上，筹码池里同稀有度（不知道稀有度时为全部）筹码的分值，不含前瞻。"""
-        scorer = Scorer(self.db, st)
+    def same_rarity_scores(self, st: State, rarity, db=None):
+        """计算用的每张地图上，筹码池里同稀有度（不知道稀有度时为全部）筹码的分值，不含前瞻。db 不给时为 self.db。"""
+        db = db or self.db
+        scorer = Scorer(db, st)
         owned = scorer.known_owned
         values = []
         for m in scorer.maps:
-            pool = player_pool(self.db, owned, m)
+            pool = player_pool(db, owned, m)
             same = [c for c in pool if not rarity or c.rarity == rarity]
             values += [scorer.score(c.name, owned, st.round, m) for c in same]
         return values
@@ -841,14 +854,16 @@ class UnrecordedTest(Base):
         self.assertTrue(all(finite(e.total) and e.lookahead == 0 for e in adv.evals))
 
     def test_core_lift_counts_unrecorded_as_unlisted(self):
-        # 未收录的筹码不在玩家思路里：同一次三选一里有必拿时，必拿照常补到比它高 core_lead 分；未收录筹码本身的中性分不变
-        lead = self.db.rules["synergy"]["core_lead"]
+        # 未收录的筹码不在玩家思路里：同一次三选一里有必拿时，必拿照常补到比它高 core_lead 分；未收录筹码本身的中性分不变。
+        # 首推哪张是照机制定的，不带大数据规则算（见模块说明）
+        db = load_db(bigdata_rules=False)
+        lead = db.rules["synergy"]["core_lead"]
         st = State(hero="凛", star=1, round=3, map="异变图书馆")
-        adv = advise(self.db, st, ["大背包", "新筹码甲", "夹心饼干-一般"], rarity=[None, "金", None])
+        adv = advise(db, st, ["大背包", "新筹码甲", "夹心饼干-一般"], rarity=[None, "金", None])
         ev = adv.evals
         self.assertEqual(adv.best, "大背包")
         self.assertGreaterEqual(ev[0].total, ev[1].total + lead - 1e-6)
-        values = self.same_rarity_scores(st, "金")
+        values = self.same_rarity_scores(st, "金", db)
         self.assertAlmostEqual(ev[1].total, sum(values) / len(values), places=6)
 
 
@@ -944,8 +959,10 @@ class SupportFlyingStarTest(Base):
     阿尔单独查：他的星光层数直接换成属性，星币锤是他的适配筹码，内置分计入总分时两张接近。
 
     玩家思路覆盖自动层的角色：芬妮的玩家思路把金色飞星列为必拿（星币锤未列入，按必拿补分），金色飞星照样更高，照常检查。
+    两张谁高、高多少是照机制定的，不带大数据规则算（见模块说明）。
     """
 
+    MECHANISM = True
     OFFER = ["星币锤", "书签", "金色飞星"]
     OWNED = ((), ("紫色飞星",), ("银行卡-余额少", "缓冲盾牌"))
 
@@ -1128,7 +1145,10 @@ class PoolTest(Base):
 class CommonSenseTest(Base):
     """每个角色一组常识局面：1 星第 3 轮、没有已有筹码、困难及以上、刷新次数按默认（3 次），候选为该角色在适配表里加分最高的筹码
     （玩家思路层；没有列入玩家思路时为自动层，含特性和角色专属规则；并列最高的逐个检查）+ 两个与该角色无关的蓝色筹码。
-    首推应是加分最高的那个。加分最高的是地图专属筹码时，地图取它所在的地图；否则取异变图书馆（真人对局那张）。"""
+    首推应是加分最高的那个。加分最高的是地图专属筹码时，地图取它所在的地图；否则取异变图书馆（真人对局那张）。
+    「加分最高的首推」是照机制定的，不带大数据规则算（见模块说明）。"""
+
+    MECHANISM = True
 
     def top_chips(self, hero: str):
         endless = self.db.rules["endless_cycle"]["chip"]

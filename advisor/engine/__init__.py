@@ -37,7 +37,9 @@
 没标的筹码扣锁定保护，被锁成不选的流派里没标的筹码按不选计分，这几项只影响分值和未标记之间的先后。卡片上按档位排：
 必选 > 推荐 > 可选 > 未标记 > 不选 > 被锁的其他流派，必选照顺位，推荐、可选按档位前瞻（lookahead.tier_lookahead，差不多、
 或和卡片上写的数——下一次三选一里至少出现一张方案里的必选、推荐的机会——方向相反时照顺位）；只按剩下几次兑现算、收入扣掉
-一半以上的推荐、可选按低一档排，选了会让方案里更要紧的必选、推荐本局拿不到的排到保得住的候选后面。
+一半以上的推荐、可选按低一档排，选了会让方案里更要紧的必选、推荐本局拿不到的排到保得住的候选后面（选了才拿不到的那几张
+之后在三选一里至少出现一张的机会不到 [scheme] lost_min_chance 时不算，提醒改成灰色、不往后排；只在 2 星以后这样，
+[scheme] lost_chance_min_star）。
 「刷新」按档位算平均或按刷出排在前面的概率（未标记时还要扣掉代价也划算）决定排在哪里，另算每张候选「选了之后拿不到……」
 的提醒和推荐区的附注（scheme_rank.advise_scheme，结果在 Advice.ranking）。前瞻、刷新的期望和配合队友都用同一套分值，
 自动跟着方案变。scheme 为 None（默认推荐）时不走这些分支。
@@ -57,7 +59,8 @@ from .advice import (CORE_LEAD, LOOKAHEAD_MIN, LOW_NOTE, NEED_LEAD, NEED_ORIGIN,
 from .advice_text import (BOT_MARK, CHAIN_NOTE, CHANCE_OVER, CHANCE_UNDER, DESC_LIMIT, PERCENT_OVER, PERCENT_UNDER,
                           PLACE_LOCKED, PLACE_LOCKED_TEXT, PLACE_MARKED, PLACE_STRAYED, PLACE_TIER, PLACE_UNMARKED,
                           PLACE_UNMARKED_TEXT, PLAYER_HEAD, REROLL, REROLL_P, REROLL_P_TOP, REROLL_SLOT, SCHEME_TIER_WORD,
-                          SHORT_LIMIT, SPARE_NOTE, SUPERSEDED, UNREAD_NOTE, chance_text, compare_text, percent_text,
+                          SHORT_LIMIT, SPARE_NOTE, SUPERSEDED, UNREAD_NOTE, about_chance, below_line_texts, chance_text,
+                          compare_text, percent_text,
                           place_text, reroll_cost_note, reroll_counts, rival_word, shown_int, shown_percent_texts,
                           shown_percents)
 from .chances import (HEAL_ADVANCE_ORIGIN, HEAL_ADVANCE_REASON, HEAL_ADVANCE_SHORT, HEAL_DISCOUNT_ORIGIN,
@@ -79,5 +82,5 @@ from .reroll import (BASIS_TIER, BASIS_UNMARKED, LEVEL_KEYS, REROLL_LEVEL_EVEN, 
 from .scheme_rank import (LOSS_NOW, LOSS_ONE_LEFT, LOSS_TIP, LOST_CORE, LOST_FIRST, MOVE_AHEAD, MOVE_BEHIND, MOVE_LAST,
                           MOVE_LEAD, MOVE_MIXED, MOVE_NEAR, NOTE_LOST, NOTE_STRAYED, SCHEME_LOST_MAX, SCHEME_LOST_MORE,
                           SCHEME_LOST_NOTE, SCHEME_STRAYED_NOTE, SERIES_NEAR_TIP_SCHEME, TIER_LEVEL, UNMARKED_LEVEL,
-                          Demotion, Loss, Move, Place, Ranking, SchemeNote)
+                          Demotion, Drift, Loss, Move, Place, Ranking, SchemeNote, scheme_drift)
 from .scorer import EMPTY_OFFER, Scorer, advise

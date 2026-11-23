@@ -1,6 +1,7 @@
 """按自己的方案排先后：卡片上按档位排，必选 > 推荐 > 可选 > 未标记 > 不选 > 被锁的其他流派；每张候选的位次（Place）、
 档位的级数、「选了之后拿不到……」的提醒（Loss）、推荐区的附注（SchemeNote），以及把这些和「刷新」那一行
-（reroll.reroll_view）组织成 Advice.ranking 的 advise_scheme。
+（reroll.reroll_view）组织成 Advice.ranking 的 advise_scheme。一套方案按已有筹码走没走偏（scheme_drift）也在这里：推荐区的
+附注和会话里按已进入的流派自动换方案（Session.scheme_choice）共用它。
 
 按档位排的三处例外（advise_scheme 的先后）：
 - 收入降档：标了推荐、可选的收入类筹码，只按剩下几次兑现算、收入扣掉一半以上（rules.toml [scheme] income_demote；满 3 星
@@ -9,24 +10,28 @@
   并且卡片上写的数（选了以后，下一次三选一里至少出现一张方案里的必选、推荐的机会，lookahead.tier_ahead）不比前一张低时
   两张对调（Move）；两样方向相反时照顺位；必选照顺位；
 - 选了会让方案里更要紧的必选、推荐本局拿不到（reach：先比还能拿到的必选个数、再比推荐个数）、另选别的能保住时，
-  排到保得住的候选后面（Loss.lost、Loss.behind）。不选、被锁的照旧在最后。
+  排到保得住的候选后面（Loss.lost、Loss.behind）。不选、被锁的照旧在最后。选了才拿不到的那几张之后在三选一里至少出现
+  一张的机会（lost_chance，chances.take_chance）不到 [scheme] lost_min_chance 时不算拿不到（Loss.slim）：那条路之后多半
+  等不到，不为它压着别的候选。只在星数到了 [scheme] lost_chance_min_star（2 星）以后这样：前期这个机会估得偏低。
 
 分值照 Scorer 算（档位代替玩家思路和角色特性，没标的不用默认推荐，见 parts），这里只定先后和说明。同系列、队友刚需、
 推荐度和附注的做法和默认推荐相同（advice），只是不越过档位。
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from itertools import combinations
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 from ..data import DB, RARITIES, SCHOOLS, TIERS
 from ..pool import owned_schools, tie_key
-from ..schemes import school_of
+from ..schemes import listed_schools, locked_schools, school_of
 from .advice import (NEED_LEAD, NEED_ORIGIN, NEED_PLACE, NEED_SECOND, Advice, ChipEval, common_notes, lift_need,
                      mark_series, mate_needs, need_pick, softmax)
 from .advice_text import (PLACE_LOCKED, PLACE_MARKED, PLACE_STRAYED, PLACE_UNMARKED, REROLL, REROLL_SLOT,
                           SCHEME_TIER_WORD)
+from .chances import take_chance
 from .parts import income_cut
 
 if TYPE_CHECKING:
@@ -105,7 +110,11 @@ class Loss:
     的下标，按卡片上的先后）；不选、被锁的不挪，为空。keep_last：算拿不到、排在它前面的又都保不住（behind 为空）时，能保住的
     不选、被锁的几张（它们照旧排在最后，所以这张仍排在前面；按卡片上的先后）。alone：算拿不到、这次的候选选哪张都会少拿
     （behind、keep_last 都为空；不选、被锁的候选自己为 False）。final：本次之后预计没有筹码三选一（PicksLeft.total
-    为 0）：之后本来就拿不到别的筹码，这一项不算拿不到、不影响先后。"""
+    为 0）：之后本来就拿不到别的筹码，这一项不算拿不到、不影响先后。
+    slim：选了以后确实少拿，但选了才拿不到的那几张之后在三选一里至少出现一张的机会不到 [scheme] lost_min_chance，不算拿不到
+    （灰色、不往后排）：为最后比的那几张有哪几档（"core"、"first"，按这个先后；候选标了必选、推荐时只比必选，其余必选和
+    推荐一起比）；空为不是这种情形。chance：比过线的那个机会（lost_chance；slim 时是最后比的那一个；没比时为
+    None：线为 0、不少拿、之后没有三选一）；chance_line：比的那条线（没比时为 0）。"""
 
     kind: str
     warn: bool
@@ -118,6 +127,9 @@ class Loss:
     final: bool = False
     keep_last: tuple[int, ...] = ()
     alone: bool = False
+    slim: tuple[str, ...] = ()
+    chance: float | None = None
+    chance_line: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -223,13 +235,12 @@ def place_level(place: Place) -> int:
 # ------------------------------------------------------------ 拿不到的提醒和附注
 
 
-def reach(sc: Scorer, owned) -> tuple[int, int]:
-    """持有这些筹码时，方案里还能拿到的（必选个数, 推荐个数）：已持有的算拿到；没持有、属于某个流派的，要在之后最好的
-    流派搭配里才算。最好的搭配是已进入的流派加上用剩下的名额（rules.toml [pool] max_schools）能进的流派，在所有可能里
-    取（必选, 推荐）按字典序最大的一种：先保必选，再保推荐。不属于流派的不受选哪张影响（比较时两边一样），不算。"""
+def _best_schools(sc: Scorer, owned) -> tuple[tuple[int, int], tuple[str, ...], frozenset, list[tuple[str, ...]]]:
+    """reach 和 _lost_chips 共用：持有这些筹码时（还能拿到的（必选个数, 推荐个数）, 已进入的流派, 已持有的筹码,
+    最好的几种流派搭配（每种是用剩下的名额能进的流派，取（必选, 推荐）按字典序最大的，并列的都列上））。"""
     db = sc.db
     owned = tuple(n for n in owned if n in db.chips)
-    held = set(owned)
+    held = frozenset(owned)
     entered = owned_schools(db, owned)
     got = [0, 0]
     rest: dict[str, list[int]] = {}
@@ -244,28 +255,107 @@ def reach(sc: Scorer, owned) -> tuple[int, int]:
             rest.setdefault(school, [0, 0])[k] += 1
     room = max(0, db.rules["pool"]["max_schools"] - len(entered))
     schools = [s for s in SCHOOLS if s in rest]
-    best = (0, 0)
+    best, picks = (0, 0), []
     for picked in combinations(schools, min(room, len(schools))):  # 名额用满不会更差：每个流派都只加不减
-        best = max(best, (sum(rest[s][0] for s in picked), sum(rest[s][1] for s in picked)))
-    return got[0] + best[0], got[1] + best[1]
+        value = (sum(rest[s][0] for s in picked), sum(rest[s][1] for s in picked))
+        if value > best:
+            best, picks = value, [picked]
+        elif value == best:
+            picks.append(picked)
+    return (got[0] + best[0], got[1] + best[1]), tuple(entered), held, picks
+
+
+def reach(sc: Scorer, owned) -> tuple[int, int]:
+    """持有这些筹码时，方案里还能拿到的（必选个数, 推荐个数）：已持有的算拿到；没持有、属于某个流派的，要在之后最好的
+    流派搭配里才算。最好的搭配是已进入的流派加上用剩下的名额（rules.toml [pool] max_schools）能进的流派，在所有可能里
+    取（必选, 推荐）按字典序最大的一种：先保必选，再保推荐。不属于流派的不受选哪张影响（比较时两边一样），不算。"""
+    return _best_schools(sc, owned)[0]
+
+
+def _lost_chips(sc: Scorer, name: str, tiers: tuple[str, ...]) -> tuple[str, ...]:
+    """选了 name 以后才拿不到的方案筹码（tiers 里的几档，按方案的先后）：现在算得到——属于已进入的流派，或属于现在最好的
+    流派搭配里某一种的流派；选了以后算不到——不属于那时已进入的流派，也不是那时每一种最好的搭配都有的流派（最好的搭配
+    不止一种时，选了以后哪一种都没把握拿到的都算进去）。已持有的、name 自己、不属于流派的不算。"""
+    db = sc.db
+    _, entered, held, picks = _best_schools(sc, sc.known_owned)
+    _, entered_after, _, picks_after = _best_schools(sc, (*sc.known_owned, name))
+    maybe = set(entered).union(*picks)
+    sure = set(entered_after) | (set.intersection(*(set(p) for p in picks_after)) if picks_after else set())
+    out = []
+    for chip, tier in sc.plan.tiers:
+        school = school_of(db, chip)
+        if (tier in tiers and chip not in held and chip != name and school is not None and school in maybe
+                and school not in sure):
+            out.append(chip)
+    return tuple(out)
+
+
+def lost_chance(sc: Scorer, chips) -> float:
+    """方案里的这几张筹码之后的三选一里至少出现一张的机会（chances.take_chance：按剩余三选一次数、来源、筹码池，地图待识别
+    时按候选地图平均）。问的是「不选这张候选的话，它们之后来不来」：筹码池按现在的已有筹码算，不含候选；都是方案里的必选、
+    推荐，出现了就会选，不按总分筛。不计刷新（实际的机会略高）。结果记在这次推荐的缓存里（Memo.lost），几张候选问到同一组
+    筹码时不重复算。"""
+    owned_set = frozenset(sc.known_owned)
+    maps = tuple(sc.maps)
+    key = (frozenset(chips), owned_set, maps)
+    if key not in sc.memo.lost:
+        take = [c for c in chips if c in sc.db.chips]
+        sc.memo.lost[key] = take_chance(sc, sc.ordered(owned_set), take, maps)
+    return sc.memo.lost[key]
+
+
+def lost_line(sc: Scorer) -> float:
+    """[scheme] lost_min_chance：选了才拿不到的几张之后至少出现一张的机会不到它时不算拿不到；不写时为 0（只看少没少）。
+    星数不到 [scheme] lost_chance_min_star 时为 0：前期离满星还要升好几次，take_chance 按现在的星数取任务和筹码商店的
+    稀有度，金色、紫色筹码之后出现的机会会估低很多，不拿它放开拿不到的（不写那一项时为 0 星，不设门槛）。"""
+    cfg = sc.db.rules["scheme"]
+    if sc.st.star < cfg.get("lost_chance_min_star", 0):
+        return 0.0
+    return float(cfg.get("lost_min_chance", 0))
+
+
+def judge_lost(sc: Scorer, e: ChipEval, place: Place,
+               now: tuple[int, int] | None = None) -> tuple[str, tuple[str, ...], float | None]:
+    """选了这张候选以后算不算拿不到：（lost, slim, chance），见 Loss 的同名几项。
+
+    先看少没少：方案里还能拿到的必选、推荐（reach）比现在少的是哪一档，按这张候选自己的档位看——必选、推荐只看必选个数
+    （为了保住必选放弃另一个流派的推荐不算），可选、未标记、不选、被锁的先比必选、再比推荐（字典序）。再看机会
+    （[scheme] lost_min_chance，lost_line）：
+    - 少了必选，并且选了才拿不到的必选（_lost_chips）之后至少出现一张的机会（lost_chance）不低于线：LOST_CORE；
+    - 否则，可选、未标记、不选、被锁的候选：必选或推荐比现在少，并且选了才拿不到的必选和推荐之后至少出现一张的机会不低于
+      线：LOST_FIRST；
+    - 否则不算拿不到；少了、只是机会不到线时 slim 写最后比的那几张有哪几档（"core"、"first"），chance 写那个机会。
+    线为 0 时只看少没少（不算机会）；星数不到 [scheme] lost_chance_min_star 时线按 0 算（lost_line）。不算拿不到含
+    「避免不了」的（最好的搭配本来就拿不到它们）。本次之后预计没有筹码三选一（PicksLeft.total 为 0）时一律不算：之后本来就拿不到别的筹码。now：现在的 reach（几张候选一起算时传进来，不重复算）。"""
+    if e.unrecorded or e.chip.name not in sc.db.chips or sc.picks.total <= 0:
+        return "", (), None
+    now = reach(sc, sc.known_owned) if now is None else now
+    after = reach(sc, (*sc.known_owned, e.chip.name))
+    marked = place.kind == PLACE_MARKED and place.tier in ("core", "first")
+    checks = []  # （算拿不到时的种类, 看哪几档的机会）
+    if after[0] < now[0]:
+        checks.append((LOST_CORE, ("core",)))
+    if not marked and after < now:
+        checks.append((LOST_FIRST, ("core", "first")))
+    if not checks:
+        return "", (), None
+    line = lost_line(sc)
+    if line <= 0:
+        return checks[0][0], (), None
+    chance, chips = None, ()
+    for kind, tiers in checks:
+        chips = _lost_chips(sc, e.chip.name, tiers)
+        chance = lost_chance(sc, chips)
+        if tie_key(chance) >= tie_key(line):
+            return kind, (), chance
+    found = {sc.marks.get(c) for c in chips}
+    return "", tuple(t for t in ("core", "first") if t in found), chance
 
 
 def lost_kind(sc: Scorer, e: ChipEval, place: Place, now: tuple[int, int] | None = None) -> str:
-    """选了这张候选以后，方案里还能拿到的必选、推荐（reach）比现在少的是哪一档：按这张候选自己的档位看——必选、推荐
-    只看必选个数（为了保住必选放弃另一个流派的推荐不算），可选、未标记、不选、被锁的先比必选、再比推荐（字典序）。
-    LOST_CORE 少了必选，LOST_FIRST 只少了推荐，空为不算拿不到（含「避免不了」的：最好的搭配本来就拿不到它们）。
-    本次之后预计没有筹码三选一（PicksLeft.total 为 0）时一律为空：之后本来就拿不到别的筹码。
-    now：现在的 reach（几张候选一起算时传进来，不重复算）。"""
-    if e.unrecorded or e.chip.name not in sc.db.chips or sc.picks.total <= 0:
-        return ""
-    now = reach(sc, sc.known_owned) if now is None else now
-    after = reach(sc, (*sc.known_owned, e.chip.name))
-    if after[0] < now[0]:
-        return LOST_CORE
-    marked = place.kind == PLACE_MARKED and place.tier in ("core", "first")
-    if not marked and after < now:
-        return LOST_FIRST
-    return ""
+    """选了这张候选以后算不算拿不到（judge_lost 的 lost）：LOST_CORE 少了必选，LOST_FIRST 少了推荐（或少了必选、只是那几张
+    必选之后出现的机会不到线，连推荐一起看到了线），空为不算拿不到。"""
+    return judge_lost(sc, e, place, now)[0]
 
 
 def loss(sc: Scorer, e: ChipEval, place: Place, now: tuple[int, int] | None = None) -> Loss | None:
@@ -276,8 +366,9 @@ def loss(sc: Scorer, e: ChipEval, place: Place, now: tuple[int, int] | None = No
     - 一个流派都还没进入、选了以后只剩一个名额，剩下的列进方案的流派里有两个以上各有必选、推荐（只能再进一个，注定
       拿不全）：候选是方案外流派的筹码时做成标签（LOSS_ONE_LEFT）；候选属于列进方案的流派时（这时方案一定列了三个以上
       流派）为 LOSS_TIP，不算拿不到时只写在位次的悬停里（开局时几乎每张候选都会进一个列进方案的流派，做成标签会成为噪音）。
-    颜色按算不算拿不到（lost_kind）：算的橙色（这时 advise_scheme 把它排到保得住的候选后面），不算的灰色（避免不了；
-    本次之后预计没有三选一时也是灰色，Loss.final）。now 同 lost_kind。"""
+    颜色按算不算拿不到（judge_lost）：算的橙色（这时 advise_scheme 把它排到保得住的候选后面），不算的灰色（避免不了；
+    本次之后预计没有三选一时也是灰色，Loss.final；选了才拿不到的几张之后出现的机会不到线时也是灰色，Loss.slim）。
+    now 同 judge_lost。"""
     db = sc.db
     if e.unrecorded:
         return None
@@ -307,8 +398,9 @@ def loss(sc: Scorer, e: ChipEval, place: Place, now: tuple[int, int] | None = No
             return None
         chips = tuple((c, t) for c, t in wanted if school_of(db, c) in gone)
         kind, groups = (LOSS_ONE_LEFT if school not in sc.listed else LOSS_TIP), by_school(chips, with_wanted)
-    lost = lost_kind(sc, e, place, now)
-    return Loss(kind, bool(lost), after, gone, chips, groups, lost, final=sc.picks.total <= 0)
+    lost, slim, chance = judge_lost(sc, e, place, now)
+    return Loss(kind, bool(lost), after, gone, chips, groups, lost, final=sc.picks.total <= 0, slim=slim, chance=chance,
+                chance_line=lost_line(sc) if chance is not None else 0.0)
 
 
 def _quoted(names) -> str:
@@ -331,26 +423,69 @@ def lost_text(lost) -> str:
     return text
 
 
+class Drift(NamedTuple):
+    """一套方案按这一局的已有筹码看走没走偏（scheme_drift）。
+
+    entered：已进入的流派（pool.owned_schools：按拿到的先后，最多一局能进的个数）。strayed：已进入的流派里方案锁住的
+    （schemes.locked_schools）。lost：流派名额已占满时，方案里没持有、属于进不去的流派的必选和推荐（（筹码名, 档位），按方案的
+    先后）；名额没占满时为空。lost_warn：名额已占满、已进入的流派里有没列进方案的（schemes.listed_schools）。"""
+
+    entered: tuple[str, ...] = ()
+    strayed: tuple[str, ...] = ()
+    lost: tuple[tuple[str, str], ...] = ()
+    lost_warn: bool = False
+
+    @property
+    def warn(self) -> bool:
+        """算不算走偏：已进入了方案锁住的流派；或名额已占满、进了没列进方案的流派、方案里还有没持有的必选或推荐属于进不去的
+        流派。推荐区的方案附注（_scheme_notes）按同一份结果写，橙色的附注出现与否和它一致；这一局按已进入的流派自动换方案
+        （Session.scheme_choice）也按它判断。"""
+        return bool(self.strayed) or (bool(self.lost) and self.lost_warn)
+
+
+def _mark_pairs(marks):
+    """scheme_drift 的 marks →（筹码名, 档位）：方案存储里的一套方案（tiers 是映射）、引擎用的 Plan（tiers 是元组）、映射，
+    或（筹码名, 档位）序列。"""
+    tiers = getattr(marks, "tiers", marks)
+    return tiers.items() if isinstance(tiers, Mapping) else (tiers or ())
+
+
+def scheme_drift(db: DB, marks, owned) -> Drift:
+    """方案 marks（Scheme、Plan、筹码名 → 档位的映射或（筹码名, 档位）序列）按已有筹码 owned 看走没走偏（Drift）。资料库未收录
+    的筹码不计（和推荐引擎用的已有筹码同一个口径）。只看标记和已有筹码，不依赖一次推荐的上下文：推荐区的附注和会话里的自动换
+    方案共用它，两处的判断不会对不上。"""
+    pairs = tuple(_mark_pairs(marks))
+    held = tuple(n for n in owned if isinstance(n, str) and n in db.chips)
+    entered = owned_schools(db, held)
+    locked = locked_schools(db, pairs)
+    strayed = tuple(s for s in entered if s in locked)
+    if len(entered) < db.rules["pool"]["max_schools"]:
+        return Drift(entered, strayed)
+    have = set(held)
+    lost = []
+    for chip, tier in pairs:
+        school = school_of(db, chip)
+        if tier in ("core", "first") and chip not in have and school is not None and school not in entered:
+            lost.append((chip, tier))
+    listed = listed_schools(db, pairs)
+    return Drift(entered, strayed, tuple(lost), any(s not in listed for s in entered))
+
+
 def _scheme_notes(db: DB, scorer: Scorer) -> list[SchemeNote]:
     """自己的方案在推荐区的附注（排在附注最前面）：
 
     - 方案锁住的流派已经进入（已有筹码里有它的，走偏）：「已进入方案外的流派「X」」，橙色；识别认错、在「已有筹码」里改掉
       以后自然消失；
     - 流派名额占满、方案里有没持有的必选和推荐属于其余流派（中途换方案、走偏、列了三个以上流派等）：「已进入「A」「B」流派，
-      筹码方案中的必选「X」、推荐「Y」本局不再出现」。两个已进入的流派都列在方案里时灰色，进了方案外的流派时橙色。"""
-    plan = scorer.plan
-    entered = scorer.entered
+      筹码方案中的必选「X」、推荐「Y」本局不再出现」。两个已进入的流派都列在方案里时灰色，进了方案外的流派时橙色。
+    两条都按 scheme_drift 的结果写（和会话里按已进入的流派自动换方案同一个判断）：有橙色的附注 ⇔ Drift.warn。"""
+    drift = scheme_drift(db, scorer.plan, scorer.known_owned)
     out = []
-    strayed = tuple(s for s in entered if s in scorer.scheme_locked)
-    if strayed:
-        out.append(SchemeNote(NOTE_STRAYED, SCHEME_STRAYED_NOTE.format(schools=_quoted(strayed)), True))
-    if len(entered) >= db.rules["pool"]["max_schools"]:
-        owned = set(scorer.known_owned)
-        lost = [(c, t) for c, t in plan.tiers if t in ("core", "first") and c not in owned
-                and school_of(db, c) is not None and school_of(db, c) not in entered]
-        if lost:
-            warn = any(s not in scorer.listed for s in entered)
-            out.append(SchemeNote(NOTE_LOST, SCHEME_LOST_NOTE.format(entered=_quoted(entered), chips=lost_text(lost)), warn))
+    if drift.strayed:
+        out.append(SchemeNote(NOTE_STRAYED, SCHEME_STRAYED_NOTE.format(schools=_quoted(drift.strayed)), True))
+    if drift.lost:
+        text = SCHEME_LOST_NOTE.format(entered=_quoted(drift.entered), chips=lost_text(drift.lost))
+        out.append(SchemeNote(NOTE_LOST, text, drift.lost_warn))
     return out
 
 
@@ -583,7 +718,8 @@ def advise_scheme(db: DB, scorer: Scorer, offer: list[str], evals: list[ChipEval
     3. 按有效档排：必选 > 推荐 > 可选 > 未标记 > 不选 > 被锁的其他流派。必选照顺位；推荐、可选先照顺位，再按档位前瞻
        调（_same_tier：档位前瞻和卡片上写的至少出现一张的机会两样都更好才越过顺位），降档进来的排在那一档最后（按原来的顺位）；
        未标记之间按总分，队友刚需和同系列总分接近只在未标记之间调；不选按顺位、被锁的按总分；
-    4. 拿不到的往后（Scorer.loss 的 lost）：不选、被锁以外的候选稳定分组，没有拿不到的在前、保持原来的先后，然后是只少了
+    4. 拿不到的往后（Scorer.loss 的 lost，judge_lost：少了、并且选了才拿不到的几张之后出现的机会不低于 [scheme]
+       lost_min_chance）：不选、被锁以外的候选稳定分组，没有拿不到的在前、保持原来的先后，然后是只少了
        推荐的，最后是少了必选的；不选、被锁的照旧在最后。拿不到的记下排在它前面、能保住的是哪几张（Loss.behind），
        前面没有能保住的时记下排在它后面、能保住的不选、被锁的（Loss.keep_last）；
     5. 「刷新」和排在最前的候选比（Scorer.reroll_view，收入降档的按低一档比）：插在它胜过的第一张候选前面，三张都是不选

@@ -73,7 +73,7 @@ from tests.support import sandbox
 from tests.support.player_layer import with_player_layer
 
 PROJECT = Path(__file__).resolve().parents[1]
-REPLACED = {"玩家思路", "角色专属规则", "特性", "其他特性", "推荐流派", "循环往复"}  # 标了档位后不再出现的分项
+REPLACED = {"玩家思路", "角色专属规则", "特性", "其他特性", "大数据", "推荐流派", "循环往复"}  # 标了档位后不再出现的分项
 SAME = {"基础分", "成长分", "角色分", "标签分", "关键词分", "队友", "难度"}  # 标了档位后照算、和默认相同的分项
 DEFAULT_ONLY = {"玩家思路", "推荐流派"}  # 默认推荐才有的分项：自己的方案里一项都不出现
 NAME = "治愈坦克"
@@ -85,6 +85,18 @@ THREE = (("缓冲盾牌", "core"), ("鹰眼瞄具", "first"), ("永动机", "fir
 def plan(*marks, name=NAME, hero="芬妮") -> Plan:
     """测试用的方案：marks 是（筹码名, 档位）按方案的先后（同一档的先后就是顺位）。"""
     return Plan(name=name, hero=hero, tiers=tuple(marks))
+
+
+def with_lost_line(db, line: float | None = None, min_star: int | None = None):
+    """[scheme] lost_min_chance 改成 line、lost_chance_min_star 改成 min_star（不给的照旧）的资料库副本。线取 0 时「拿不到的
+    往后」只看少没少、不看那几张之后出现的机会：2 星以后，一个流派只放一两张必选、推荐的小方案里，单张筹码之后出现的
+    机会常常不到默认的线，要看少拿本身的先后和颜色时用它。"""
+    rules = {k: dict(v) if isinstance(v, dict) else v for k, v in db.rules.items()}
+    if line is not None:
+        rules["scheme"]["lost_min_chance"] = line
+    if min_star is not None:
+        rules["scheme"]["lost_chance_min_star"] = min_star
+    return dataclasses.replace(db, rules=rules)
 
 
 def labels(parts) -> list[str]:
@@ -107,6 +119,7 @@ class Base(unittest.TestCase):
     def setUpClass(cls):
         cls.db = load_db()
         cls.cfg = cls.db.rules["scheme"]
+        cls.db0 = with_lost_line(cls.db, 0.0)  # 只看少没少（with_lost_line）
 
     def scaled(self, scale=0.5):
         """official.scale 改回 scale 的资料库副本：查内置分参与总分、分项和理由时的行为（现在取 0，不列这几项）。"""
@@ -874,7 +887,8 @@ class SoftLockTest(Base):
 
     def test_three_schools(self):
         # 列了三个流派、还没进流派：候选属于列进方案的流派时，不论标没标档位，「只能再进入一个」都只写在悬停里（不做标签）
-        adv = advise(self.db, self.fenny(), ["标靶", "大碗炖肉", "电流剑"], scheme=plan(*THREE))
+        db = self.db
+        adv = advise(db, self.fenny(), ["标靶", "大碗炖肉", "电流剑"], scheme=plan(*THREE))
         tip = self.loss_of(adv, "标靶")
         self.assertEqual((tip.kind, tip.warn, tip.enter, tip.gone), (LOSS_TIP, False, ("标记",), ("治愈", "充能")))
         self.assertEqual(tip.chips, (("缓冲盾牌", "core"), ("永动机", "first")))
@@ -882,7 +896,7 @@ class SoftLockTest(Base):
             loss = self.loss_of(adv, chip)  # 未标记
             self.assertEqual((loss.kind, loss.warn, loss.enter, loss.gone), (LOSS_TIP, False, (school,), gone), chip)
         # 手标了不选的同样只写悬停；方案外流派（被锁的星光）的筹码照旧做成橙色标签
-        adv = advise(self.db, self.fenny(), ["可口糖果", "紫色飞星", "书签"], scheme=plan(*THREE, ("可口糖果", "avoid")))
+        adv = advise(db, self.fenny(), ["可口糖果", "紫色飞星", "书签"], scheme=plan(*THREE, ("可口糖果", "avoid")))
         loss = self.loss_of(adv, "可口糖果")
         self.assertEqual((self.place_of(adv, "可口糖果").tier, loss.kind, loss.warn), ("avoid", LOSS_TIP, False))
         loss = self.loss_of(adv, "紫色飞星")
@@ -892,7 +906,7 @@ class SoftLockTest(Base):
         self.assertIsNone(self.loss_of(adv, "书签"))  # 通用筹码不属于流派
         # 进了治愈以后只剩一个名额：标记、充能各有一张推荐，只能保住一张。方案里的标靶挤掉充能、未标记的电流剑挤掉标记，
         # 都是避免不了的（灰色）；被锁的紫色飞星两个都挤掉，另选别的能保住一张（橙色；被锁的本来就排在最后，不另挪）
-        adv = advise(self.db, self.fenny(owned=("缓冲盾牌",)), ["标靶", "电流剑", "紫色飞星"], scheme=plan(*THREE))
+        adv = advise(db, self.fenny(owned=("缓冲盾牌",)), ["标靶", "电流剑", "紫色飞星"], scheme=plan(*THREE))
         got = {c: (self.loss_of(adv, c).kind, self.loss_of(adv, c).warn, self.loss_of(adv, c).gone)
                for c in ("标靶", "电流剑", "紫色飞星")}
         self.assertEqual(got, {"标靶": (LOSS_NOW, False, ("充能",)), "电流剑": (LOSS_NOW, False, ("标记",)),
@@ -1407,17 +1421,21 @@ class TierAheadChanceTest(Base):
 class LostTest(Base):
     """拿不到的往后：K =（还能拿到的必选个数, 推荐个数），已持有的算拿到，属于流派的要在之后最好的流派搭配里（先保必选、
     再保推荐）。必选、推荐候选只看必选个数，可选、未标记、不选、被锁的按字典序比；比现在少就算拿不到，排到保得住的候选
-    后面（没有拿不到的 → 只少了推荐的 → 少了必选的，稳定分组；不选、被锁的照旧在最后）。之后预计没有三选一时不算。"""
+    后面（没有拿不到的 → 只少了推荐的 → 少了必选的，稳定分组；不选、被锁的照旧在最后）。之后预计没有三选一时不算。
+    选了才拿不到的几张之后出现的机会不到 [scheme] lost_min_chance 时不算（2 星以后），见 LostChanceTest；2 星以后的局面
+    要看少拿本身时只看少没少（db0）。"""
 
     CROSS = (("标靶", "core"), ("星币锤", "first"), ("标记喷罐", "first"), ("手持风扇-小", "second"))
 
     def test_cross_tier_example(self):
         # 邦妮的方案（必选标靶，推荐星币锤、标记喷罐，可选手持风扇-小），已有可口糖果：星币锤让标靶拿不到，算拿不到；
-        # 手持风扇-小虽然让星币锤拿不到，但要保住标靶本来就拿不到星币锤，不算；摩托头盔-中级不改流派
+        # 手持风扇-小虽然让星币锤拿不到，但要保住标靶本来就拿不到星币锤，不算；摩托头盔-中级不改流派。
+        # 只看少没少（db0）：照默认的线，2 星第 7 轮时标靶之后出现的机会不到线，星币锤不再往后排（LostChanceTest）；
+        # 1 星时还不按机会打折，默认的资料也是这样
         sch = plan(*self.CROSS, hero="邦妮")
         for star, rnd in ((1, 4), (2, 7)):
             st = State(hero="邦妮", star=star, round=rnd, map="魔法学院", owned=("可口糖果",), rerolls=3)
-            adv = advise(self.db, st, ["星币锤", "手持风扇-小", "摩托头盔-中级"], scheme=sch)
+            adv = advise(self.db0, st, ["星币锤", "手持风扇-小", "摩托头盔-中级"], scheme=sch)
             with self.subTest(star=star):
                 self.assertEqual([n for n in self.order_names(adv) if n != REROLL], ["手持风扇-小", "摩托头盔-中级", "星币锤"])
                 coin, fan = self.loss_of(adv, "星币锤"), self.loss_of(adv, "手持风扇-小")
@@ -1505,6 +1523,213 @@ class LostTest(Base):
         self.assertEqual([n for n in self.order_names(adv) if n != REROLL], ["标靶", "紫色飞星", "书签"])
         loss = self.loss_of(adv, "标靶")
         self.assertEqual((loss.kind, loss.warn, loss.lost, loss.final), (LOSS_NOW, False, "", True))
+
+
+class LostChanceTest(Base):
+    """「选了会拿不到」按之后真能拿到的机会打折（[scheme] lost_min_chance，scheme_rank.judge_lost）：少了必选、并且选了才
+    拿不到的必选之后至少出现一张的机会（lost_chance，chances.take_chance）不低于线，才算少了必选；可选、未标记、不选、被锁的
+    再把选了才拿不到的必选和推荐一起看，不低于线算只少了推荐；都不到线时不算拿不到：提醒照样显示、灰色、不往后排
+    （Loss.slim、Loss.chance），悬停接一句机会和线。只在 2 星以后这样（[scheme] lost_chance_min_star：前期这个机会估得
+    偏低），不到 2 星时不算机会。线取 0 时只看少没少、不算机会，和没有这条线时一样。"""
+
+    # 邦妮已有缓冲盾牌（进了治愈），必选是充能的三张，标靶（标记）是可选：选标靶会占满流派名额，充能本局不再出现
+    BONNIE = (("电流剑", "core"), ("电流核心", "core"), ("电磁炮", "core"), ("标靶", "second"))
+    OFFER = ["标靶", "书签", "摩托头盔-中级"]
+
+    def bonnie(self, star: int, rnd: int) -> State:
+        return State(hero="邦妮", star=star, round=rnd, map="森秋幻境", owned=("缓冲盾牌",), rerolls=3,
+                     difficulty_level=LEVEL_NIGHTMARE, difficulty_name="疯狂")
+
+    def names(self, adv) -> list[str]:
+        return [n for n in self.order_names(adv) if n != REROLL]
+
+    def test_bonnie_early_and_late(self):
+        from advisor.ui import lang
+        from advisor.ui import text as ui_text
+        line = self.cfg["lost_min_chance"]
+        self.assertGreater(line, 0)
+        sch = plan(*self.BONNIE, hero="邦妮")
+        # 1 星第 4 轮：还不到 2 星，不按机会打折（不算机会）；标靶照旧排到保得住的候选后面。不设星数的门槛时，充能三张
+        # 必选之后至少出现一张的机会也高于线，结果相同
+        for db in (self.db, with_lost_line(self.db, min_star=0)):
+            adv = advise(db, self.bonnie(1, 4), self.OFFER, scheme=sch)
+            target = self.loss_of(adv, "标靶")
+            self.assertEqual((target.kind, target.warn, target.lost, target.slim), (LOSS_NOW, True, LOST_CORE, ()))
+            if db is self.db:
+                self.assertIsNone(target.chance)
+            else:
+                self.assertGreater(target.chance, line)
+            self.assertEqual(self.names(adv)[-1], "标靶")
+            self.assertEqual({adv.evals[k].chip.name for k in target.behind}, {"书签", "摩托头盔-中级"})
+        # 3 星第 11 轮：之后不到一次三选一，机会低于线：不算拿不到，标靶照它的档位（可选）排在没标记的前面，提醒变灰
+        adv = advise(self.db, self.bonnie(3, 11), self.OFFER, scheme=sch)
+        self.assertGreater(adv.picks.total, 0)
+        target = self.loss_of(adv, "标靶")
+        self.assertEqual((target.kind, target.warn, target.lost, target.slim, target.behind, target.final),
+                         (LOSS_NOW, False, "", ("core",), (), False))
+        self.assertLess(target.chance, line)
+        self.assertEqual(target.chance_line, line)
+        self.assertEqual(self.names(adv)[0], "标靶")
+        # 悬停后接机会和线（不写「避免不了」那一句）；繁体界面照样转得过来；命令行、诊断用的 JSON 也带上
+        names = [e.chip.name for e in adv.evals]
+        pill = ui_text.loss_pills(target, NAME, names)[0]
+        self.assertEqual(pill.tone, ui_text.INFO)
+        p, shown = engine.about_chance(target.chance), f"{engine.shown_int(line)}%"
+        tail = ui_text.LOSS_SLIM_TIP.format(what="必选", p=p, line=shown)
+        self.assertTrue(pill.tip.endswith(tail), pill.tip)
+        self.assertNotIn(ui_text.LOSS_UNAVOIDABLE_TIP, pill.tip)
+        hant, blocked = lang.to_hant(pill.tip, strict=True)
+        self.assertEqual(blocked, [])
+        self.assertIn("之後在三選一裡至少出現一張的機會", hant)
+        self.assertTrue(hant.endswith(lang.to_hant("所以不因此排到后面。")), hant)
+        self.assertIn(f"（灰色；选这张才拿不到的必选之后至少出现一张的机会{p}，不到 {shown}，不往后排）",
+                      cli.loss_line(target, names))
+        item = cli.to_json(adv)["chips"][names.index("标靶")]["loss"]
+        self.assertEqual((item["slim"], item["warn"], item["lost"]), (["必选"], False, ""))
+        self.assertAlmostEqual(item["chance"], target.chance, places=4)
+
+    def test_star_gate(self):
+        # 星数不到 [scheme] lost_chance_min_star（2）时不按机会打折：芬妮已进治愈，方案的推荐鹰眼瞄具（标记）单独一张，
+        # 可选星币锤（星光）选了会占满流派名额。1 星时照旧算拿不到（橙色、排在最后），一次都不算机会；同一局面不设门槛时
+        # 机会不到线、不算拿不到；到 2 星才放开，星币锤按可选排第一
+        self.assertEqual(self.cfg["lost_chance_min_star"], 2)
+        sch = plan(("缓冲盾牌", "core"), ("鹰眼瞄具", "first"), ("星币锤", "second"))
+        offer = ["星币锤", "书签", "摩托头盔-中级"]
+        line = self.cfg["lost_min_chance"]
+        for star in (0, 1):
+            st = self.fenny(star=star, owned=("缓冲盾牌",))
+            with self.subTest(star=star):
+                with mock.patch.object(engine.scheme_rank, "lost_chance", side_effect=AssertionError("不到 2 星不算机会")):
+                    adv = advise(self.db, st, offer, scheme=sch)
+                coin = self.loss_of(adv, "星币锤")
+                self.assertEqual((coin.kind, coin.warn, coin.lost, coin.slim, coin.chance), (LOSS_NOW, True, LOST_FIRST, (), None))
+                self.assertEqual(self.names(adv)[-1], "星币锤")
+                adv = advise(with_lost_line(self.db, min_star=0), st, offer, scheme=sch)
+                coin = self.loss_of(adv, "星币锤")
+                self.assertEqual((coin.warn, coin.lost, coin.slim), (False, "", ("first",)))
+                self.assertLess(coin.chance, line)
+                self.assertEqual(self.names(adv)[0], "星币锤")
+        adv = advise(self.db, self.fenny(star=2, round=6, owned=("缓冲盾牌",)), offer, scheme=sch)
+        coin = self.loss_of(adv, "星币锤")
+        self.assertEqual((coin.warn, coin.lost, coin.slim), (False, "", ("first",)))
+        self.assertLess(coin.chance, line)
+        self.assertEqual(self.names(adv)[0], "星币锤")
+
+    def scenarios(self, db):
+        """几种局面的（先后, {筹码: (kind, warn, lost)}）：马上拿不到的未标记候选、只剩一个名额（标签、只写悬停）、
+        标了必选的候选、标了推荐的候选、邦妮后期的可选。"""
+        out = []
+        cases = (
+            (self.fenny(owned=("缓冲盾牌",)), ["标靶", "星币锤", "书签"], plan(*TWO), ("星币锤",)),
+            (self.fenny(), ["紫色飞星", "电流剑", "大碗炖肉"], plan(*TWO), ("紫色飞星", "电流剑")),
+            (self.fenny(), ["标靶", "大碗炖肉", "电流剑"], plan(*THREE), ("标靶", "大碗炖肉", "电流剑")),
+            (self.fenny(owned=("缓冲盾牌",)), ["标靶", "紫色飞星", "书签"],
+             plan(("标靶", "core"), ("紫色飞星", "core"), ("星币锤", "core")), ("标靶",)),
+            (State(hero="邦妮", star=2, round=7, map="魔法学院", owned=("可口糖果",), rerolls=3),
+             ["星币锤", "手持风扇-小", "摩托头盔-中级"], plan(*LostTest.CROSS, hero="邦妮"), ("星币锤", "手持风扇-小")),
+            (self.bonnie(3, 11), self.OFFER, plan(*self.BONNIE, hero="邦妮"), ("标靶",)),
+        )
+        for st, offer, sch, chips in cases:
+            adv = advise(db, st, offer, scheme=sch)
+            losses = {c: (self.loss_of(adv, c).kind, self.loss_of(adv, c).warn, self.loss_of(adv, c).lost) for c in chips}
+            out.append((self.names(adv), losses, adv))
+        return out
+
+    def test_zero_line_same_as_before(self):
+        # 线取 0：只看少没少，一次都不算机会；种类、颜色、先后是下面写死的那样（和没有这条线时相同）
+        with mock.patch.object(engine.scheme_rank, "lost_chance", side_effect=AssertionError("线为 0 时不算机会")):
+            got = self.scenarios(self.db0)
+        want = [
+            (["标靶", "书签", "星币锤"], {"星币锤": (LOSS_NOW, True, LOST_FIRST)}),
+            (["大碗炖肉", "紫色飞星", "电流剑"], {"紫色飞星": (LOSS_ONE_LEFT, True, LOST_FIRST),
+                                              "电流剑": (LOSS_ONE_LEFT, True, LOST_FIRST)}),
+            (None, {"标靶": (LOSS_TIP, False, ""), "大碗炖肉": (LOSS_TIP, False, ""), "电流剑": (LOSS_TIP, False, "")}),
+            (["紫色飞星", "书签", "标靶"], {"标靶": (LOSS_NOW, True, LOST_CORE)}),
+            (["手持风扇-小", "摩托头盔-中级", "星币锤"], {"星币锤": (LOSS_NOW, True, LOST_CORE),
+                                                     "手持风扇-小": (LOSS_NOW, False, "")}),
+            (["摩托头盔-中级", "书签", "标靶"], {"标靶": (LOSS_NOW, True, LOST_CORE)}),
+        ]
+        for k, ((order, losses, adv), (want_order, want_losses)) in enumerate(zip(got, want)):
+            with self.subTest(case=k):
+                if want_order is not None:
+                    self.assertEqual(order, want_order)
+                self.assertEqual(losses, want_losses)
+                for loss in adv.ranking.losses:
+                    if loss is not None:
+                        self.assertEqual((loss.slim, loss.chance, loss.chance_line), ((), None, 0.0))
+        # 随机局面：lost 就是只看少没少的那一条（少了必选 → 必选；可选及以下少了推荐 → 推荐）
+        rng = random.Random(20261123)
+        heroes = list(self.db.heroes)
+        for _ in range(40):
+            hero = rng.choice(heroes)
+            st, offer, rarity = random_case(self.db0, rng, hero, 2)
+            others = [c.name for c in self.db.chips.values() if not c.granted and c.name not in offer]
+            marks = [(c, rng.choice(TIERS)) for c in rng.sample(others, rng.randint(2, 8))]
+            marks += [(c, rng.choice(TIERS)) for c in offer if c in self.db.chips and rng.random() < 0.5]
+            sch = plan(*marks, hero=hero)
+            with mock.patch.object(engine.scheme_rank, "lost_chance", side_effect=AssertionError("线为 0 时不算机会")):
+                adv = advise(self.db0, st, offer, rarity, scheme=sch)
+            sc = Scorer(self.db0, st, offer=list(offer), scheme=sch)
+            now = engine.scheme_rank.reach(sc, sc.known_owned)
+            for e, place, loss in zip(adv.evals, adv.ranking.places, adv.ranking.losses):
+                if loss is None:
+                    continue
+                after = engine.scheme_rank.reach(sc, (*sc.known_owned, e.chip.name))
+                marked = place.kind == PLACE_MARKED and place.tier in ("core", "first")
+                old = ("" if adv.picks.total <= 0 else LOST_CORE if after[0] < now[0]
+                       else LOST_FIRST if not marked and after < now else "")
+                with self.subTest(case=f"{st!r} {offer!r} {sch!r}", chip=e.chip.name):
+                    self.assertEqual((loss.lost, loss.warn, loss.slim, loss.chance), (old, bool(old), (), None))
+
+    def test_high_line(self):
+        # 线取 1（不设星数的门槛）：机会一律不到线，一个都不算拿不到，候选只按档位排；少了的都写上机会（slim），提醒是灰色
+        db = with_lost_line(self.db, 1.0, min_star=0)
+        got = self.scenarios(db)
+        zero = self.scenarios(self.db0)
+        orders = {0: ["标靶", "书签", "星币锤"], 3: ["标靶", "紫色飞星", "书签"], 4: ["星币锤", "手持风扇-小", "摩托头盔-中级"],
+                  5: ["标靶", "摩托头盔-中级", "书签"]}
+        for k, ((order, losses, adv), (_, before, _)) in enumerate(zip(got, zero)):
+            with self.subTest(case=k):
+                if k in orders:
+                    self.assertEqual(order, orders[k])
+                for chip, (kind, warn, lost) in losses.items():
+                    self.assertEqual((kind, warn, lost), (before[chip][0], False, ""))
+                    loss = self.loss_of(adv, chip)
+                    self.assertEqual(bool(loss.slim), bool(before[chip][2]), chip)  # 只看少没少时算的，这时都因机会不算
+                    if loss.slim:
+                        self.assertLess(loss.chance, 1.0)
+                        self.assertEqual(loss.chance_line, 1.0)
+                    self.assertEqual((loss.behind, loss.keep_last, loss.alone), ((), (), False))
+
+    def test_marked_only_core(self):
+        # 标了必选、推荐的候选只看必选：少了推荐不比机会、不算；少了必选时只比那几张必选的机会，不到线也不改算「只少了推荐」。
+        # 同一张若是未标记：必选不到线时再把必选和推荐一起看
+        sch = plan(*self.BONNIE[:3], ("永动机", "first"), ("标靶", "first"), hero="邦妮")
+        sc = Scorer(self.db, self.bonnie(3, 11), scheme=sch)
+        target = SimpleNamespace(chip=self.db.chips["标靶"], unrecorded=False)
+        judge = engine.scheme_rank.judge_lost
+        line = self.cfg["lost_min_chance"]
+        with mock.patch.object(engine.scheme_rank, "take_chance", wraps=engine.scheme_rank.take_chance) as calls:
+            lost, slim, chance = judge(sc, target, Place(PLACE_MARKED, "first", 2))
+            self.assertEqual((lost, slim), ("", ("core",)))
+            self.assertLess(chance, line)
+            self.assertEqual(calls.call_count, 1)
+            self.assertEqual(judge(sc, target, Place(PLACE_MARKED, "first", 2)), (lost, slim, chance))
+            self.assertEqual(calls.call_count, 1)  # 同一组筹码记在这次推荐的缓存里，不重复算
+            lost2, slim2, chance2 = judge(sc, target, Place(PLACE_UNMARKED))
+            self.assertEqual(calls.call_count, 2)  # 必选那组已算过，只多算必选和推荐一起的那组
+        self.assertGreaterEqual(chance2, chance)  # 多了一张推荐永动机，机会不会更低
+        if lost2:
+            self.assertEqual((lost2, slim2), (LOST_FIRST, ()))
+            self.assertGreaterEqual(chance2, line)
+        else:
+            self.assertEqual(slim2, ("core", "first"))
+        # 标了推荐、只少了推荐：不比机会、不算（和线无关）
+        sch = plan(("标记喷罐", "first"), ("鹰眼瞄具", "first"), ("紫色飞星", "first"), ("金色飞星", "second"))
+        sc = Scorer(self.db, self.fenny(owned=("缓冲盾牌",)), scheme=sch)
+        star = SimpleNamespace(chip=self.db.chips["紫色飞星"], unrecorded=False)
+        with mock.patch.object(engine.scheme_rank, "lost_chance", side_effect=AssertionError("不比机会")):
+            self.assertEqual(judge(sc, star, Place(PLACE_MARKED, "first", 3)), ("", (), None))
 
 
 class DemotionTest(Base):
@@ -1768,15 +1993,28 @@ class InvariantTest(Base):
         owned = set(st.owned)
         sc = Scorer(db, st, offer=[e.chip.name for e in evals], scheme=sch)
         now = engine.scheme_rank.reach(sc, sc.known_owned)
+        line = engine.scheme_rank.lost_line(sc)  # 星数不到 lost_chance_min_star 时为 0：只看少没少
         for i, (e, loss) in enumerate(zip(evals, r.losses)):
-            lost = "" if e.superseded_by else engine.scheme_rank.lost_kind(sc, e, r.places[i])
+            lost, slim, chance = ("", (), None) if e.superseded_by else engine.scheme_rank.judge_lost(sc, e, r.places[i])
+            self.assertEqual(lost, "" if e.superseded_by else engine.scheme_rank.lost_kind(sc, e, r.places[i]))
+            after = engine.scheme_rank.reach(sc, (*sc.known_owned, e.chip.name))
             if lost:  # 算拿不到的一定有「选了之后拿不到……」的提醒（卡片上看得到为什么排在后面）
                 self.assertIsNotNone(loss)
-                after = engine.scheme_rank.reach(sc, (*sc.known_owned, e.chip.name))
                 self.assertLess(after, now)
-                self.assertEqual(after[0] < now[0], lost == LOST_CORE)
+                if lost == LOST_CORE:
+                    self.assertLess(after[0], now[0])
+                # 少了必选却只算只少了推荐：那几张必选之后出现的机会不到线，连推荐一起看到了线（只有可选及以下会这样）
+                elif after[0] < now[0]:
+                    self.assertFalse(r.places[i].kind == PLACE_MARKED and r.places[i].tier in ("core", "first"))
+                if line > 0:
+                    self.assertGreaterEqual(engine.tie_key(chance), engine.tie_key(line))
+            if slim:  # 确实少了，只是那几张之后出现的机会不到线：不算拿不到
+                self.assertEqual(lost, "")
+                self.assertLess(after, now)
+                self.assertLess(engine.tie_key(chance), engine.tie_key(line))
             if loss is None:
                 continue
+            self.assertEqual((loss.slim, loss.chance), (slim, chance))
             self.assertIsNone(e.superseded_by)
             self.assertTrue(loss.chips)
             for chip, tier in loss.chips:
@@ -1802,14 +2040,14 @@ class InvariantTest(Base):
                 self.assertEqual(len(loss.enter), db.rules["pool"]["max_schools"])
             else:
                 # 只能再进入一个：候选属于列进方案的流派时（这时方案列了三个以上流派）为 LOSS_TIP；候选是方案外流派的
-                # 筹码时为 LOSS_ONE_LEFT，一定算拿不到（最好的两个流派只剩一个能进）
+                # 筹码时为 LOSS_ONE_LEFT，一定少拿（最好的两个流派只剩一个能进）：算拿不到，或那几张之后出现的机会不到线
                 self.assertEqual(len(loss.enter), 1)
                 inside = db.chips[e.chip.name].school in r.listed
                 self.assertEqual(loss.kind, LOSS_TIP if inside else LOSS_ONE_LEFT)
                 if inside:
                     self.assertGreaterEqual(len(r.listed), 3)
                 elif adv.picks.total > 0:
-                    self.assertTrue(loss.warn)
+                    self.assertTrue(loss.warn or loss.slim)
         # 附注在最前面，橙色的也在 warn_notes 里；「已进入方案外的流派」一律橙色
         texts = [n.text for n in r.notes]
         self.assertEqual(adv.notes[:len(texts)], texts)

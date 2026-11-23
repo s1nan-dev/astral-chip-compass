@@ -116,6 +116,21 @@
   - `test_advice_follows_used_scheme` 失败 → 推荐按这一局实际用的那套算、认出或改判地图时重算的时机改了。
   - `test_untaggable_map`、`test_without_store` 失败 → 能标在方案上的地图、没有方案存储时的退路改了。
 
+## test_scheme_school_switch.py：对局里按已进入的流派自动换筹码方案（记账这一层）
+
+- **测试观点**：记账这一层从五个测试类检查——① `SchoolChoiceTest`：按地图那一步定出来的那套走偏（拿了它锁住的流派的筹码）、这个角色有一套已进入的流派都列进了方案的时，这一局换用它（`Session.scheme_choice` 的 `schools`、`before`、`via`），保存的方案不变、推荐按换成的那套算；只进了方案里列的流派、用默认推荐、一套都对不上时不换（对不上时推荐区照旧有橙色附注）；几套都对得上时先找标了当前地图的、再找没标地图的，各按方案下拉框的先后，标了别的地图的不算，地图还没认出来时不按地图筛、先找没标地图的；已有筹码改掉、移出、放回，方案被改、被删，换了角色，下一次取就跟着变；问的不是当前角色时不按流派换。② `SchoolStateTest`：`take_school_switch` 刚换上时告诉一次，不走偏了忘掉、再换过去再告诉；`stop_school_scheme` 以后这一局用按地图那一步的那套（局面版本加一），和 `stop_map_scheme` 互不影响，还没有这一局的对局状态时不打；新的一局清掉，撤销新的一局时连同告诉过的那一次回来；本局结束回到保存的方案。③ `MapThenSchoolTest`：先按地图换、再按流派换——实际用的是按流派换的那套、`before` 是按地图换的那一次；按地图换上的那套这时不告诉、也不忘掉告诉过的；换回以后回到按地图换上的那套、不重复告诉；两种同时成立以后不走偏了，按地图换的那一次没告诉过就在那时告诉。④ `DriftAgreesWithNotesTest`：几种方案（两个、一个、三个流派，只有可选，标了不选）配上各种已有筹码，推荐区出不出橙色方案附注和 `engine.scheme_drift` 的 `warn` 一致（`warn` 另按一次推荐的上下文直接推一遍核对），有对得上的方案时按流派换与否也一致，换成的那套不再走偏。⑤ `SwitchTagTest`：`switch_tags` 给候选筹码的提示——选了它就会按流派换用另一套、它在那套里是必选或推荐时给出那套和档位；选了不走偏、已进入的流派、已持有的、不属于流派或读不出的、没有对得上的方案、在那套里只是可选、换成的就是现在用的那套、关掉了按流派换、用默认推荐、本局结束都不给；只读，不改推荐。⑥ `OverlaySchoolSchemeTest`（悬浮窗这一层：那一行、「换回原来的」、一次性提示、方案下拉框、诊断包、灰色标签）见[悬浮窗](overlay.md)的同名一节。
+- **检证对象**：`advisor/session/core.py`（`SchemeChoice` 的 `schools`、`before`、`via`、`base`，`scheme_choice`、`_map_choice`、`_school_choice`、`stop_school_scheme`、`take_school_switch`、`take_map_switch`、`switch_tags`、`SwitchTag`）、`advisor/session/game_state.py`（`school_scheme_off`、`_school_switch_told`）、`advisor/engine/scheme_rank.py`（`scheme_drift`、`Drift`、`_scheme_notes`）。
+- **什么时候要跑**：改了走偏的判断（`scheme_drift`、推荐区的方案附注）、`Session.scheme_choice` 的取舍规则、两种自动换方案的开关和「告诉一次」、`switch_tags` 以后；改按地图换方案时也一起跑。
+- **怎么单独跑**：`python -B tools/run_tests.py --only test_scheme_school_switch`（上次约 5 秒，含悬浮窗那一层）。
+- **需要什么**：只读资料库；方案文件写在测试沙箱的临时文件夹里；悬浮窗那一层用 Qt 离屏平台，不弹窗口。
+- **输出怎么看**：同总则。
+- **出错时一般是哪里不对**：
+  - `SchoolChoiceTest.*` 失败 → `_school_choice` 的取舍规则（走偏、对得上、按地图筛和先后）变了，或按地图那一步（`_map_choice`）交来的不对。
+  - `SchoolStateTest.*` 失败 → 「这一局不再按流派换」的打标记、新的一局清掉、撤销时跟着回来，或 `take_school_switch` 的去重改了。
+  - `MapThenSchoolTest.*` 失败 → 两种换法叠在一起时 `take_map_switch`、`take_school_switch`、`stop_school_scheme` 各自记的「告诉过」互相弄丢或重复了。
+  - `DriftAgreesWithNotesTest.test_agree` 失败 → 推荐区的方案附注和 `scheme_drift` 各算各的、对不上了（附注应当按 `scheme_drift` 的结果写）。
+  - `SwitchTagTest.*` 失败 → `switch_tags` 的条件改了，或它改动了状态。
+
 ## test_session_split.py：记账包的结构保证
 
 - **测试观点**（按测试类分）：

@@ -56,10 +56,10 @@ def tmpdir() -> tempfile.TemporaryDirectory:
 
 class VersionTest(unittest.TestCase):
     def test_version_format(self):
-        self.assertEqual(version.VERSION, "1.3.1")
+        self.assertEqual(version.VERSION, "1.3.2")
         self.assertRegex(version.VERSION, r"^\d+\.\d+\.\d+$")
-        self.assertEqual(version.file_version(), (1, 3, 1, 0))
-        self.assertEqual(version.version_text(), f"{version.APP_NAME} 1.3.1")
+        self.assertEqual(version.file_version(), (1, 3, 2, 0))
+        self.assertEqual(version.version_text(), f"{version.APP_NAME} 1.3.2")
 
     def test_data_date_from_meta(self):
         with tmpdir() as d:
@@ -1809,7 +1809,7 @@ class BuildReleaseCheckTest(unittest.TestCase):
         self.assertFalse([a for a in cmd if a.startswith(("--company-name", "--windows-company-name"))])
         # 根目录的启动程序的版本信息和真正的程序取同一份（version_strings）
         info = br.version_strings()
-        self.assertEqual(info["version"], "1.3.1.0")
+        self.assertEqual(info["version"], "1.3.2.0")
         self.assertEqual(sorted(info), ["copyright", "description", "product", "version"])
         self.assertIn(version.AUTHOR, info["copyright"])
         for arg in (f"--product-name={info['product']}",
@@ -1817,7 +1817,7 @@ class BuildReleaseCheckTest(unittest.TestCase):
                     f"--file-version={info['version']}", f"--product-version={info['version']}"):
             self.assertIn(arg, cmd)
         header = br.launcher_header()
-        for line in ("#define ACC_VERSION_NUMS 1,3,1,0", '#define ACC_VERSION_TEXT "1.3.1.0"',
+        for line in ("#define ACC_VERSION_NUMS 1,3,2,0", '#define ACC_VERSION_TEXT "1.3.2.0"',
                      '#define ACC_PRODUCT "Astral Chip Compass"',
                      '#define ACC_DESCRIPTION "Astral Chip Compass"', f'#define ACC_COPYRIGHT "{info["copyright"]}"',
                      f'#define ACC_INTERNAL_NAME "{version.APP_NAME}"',

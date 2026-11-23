@@ -10,6 +10,10 @@ os.environ.setdefault("ACC_TODAY", "2026-10-10")
 # 2. 进程结束时核对用户真实的文件、动了就把退出码改为 97：只在跑测试的进程里打开（python -m unittest 启动的，或环境变量
 #    ACC_TEST_CHECK_USER_FILES=1，见 sandbox.checks_user_files），工具的退出码不受影响；跑测试时工作目录固定在项目根目录
 #    （离屏平台的配置文件只能写相对路径，子进程也按项目根目录找它）。
+#    同样只在跑测试的进程里：资料默认不读大数据规则（环境变量 ACC_BIGDATA_RULES=0，advisor.data.BIGDATA_RULES_ENV）。照机制
+#    定分数的测试写死了「这张筹码该是多少分、首推哪张」，大数据规则每个版本照玩家数据重算，不能让它们跟着变；要真规则的
+#    测试显式写 load_db(bigdata_rules=True)。已经设了的不改；子进程继承，和本进程读的是同一份。工具（基准工具等）导入
+#    tests 包时不设，照常读大数据规则。
 # 3. 离屏的 Qt（tests/support/qtenv.py）：屏幕 1920×1080、缩放 1，QApplication 一律用 qtenv.app() 建，建的时候装上微软雅黑，
 #    界面测试量出来的排版和像素跟本机装了哪些字体无关。和工具用同一个函数 qtenv.configure、同样的默认值；已经由 configure
 #    设好的（工具自己设的、启动本进程的进程传下来的）不重设，工具选了别的屏幕或缩放时以工具的为准。
@@ -25,8 +29,10 @@ from tests.support import sandbox as _sandbox  # noqa: E402
 if os.environ.get(_excluded_imports.ENV_VAR):
     _excluded_imports.install()
 
-if _sandbox.checks_user_files() and Path.cwd().resolve() != _sandbox.ROOT:
-    os.chdir(_sandbox.ROOT)
+if _sandbox.checks_user_files():
+    os.environ.setdefault("ACC_BIGDATA_RULES", "0")
+    if Path.cwd().resolve() != _sandbox.ROOT:
+        os.chdir(_sandbox.ROOT)
 _sandbox.activate()
 # 导出诊断时现量占用的时长（advisor/usage.py 的 PROBE_S）：测试里不真等 3 秒，走真的 Services.load() 再导出的测试和原来
 # 一样快。各测试要量别的时长时自己给 seconds

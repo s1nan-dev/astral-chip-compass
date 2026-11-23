@@ -73,6 +73,8 @@ from .wording import (
     MAP_SCHEME_REVERT,
     MAP_SCHEME_REVERT_TIP,
     MAP_SCHEME_TEXT,
+    SCHOOL_SCHEME_REVERT_TIP,
+    SCHOOL_SCHEME_TEXT,
     NEWGAME_MIDGAME,
     NEWGAME_TEXT,
     NOTICE_GROUP,
@@ -453,7 +455,14 @@ class NoticeModel:
             rows.append(("removed", REMOVED_TEXT.format(chip=shown(self.removed)), "info", [
                 (REMOVE_UNDO, "primary", "undo_remove", REMOVE_UNDO_TIP.format(chip=shown(self.removed))),
             ]))
-        if view.map_switched:
+        if getattr(view, "school_switched", False):
+            # 这一局按已进入的流派换着方案（先按地图换了、又按流派换了时也是这一行：显示当前生效的那一种）：只作说明，「换回原来的」
+            # 交给外壳（Overlay.revert_school_scheme），换回按地图那一步定出来的那套；换回以后仍按地图换着的，下一轮显示下面那一行
+            rows.append(("school_switch", SCHOOL_SCHEME_TEXT.format(name=view.scheme_name), "info", [
+                (MAP_SCHEME_REVERT, "primary", "revert_school_scheme",
+                 SCHOOL_SCHEME_REVERT_TIP.format(name=view.before_scheme_name)),
+            ]))
+        elif view.map_switched:
             # 这一局按地图换着方案：只作说明（边框不变色），「换回原来的」交给外壳（Overlay.revert_map_scheme：换回、重算、
             # 提示、打标记都在那里）。方案名照这一轮的快照写（不持锁另读 Session）；地图不换了、本局结束、新的一局时收起
             rows.append(("map_switch", MAP_SCHEME_TEXT.format(name=view.scheme_name), "info", [
@@ -612,7 +621,7 @@ class NoticeView:
         self.unlocked, self.dismiss_unlock, self.assets = unlocked, dismiss_unlock, assets
         # 提示行按钮里不在这里处理的几个动作（rows 里写的名字 → 点了调用的方法）：撤销新一局（undo）、补录（add）、重试下载
         # （retry_download）、关掉个别图片下不了的那一行（dismiss_download）、放回刚移出的筹码（undo_remove）、按地图换着时
-        # 换回保存的方案（revert_map_scheme）、更换热键（change_hotkey），软件内更新那几条的按钮（update_ 开头的几个，接到
+        # 换回保存的方案（revert_map_scheme）、按流派换着时换回按地图那一步的那套（revert_school_scheme）、更换热键（change_hotkey），软件内更新那几条的按钮（update_ 开头的几个，接到
         # UpdateControl 上），以及「免费软件」声明里
         # 「关于」那个链接（open_about）。其余动作（关掉提示、打开诊断包文件夹）就是
         # 这里的同名方法；皮肤解锁那一条另带解锁的是哪一套：("dismiss_unlock", 键)

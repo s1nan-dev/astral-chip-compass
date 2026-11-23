@@ -113,7 +113,7 @@ DATA_FILES = (CHIPS, HEROES, MAPS, MUTATORS, META, CHIP_CODES, "rules.toml", "sy
 # 载入时的警告里没写文件名的几种：按开头认出是哪个文件的（适配表的各段、同系列筹码表）
 WARNING_FILES = (("同系列筹码表", "series.toml"), ("适配表", "synergy.toml"), ("特性", "synergy.toml"),
                  ("角色", "synergy.toml"), ("玩家思路", "synergy.toml"), ("组合规则", "synergy.toml"),
-                 ("队友", "synergy.toml"))
+                 ("队友", "synergy.toml"), ("全体的大数据规则", "synergy.toml"))
 # 筹码的分组（group）：通用、四个流派、地图专属。group 是流派时 school 同为这个流派，否则 school 为 null
 GROUP_GENERAL, GROUP_MAP = "通用", "地图专属"
 GROUPS = (GROUP_GENERAL, *SCHOOLS, GROUP_MAP)

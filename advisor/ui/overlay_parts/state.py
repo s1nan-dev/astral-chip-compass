@@ -152,6 +152,7 @@ class GameAPI(Protocol):
     result_read: bool
     game_over: bool
     map_scheme_off: bool  # 这一局不再按地图自动换方案（诊断包里写）
+    school_scheme_off: bool  # 这一局不再按已进入的流派自动换方案（诊断包里写）
 
 
 class EventLogAPI(Protocol):
@@ -224,10 +225,13 @@ class SessionAPI(Protocol):
     def skip_panel(self) -> None: ...
     def undo_new_game(self) -> bool: ...
     def save(self, *, force: bool = False) -> None: ...
-    # 筹码方案：这一局用哪套（SchemeChoice：保存的、实际用的、按哪张地图换的），这一局不再按地图换，刚按地图换了的那一次
+    # 筹码方案：这一局用哪套（SchemeChoice：保存的、实际用的、按哪张地图或哪些流派换的），这一局不再按地图、按流派换，
+    # 刚按地图、按流派换了的那一次
     def scheme_choice(self, hero: str | None = None) -> object: ...
     def stop_map_scheme(self) -> bool: ...
     def take_map_switch(self) -> object: ...
+    def stop_school_scheme(self) -> bool: ...
+    def take_school_switch(self) -> object: ...
     # 刷新时读的（take_view）
     def next_star_cost(self) -> int | None: ...
     def take_ledger(self) -> list[dict]: ...
@@ -300,12 +304,30 @@ class SessionView:
     # 这一局刚按地图换上、还没告诉过用户的那一次（Session.take_map_switch 取走的 SchemeChoice），没有时为 None。「取走」式的读，
     # 只在悬浮窗刷新开头取（take_view 的 switch），别处取的快照里一律为 None
     map_switch: object = None
+    # 按已进入的流派换着方案时（SchemeChoice.schools 不为空）：已进入的流派，和「换回原来的」换回的那套（SchemeChoice.before
+    # 的 used：按地图那一步定出来的，没按地图换时就是保存的）。这时 scheme_map 为 None（按地图换上的那套没在用）。没按流派换时
+    # 为空、None
+    scheme_schools: tuple = ()
+    before_scheme: object = None
+    # 这一局刚按流派换上、还没告诉过用户的那一次（Session.take_school_switch 取走的 SchemeChoice），取法同 map_switch
+    school_switch: object = None
     read_error: str = ""  # 取快照时读出错的调用栈（take_view 按读不到算的那几项；悬浮窗记进错误记录）
 
     @property
     def map_switched(self) -> bool:
-        """这一局按地图换着方案（实际用的不是保存的那套）：「提示」卡片里「本局按地图换用了……」那一行显示与否。"""
+        """这一局按地图换着方案（实际用的不是保存的那套）：「提示」卡片里「本局按地图换用了……」那一行显示与否。在那之上又按流派
+        换着时为假（显示的是按流派换的那一行，school_switched）。"""
         return self.scheme_map is not None
+
+    @property
+    def school_switched(self) -> bool:
+        """这一局按已进入的流派换着方案：「提示」卡片里「本局按已进入的流派换用了……」那一行显示与否。"""
+        return bool(self.scheme_schools)
+
+    @property
+    def before_scheme_name(self) -> str:
+        """按流派换着时「换回原来的」换回的那套的名字；默认推荐写 text.SCHEME_DEFAULT。"""
+        return scheme_name(self.before_scheme)
 
     @property
     def scheme_name(self) -> str:
@@ -326,7 +348,7 @@ def scheme_name(scheme) -> str:
 
 def take_view(session: SessionAPI, *, ledger: bool = False, switch: bool = False) -> SessionView:
     """从 Session 取一份快照。要在 Session 的锁里调用（refresh 开头）。ledger：同时取走皮肤解锁用的星币拆账（只在 refresh
-    这一个地方取，开发版不取）。switch：同时取走刚按地图换了的那一次方案（Session.take_map_switch，同样只在 refresh 开头取）。
+    这一个地方取，开发版不取）。switch：同时取走刚按地图、按流派换了的那一次方案（Session.take_map_switch、take_school_switch，同样只在 refresh 开头取）。
     算升星花费出错时只写星币数，出的错放在 cost_error。
 
     读的时候出错（不只是没有这一项），按读不到算的范围和各块分开读时一样：「对局状态」那一组（_game_state）任何一项出错，
@@ -353,6 +375,8 @@ def take_view(session: SessionAPI, *, ledger: bool = False, switch: bool = False
                        and s.ui_lang != lang.HANT and not s.hant_notice_closed, False)
     choice = item(lambda: session.scheme_choice(), None)
     news = item(lambda: session.take_map_switch(), None) if switch and choice is not None else None
+    school_news = item(lambda: session.take_school_switch(), None) if switch and choice is not None else None
+    before = getattr(choice, "before", None)
     return SessionView(
         hero=item(lambda: s.hero, ""), round=item(lambda: s.round, None), star=item(lambda: s.star, 0),
         star_read=item(lambda: s.star_read, False), map=item(lambda: s.map, None),
@@ -368,6 +392,8 @@ def take_view(session: SessionAPI, *, ledger: bool = False, switch: bool = False
         scheme=choice.used if choice is not None else None,
         saved_scheme=choice.saved if choice is not None else None,
         scheme_map=choice.map if choice is not None else None, scheme_read=choice is not None, map_switch=news,
+        scheme_schools=tuple(getattr(choice, "schools", ()) or ()),
+        before_scheme=before.used if before is not None else None, school_switch=school_news,
         read_error="\n".join(errors),
         **game,
     )

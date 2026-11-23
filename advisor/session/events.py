@@ -119,6 +119,10 @@ class Event:
     # 那一行时的比对、三张候选的名称匹配程度、筹码商店的价格等，见 Session.report_info）。只交给推荐日志；不放进局面：
     # 它不改推荐
     report_info: dict = field(default_factory=dict)
+    # advice：和 advice.evals 一一对应的候选提示（Session.switch_tags：选了这一张这一局就会按已进入的流派换用另一套方案、
+    # 它在那套里是必选或推荐时为 SwitchTag，其余为 None）。算推荐的那一刻按当时的已有筹码和方案算好放在推荐上，悬浮窗回看
+    # 上一次推荐时照写那一次的。不放进局面（State）：它不改推荐的先后、分值
+    switch_tags: list = field(default_factory=list)
 
 
 def _jsonable(value):
@@ -204,6 +208,11 @@ def _event_record(ev: Event) -> dict:
             out["default_best"] = getattr(adv, "default_best", None)
             if ranking is not None:
                 out["places"] = [place_text(p) for p in ranking.places]
+        # 选了以后会按流派换用另一套方案的候选（Session.switch_tags）：[筹码名, 那套方案的名字, 档位]，有才写
+        tags = [[e.chip.name, getattr(t.scheme, "name", ""), t.tier]
+                for e, t in zip(evals, getattr(ev, "switch_tags", None) or ()) if t is not None]
+        if tags:
+            out["switch_tags"] = tags
     return out
 
 

@@ -52,7 +52,8 @@ __all__ = [  # layout.py 用 import * 取这些
     "SCHEME_EDIT",
     "SCHEME_EDIT_ICON", "SCHEME_EDIT_TIP", "SCHEME_GROUP", "SCHEME_HUB_ICON", "SCHEME_MAPS_TIP", "SCHEME_NO_SCHOOL",
     "SCHEME_SHARE_ICON",
-    "SCHEME_SUMMARY", "SCHEME_SWITCHED", "SCHEME_TARGET_TIP", "SCHEME_UNRECORDED_TIP", "SETTINGS_GLYPH_PX",
+    "SCHEME_SUMMARY", "SCHEME_SWITCHED", "SCHEME_TARGET_TIP", "SCHEME_UNRECORDED_TIP",
+    "SCHOOL_SCHEME_REVERTED", "SCHOOL_SCHEME_REVERT_TIP", "SCHOOL_SCHEME_SWITCHED", "SCHOOL_SCHEME_TEXT", "SETTINGS_GLYPH_PX",
     "SETTINGS_TIP", "SETTINGS_TIP_HANT", "SETTLE_MAX_TICKS", "SETTLE_MS", "SETTLE_TICKS", "SHARE_BTN", "SHARE_FORMATS",
     "SHARE_TIP", "SHUTDOWN_DOWNLOAD_S",
     "SHUTDOWN_WATCHER_S", "STALE_CAPTION", "STOPPED", "STOPPED_BIT", "STORAGE_FALLBACK", "TIPS_CARD", "TITLE", "TITLE_DEV",
@@ -427,17 +428,29 @@ SCHEME_SWITCHED = "筹码方案已切换为「{name}」，已按新方案重新�
 SCHEME_SET = "筹码方案已切换为「{name}」"
 # 对局里认出地图以后，这一局自动换用这个角色标了这张地图的方案（只换这一局，不改方案文件，见 Session.scheme_choice）时的
 # 一次性提示，地图改判以后又换了一套也出（写在「筹码方案」卡片里，一行显示时在摘要里；三选一显示着时同时按它重算）。
-# 换着的时候点了「换回原来的」（Overlay.revert_map_scheme；在方案下拉框里选回原来那套也算）以后换成 MAP_SCHEME_REVERTED。
-# 对局结束回到原来那套时不出提示（方案下拉框跟着换回）
+# 换着的时候点了「换回原来的」（Overlay.revert_map_scheme；在方案下拉框里选回原来那套也算）以后换成 MAP_SCHEME_REVERTED：
+# 换回的是保存的方案，这一局按地图、按已进入的流派都不再自动换（只停按地图换的话，保存的那套走偏时又会被按流派换走），
+# 所以不写「按地图」。对局结束回到原来那套时不出提示（方案下拉框跟着换回）
 MAP_SCHEME_SWITCHED = "这张地图有专用方案：已换用「{name}」"
-MAP_SCHEME_REVERTED = "已换回「{name}」，这一局不再按地图自动换方案"
+MAP_SCHEME_REVERTED = "已换回「{name}」，这一局不再自动换方案"
 # 「筹码方案」卡片里「按地图换着」的这一局一直留着的一行（提示行，级别 info，在方案下拉框下面）：写这一局实际用的方案名，
 # 按钮换回保存的方案（Overlay.revert_map_scheme；提示、重算、打标记它都做了，这边不再另出提示）。不是按地图换着的这一局
 # （没换、点了换回、对局结束、新的一局）这一行收起。MAP_SCHEME_TEXT 的 {name} 是换成的那一套，MAP_SCHEME_REVERT_TIP 的
 # {name} 是保存的方案的叫法（默认推荐写 SCHEME_DEFAULT）
 MAP_SCHEME_TEXT = "本局按地图换用了「{name}」"
 MAP_SCHEME_REVERT = "换回原来的"
-MAP_SCHEME_REVERT_TIP = "换回「{name}」，这一局不再按地图自动换"
+MAP_SCHEME_REVERT_TIP = "换回「{name}」，这一局不再自动换方案"
+# 这一局拿了方案外流派的筹码、原来的方案走偏了（推荐区出橙色方案附注的那种），自动换用这个角色已进入的流派都列进了方案的
+# 一套（只换这一局，不改方案文件，见 Session.scheme_choice）时的一次性提示，写法同 MAP_SCHEME_SWITCHED：{schools} 是已进入的
+# 流派，每个各加一对「」。换着的时候「筹码方案」卡片里一直留着 SCHOOL_SCHEME_TEXT 那一行（先按地图换了、又按流派换了时只显示
+# 这一行，换回以后仍按地图换着的再显示 MAP_SCHEME_TEXT 那一行），按钮同样写 MAP_SCHEME_REVERT，换回按地图那一步定出来的
+# 那套（Overlay.revert_school_scheme；没按地图换时就是保存的方案），{name} 是它的叫法；点了以后换成 SCHOOL_SCHEME_REVERTED。
+# 两个开关分开记：按流派这一行的换回只停按流派换（换回的那套要是按地图换上的，按地图换照旧）；按地图那一行的换回两种
+# 都停（见上）；在方案下拉框里自己换了方案，这一局两种都不再自动换
+SCHOOL_SCHEME_SWITCHED = "已进入{schools}流派：已换用「{name}」"
+SCHOOL_SCHEME_REVERTED = "已换回「{name}」，这一局不再按流派自动换方案"
+SCHOOL_SCHEME_TEXT = "本局按已进入的流派换用了「{name}」"
+SCHOOL_SCHEME_REVERT_TIP = "换回「{name}」，这一局不再按流派自动换"
 # 「推荐」卡片头标题右边的暗色小字：这次推荐按哪个角色、哪套方案算，写法同「筹码方案」卡片收起时的摘要（scheme_summary：
 # 「芬妮 · 银行卡流」，默认推荐时「芬妮 · 默认推荐」），角色是手动指定的时角色名后接 HERO_MANUAL_MARK。卡片上有三选一的
 # 推荐（或刷新时还留着的刷新前的推荐）时显示，按这次推荐自己记的角色和方案写，不跟下拉框此刻的值；全部展开时回看上一次推荐
@@ -525,7 +538,8 @@ NOTICE_ORDER = ("global", "recog_top", "recog", "scheme", "advice", "owned")
 NOTICE_GROUP = {
     "unsupported": "recog", "newgame": "recog", "opentasks": "recog", "hero": "advice", "missed": "owned", "reverted": "advice", "panel": "owned",
     "owned_unknown": "advice",
-    "gain": "owned", "removed": "owned", "map_switch": "scheme", "assets": "global", "calibrate": "global",
+    "gain": "owned", "removed": "owned", "map_switch": "scheme", "school_switch": "scheme", "assets": "global",
+    "calibrate": "global",
     "export": "global", "capture": "recog_top", "schemes": "global", "storage": "global", "unlocked": "recog",
     "free": "global", "hant": "global", "stopped": "global", "dpi": "global", "folder": "global", "hotkey": "global",
     "update": "global",
@@ -675,8 +689,8 @@ UPDATE_DONE = "拾星助手已更新到 {version}。"
 # 刚换上新版本那一条（UPDATE_DONE）下面列的这一版的主要改动（update_done_text）：换上的正是 UPDATE_NEWS_VERSION 这一版时，
 # UPDATE_NEWS 一条一行、前面加「· 」（UPDATE_NEWS_ITEM），最后一行是 UPDATE_NEWS_SOON（空时不写）；版本号对不上（改了版本号、
 # 列表没跟着改）或者列表是空的，只写 UPDATE_DONE 那一句。发版定号时照这一版的发布说明挑几条短的改这几项（软件维护说明「版本号」）
-UPDATE_NEWS_VERSION = "1.3.1"
-UPDATE_NEWS = ("UI优化", "文本修正", "Bug修复")
+UPDATE_NEWS_VERSION = "1.3.2"
+UPDATE_NEWS = ("如果玩家正在使用自定义方案，进入别的流派时自动换筹码方案", "优化推荐模型")
 UPDATE_NEWS_ITEM = "· {item}"
 UPDATE_NEWS_SOON = ""  # 即将上线的（例如「即将上线：……」）；这一版不写
 # 刚换上新版本那一条的最后一行（update_done_text，版本号对不对得上 UPDATE_NEWS_VERSION 都写）：从别处下载的人可以到官网的

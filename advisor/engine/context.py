@@ -244,13 +244,15 @@ class Memo:
     - knife：(frozenset(已有筹码), 地图组) → 之后获得美工刀的概率；
     - heal：(美工刀, frozenset(已有筹码), 地图组) → 选这把美工刀之后获得治愈来源的概率；
     - partner：(筹码名, frozenset(配套筹码), frozenset(已有筹码), 地图组) → 选这个筹码之后获得配套筹码的概率；
+    - lost：(frozenset(方案里的几张筹码), frozenset(已有筹码), 地图组) → 它们之后至少出现一张的机会（按自己的方案计算时，
+      选了某张候选才拿不到的必选、推荐，scheme_rank.lost_chance）；
     - reroll：tuple(候选) → 刷新后各候选地图上的（最左格的分布, 其余两格的分布, 各筹码含前瞻的分值）；
     - lookahead_keys：(筹码名, tuple(已有筹码)) → 前瞻说明里记下的要点（lookahead_reason 写、lookahead_short 读）；
     - survival：生存类筹码 → 分值；picks：剩余三选一次数（PicksLeft）。这两个只算一次，还没算时为 None。
     """
 
     __slots__ = ("score", "parts", "setup", "values", "future", "tier_future", "tier_values", "endless", "endless_chain",
-                 "knife", "heal", "partner", "reroll", "lookahead_keys", "survival", "picks")
+                 "knife", "heal", "partner", "lost", "reroll", "lookahead_keys", "survival", "picks")
 
     def __init__(self):
         self.score: dict = {}
@@ -265,6 +267,7 @@ class Memo:
         self.knife: dict = {}
         self.heal: dict = {}
         self.partner: dict = {}
+        self.lost: dict = {}
         self.reroll: dict = {}
         self.lookahead_keys: dict = {}
         self.survival: dict[str, float] | None = None

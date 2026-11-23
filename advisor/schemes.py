@@ -23,7 +23,7 @@ dataclasses.replace。默认推荐不是一套 Scheme：用 None 表示。
 
 列进方案的流派、被锁成不选的流派、目标流派都由标记推出来，不另存（listed_schools、locked_schools、target_schools）：
 这样作者改了标记，三样随之改变，不会和标记对不上；方案文件和分享字符串里也就不带流派。通用筹码和地图专属筹码不属于
-任何流派，不参与这三样推导。
+任何流派，不参与这三样推导。这一局按已有筹码看方案走没走偏由推荐这一层按这几样推出来（engine.scheme_rank.scheme_drift）。
 
 方案文件（SchemeStore）：存「我的方案」和每个角色上次用的方案。读写都经 advisor/fileio.py：先写临时文件、刷进硬盘再替换，
 原来的内容留一份 .bak；内容没变不写；读坏了不覆盖：原文件另存为 .broken-时间，有能读的备份时改读备份；格式版本比本程序新时

@@ -577,7 +577,8 @@ class SelectTracker:
                        for i, n in enumerate(names) if n not in db.chips)
         # 来源的依据（by）也参与判断：同一次三选一里后来才认准来源（例如这时才认出自己在玩家列表第几行、横幅对上了）、
         # 局面却没变时也重发一次，推荐照搬算过的（AdviceMemo），推荐日志、悬浮窗按后一条记来源
-        key = (names, state, plan, graded, by)
+        # 这一局关没关按流派自动换方案也参与：关了以后推荐上的候选提示（switch_tags）跟着去掉，推荐本身照搬算过的
+        key = (names, state, plan, graded, by, bool(s.game.school_scheme_off))
         if key == self._last_key:
             # 局面没变就不重复给推荐。同一组候选后来读全了（上一次推荐时的识别提示有的这一帧已经没有了），重发一次，
             # 去掉过时的提示；这一帧新冒出的提示（读全以后又偶尔读错）不添上：只留上一次就有、这一帧仍有的。
@@ -610,7 +611,8 @@ class SelectTracker:
                         select_no=self._select_no, owned_unknown=unknown, map_source=s.map_source,
                         difficulty_source=s.difficulty_info.source, owned_sources=owned_sources,
                         owned_panel=owned_panel, source_by=by, teammate_guesses=s.teammate_guesses(),
-                        report_info=s.report_info(seen))
+                        report_info=s.report_info(seen),
+                        switch_tags=s.switch_tags(e.chip.name for e in advice.evals) if plan is not None else [])
 
     def _advise(self, seen, names: tuple, rarity, state, plan, unsure: bool, key):
         """算这一帧的推荐（_compute）：当前星数的一份；星数拿不准（unsure，见 first_star）时另算高一星的一份；按方案计算时

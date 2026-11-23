@@ -19,11 +19,11 @@ from typing import NamedTuple
 
 from .. import errors, perfstats
 from ..data import DB, DIFFICULTIES, EXTREME, HARD, LEVEL_NORMAL, NORMAL
-from ..engine import default_rerolls, endless_wait, plan_of
+from ..engine import default_rerolls, endless_wait, plan_of, scheme_drift
 from ..engine.context import TOP_STAR
-from ..pool import State, difficulty_of, rarity_rows
+from ..pool import State, difficulty_of, owned_schools, rarity_rows
 from ..prefs import GAME_FIELDS, Settings
-from ..schemes import taggable_maps
+from ..schemes import TARGET_TIERS, listed_schools, school_of, taggable_maps
 from . import offgame, panel, selection
 from .difficulty import DifficultyInfo, resolve_difficulty
 from .events import Event, EventLog, _jsonable
@@ -108,6 +108,10 @@ UNSUPPORTED_TEXT = {
 }
 
 
+# 这一局实际用的方案是怎么换上的（SchemeChoice.via）
+SWITCH_MAP, SWITCH_SCHOOL = "map", "school"
+
+
 @dataclass(frozen=True)
 class ChipRemoval:
     """小卡片的「×」移出一个筹码时记下的（Session.remove_chip）：放回（restore_chip）要的移出之前的样子，和核对「移出以后没再
@@ -126,12 +130,38 @@ class SchemeChoice(NamedTuple):
     """这一局用哪套筹码方案（Session.scheme_choice）。方案是 advisor.schemes.Scheme，None 为默认推荐。
 
     saved：保存的方案（scheme_for 给的，即方案存储里这个角色上次用的那套）。在悬浮窗上手动换方案改的就是它，改动即存。
-    used：这一局实际用的方案：推荐按它算，悬浮窗的方案下拉框选中它。按地图换方案只改这一项，不存盘。
-    map：used 是按哪张地图换上的（used 不是 saved 时）；没有按地图换时为 None。"""
+    used：这一局实际用的方案：推荐按它算，悬浮窗的方案下拉框选中它。按地图、按流派换方案只改这一项，不存盘。
+    map：used 是按哪张地图换上的（used 不是 saved 时）；没有按地图换、或 used 是按流派换上的时为 None。
+    schools：used 是按已进入的流派换上的时，已进入的流派（按拿到的先后）；没有按流派换时为空。
+    before：按流派换上时，换之前按地图那一步定出来的那一次（SchemeChoice，它的 schools 为空、before 为 None）：before.used
+    是「换回原来的」换回的那套，before.map 不为 None 时换回以后仍按地图换着；没有按流派换时为 None。
+    前三项的意思和按位置传参的写法照旧，只看 map 的地方碰到按流派换的情形按「没有按地图换」处理。"""
 
     saved: object = None
     used: object = None
     map: str | None = None
+    schools: tuple[str, ...] = ()
+    before: SchemeChoice | None = None
+
+    @property
+    def via(self) -> str:
+        """used 是怎么换上的：SWITCH_SCHOOL 按已进入的流派、SWITCH_MAP 按地图，空为没换（用的就是保存的）。"""
+        if self.schools:
+            return SWITCH_SCHOOL
+        return SWITCH_MAP if self.map is not None else ""
+
+    @property
+    def base(self) -> SchemeChoice:
+        """按地图那一步定出来的那一次：按流派换着时为 before，否则就是自己。"""
+        return self.before if self.before is not None else self
+
+
+class SwitchTag(NamedTuple):
+    """候选筹码上的提示（Session.switch_tags）：选了这一张这一局就会按已进入的流派换用 scheme（schemes.Scheme），它在那套
+    方案里标的是 tier（"core" 必选或 "first" 推荐）。"""
+
+    scheme: object
+    tier: str
 
 
 class Session:
@@ -410,18 +440,27 @@ class Session:
         return plan_of(self.db, scheme) if scheme is not None else None
 
     def scheme_choice(self, hero: str | None = None) -> SchemeChoice:
-        """这一局用哪套筹码方案（SchemeChoice：保存的、实际用的、按哪张地图换的）。hero 不给时为当前角色（settings.hero）。
-        没有接上方案存储（scheme_for）、角色资料库未收录时都是默认推荐；保存的方案的角色和 hero 不同时（不该出现）按默认推荐。
+        """这一局用哪套筹码方案（SchemeChoice：保存的、实际用的、按哪张地图或哪些流派换的）。hero 不给时为当前角色
+        （settings.hero）。没有接上方案存储（scheme_for）、角色资料库未收录时都是默认推荐；保存的方案的角色和 hero 不同时
+        （不该出现）按默认推荐。
 
-        实际用哪套每次现算，不另记「换成了哪套」：
+        实际用哪套每次现算，不另记「换成了哪套」。先按地图（_map_choice）：
         - 本局已结束、地图未知、这张地图不能标在方案上（不在 schemes.taggable_maps 里，例如运动场）、这一局不再按地图换
           （GameState.map_scheme_off）：用保存的方案；
         - 保存的方案标了这张地图：照用它；
         - 否则（保存的是通用方案、只标了别的地图、默认推荐）在这个角色的方案里（schemes_of 的先后，即方案下拉框里的先后）
           找标了这张地图的，用第一套；一套都没有时用保存的方案。
-        所以地图改判、换了角色、方案被删掉或去掉了这张地图，下一次取就跟着变；对局结束、新的一局（地图清空）、重开程序都回到
-        保存的方案。只读内存，识别线程每次给推荐前都调用。"""
+        再按已进入的流派（_school_choice）：上一步定出来的是一套自己的方案、它按已有筹码走偏了（engine.scheme_drift，和推荐区
+        出橙色方案附注同一个判断）时，换用已进入的流派都列进了方案的一套；找不到时照用上一步的。
+        所以地图改判、已有筹码改了、换了角色、方案被删掉或改了，下一次取就跟着变；对局结束、新的一局（地图、已有筹码清空）、
+        重开程序都回到保存的方案。只读内存，识别线程每次给推荐前都调用。"""
         hero = self.settings.hero if hero is None else hero
+        base = self._map_choice(hero)
+        switched = self._school_choice(hero, base, self.settings.owned)
+        return switched if switched is not None else base
+
+    def _map_choice(self, hero: str) -> SchemeChoice:
+        """scheme_choice 的第一步：按地图定出来的那一次（schools 为空、before 为 None）。"""
         source = self.scheme_for
         if source is None or hero not in self.db.heroes:
             return SchemeChoice()
@@ -431,10 +470,58 @@ class Session:
         name = self._scheme_map()
         if name is None or name in getattr(saved, "maps", ()):
             return SchemeChoice(saved, saved)
-        for scheme in (self.schemes_of(hero) if self.schemes_of is not None else ()):
-            if name in getattr(scheme, "maps", ()) and (getattr(scheme, "hero", "") or hero) == hero:
+        for scheme in self._hero_schemes(hero):
+            if name in getattr(scheme, "maps", ()):
                 return SchemeChoice(saved, scheme, name)
         return SchemeChoice(saved, saved)
+
+    def _hero_schemes(self, hero: str) -> list:
+        """这个角色的全部方案（schemes_of，先后同方案下拉框），去掉角色对不上的（不该出现）；没接上 schemes_of 时为空。"""
+        if self.schemes_of is None:
+            return []
+        return [s for s in self.schemes_of(hero) if (getattr(s, "hero", "") or hero) == hero]
+
+    def _school_choice(self, hero: str, base: SchemeChoice, owned) -> SchemeChoice | None:
+        """scheme_choice 的第二步：按地图定出来的 base 走偏了、有一套对得上的方案时，按已进入的流派换用它的那一次；不换时为
+        None。owned 是已有筹码（settings.owned；switch_tags 传「已有筹码 + 一张候选」问选了以后换不换）。
+
+        只在这些都成立时换：base 用的是一套自己的方案（默认推荐不换）；hero 是当前角色（已有筹码是当前角色的）；本局没结束；
+        这一局没有关掉按流派换（GameState.school_scheme_off）；base 按 owned 走偏了（engine.scheme_drift 的 warn）。
+        对得上：已进入的流派都列在那套方案里（schemes.listed_schools）。标了适用地图、又不含当前地图的不算（给别的地图用的）；
+        地图还没认出来时不按地图筛。几套都对得上时先在标了当前地图的里找、再在没标地图的里找，各按方案下拉框的先后取第一套；
+        地图还没认出来时先在没标地图的里找、再在标了地图的里找（标了地图的是给那几张地图用的，不知道地图时通用的那套更稳，
+        和按地图那一步「地图未知就用保存的」同一个思路），同样各按方案下拉框的先后。走偏的那套自己一定对不上（走偏时已进入的流派里总有没列进它的），不用
+        另外排除。"""
+        used = base.used
+        g = self.game
+        if used is None or hero != self.settings.hero or g.game_over or g.school_scheme_off:
+            return None
+        drift = scheme_drift(self.db, used, owned)
+        if not drift.warn:
+            return None
+        entered = set(drift.entered)
+        current = self.settings.map
+        first, second = None, None  # 先找的一组里的第一套、后找的一组里的第一套
+        for scheme in self._hero_schemes(hero):
+            if not entered.issubset(listed_schools(self.db, scheme)):
+                continue
+            maps = getattr(scheme, "maps", ())
+            if not current:
+                # 地图还没认出来：先找没标地图的（通用的那套更稳），再找标了地图的
+                if not maps:
+                    first = scheme
+                    break
+                if second is None:
+                    second = scheme
+            elif current in maps:
+                first = scheme
+                break
+            elif not maps and second is None:
+                second = scheme
+        target = first if first is not None else second
+        if target is None:
+            return None
+        return SchemeChoice(base.saved, target, None, drift.entered, base)
 
     def _scheme_map(self) -> str | None:
         """按哪张地图换方案（scheme_choice）：当前地图；本局已结束、地图未知、这张地图不能标在方案上（taggable_maps 以外）、
@@ -448,7 +535,9 @@ class Session:
         """这一局不再按地图自动换方案（GameState.map_scheme_off）：之后这一局都用保存的方案（scheme_choice）。悬浮窗在点了
         「换回原来的」、在悬浮窗上手动换了方案时调用。返回打上了没有：还没有这一局的对局状态（has_game_state：刚启动、还没进
         对局）时不打，对局外选的是平时用的那套，之后开始的一局照常按地图换。新的一局换上新的 GameState 就清掉，撤销新的一局时
-        跟着旧的那一局回来。局面版本加一（_edits）：在锁外算的推荐作废，下一帧按改了以后的方案重算。"""
+        跟着旧的那一局回来。局面版本加一（_edits）：在锁外算的推荐作废，下一帧按改了以后的方案重算。
+        按已进入的流派换方案是另一个开关（stop_school_scheme），这里不动它：保存的方案走偏了、有对得上的方案时照样按流派换。
+        所以悬浮窗在这两种时候把两个开关都打上：要的是这一局留在保存的（或自己选的）那套上。"""
         if not self.has_game_state:
             return False
         self._edits += 1
@@ -456,21 +545,94 @@ class Session:
         return True
 
     def take_map_switch(self) -> SchemeChoice | None:
-        """悬浮窗每次刷新时取（持锁）：这一局刚按地图换了一套方案、还没告诉过用户时返回这一次的 scheme_choice()，记下告诉过了
-        （GameState._map_switch_told：角色和换成的方案）；之后接着换着同一套不再返回。没有按地图换着时（换回了、地图改判成没有
-        专用方案的、本局结束了……）忘掉告诉过的那一次，之后又换过去照样再返回。记在这一局的状态里：撤销新的一局时跟着那一局
-        回来，换回那一局时接着换着的那一套不重复告诉。"""
+        """悬浮窗每次刷新时取（持锁）：这一局刚按地图换了一套方案、还没告诉过用户时返回按地图那一步的那一次（SchemeChoice，
+        schools 为空），记下告诉过了（GameState._map_switch_told：角色和换成的方案）；之后接着换着同一套不再返回。按地图那一步
+        没有换时（换回了、地图改判成没有专用方案的、本局结束了……）忘掉告诉过的那一次，之后又换过去照样再返回。
+        在那之上又按流派换着时（scheme_choice 的 via 是 SWITCH_SCHOOL）不返回、也不忘掉告诉过的那一次：按地图换上的那套这时没在用，
+        要告诉的是按流派换的那一次（take_school_switch）；按流派换的那一次结束、又用回按地图换上的那套时，没告诉过就在那时告诉
+        （点「换回原来的」的那一种由 stop_school_scheme 记成告诉过了：换回的提示里已经写了换回的那套）。
+        记在这一局的状态里：撤销新的一局时跟着那一局回来，换回那一局时接着换着的那一套不重复告诉。"""
         choice = self.scheme_choice()
+        base = choice.base
         g = self.game
-        if choice.map is None:
+        if base.map is None:
             if g._map_switch_told is not None:
                 g._map_switch_told = None
             return None
-        told = (self.settings.hero, getattr(choice.used, "id", ""))
+        if choice.via == SWITCH_SCHOOL:
+            return None
+        told = (self.settings.hero, getattr(base.used, "id", ""))
         if g._map_switch_told == told:
             return None
         g._map_switch_told = told
+        return base
+
+    def stop_school_scheme(self) -> bool:
+        """这一局不再按已进入的流派自动换方案（GameState.school_scheme_off）：之后这一局都用按地图那一步定出来的那套
+        （scheme_choice；没有按地图换时就是保存的）。悬浮窗在点了「换回原来的」（按流派换的那一行、按地图换的那一行都是）、
+        在悬浮窗上手动换了方案时调用。
+        和 stop_map_scheme 分开：这里不影响按地图换，那边也不影响这里。返回打上了没有：还没有这一局的对局状态（has_game_state）
+        时不打。新的一局换上新的 GameState 就清掉，撤销新的一局时跟着旧的那一局回来。局面版本加一（_edits）。
+        按流派换着、换回的是按地图换上的那套时，把按地图换的那一次记成告诉过了（_map_switch_told）：换回的提示里写了它，之后
+        不再另出按地图换的提示。"""
+        if not self.has_game_state:
+            return False
+        choice = self.scheme_choice()
+        base = choice.base
+        g = self.game
+        self._edits += 1
+        g.school_scheme_off = True
+        if choice.via == SWITCH_SCHOOL and base.map is not None:
+            g._map_switch_told = (self.settings.hero, getattr(base.used, "id", ""))
+        return True
+
+    def take_school_switch(self) -> SchemeChoice | None:
+        """悬浮窗每次刷新时取（持锁）：这一局刚按已进入的流派换了一套方案、还没告诉过用户时返回这一次的 scheme_choice()（via 是
+        SWITCH_SCHOOL：used 是换成的那套，schools 是已进入的流派，before.used 是换之前的那套），记下告诉过了
+        （GameState._school_switch_told：角色和换成的方案）；之后接着换着同一套不再返回。没有按流派换着时（换回了、已有筹码
+        改掉以后不走偏了、本局结束了……）忘掉告诉过的那一次，之后又换过去照样再返回。和 take_map_switch 各记各的：先按地图换了、
+        又按流派换了时两边各告诉一次，不互相清掉。记在这一局的状态里，撤销新的一局时跟着那一局回来。"""
+        choice = self.scheme_choice()
+        g = self.game
+        if choice.via != SWITCH_SCHOOL:
+            if g._school_switch_told is not None:
+                g._school_switch_told = None
+            return None
+        told = (self.settings.hero, getattr(choice.used, "id", ""))
+        if g._school_switch_told == told:
+            return None
+        g._school_switch_told = told
         return choice
+
+    def switch_tags(self, names) -> list[SwitchTag | None]:
+        """几张候选筹码（names，按卡片的先后；None 和资料库未收录的照样占一格）各自的提示（SwitchTag）：选了这一张，这一局就会
+        按已进入的流派换用另一套方案，而它在那套方案里标的是必选或推荐时，给出那套方案和档位；其余为 None。推荐引擎不知道
+        别的方案，所以在这里算，不影响推荐的先后和分值。
+
+        按 scheme_choice 的规矩问「已有筹码 + 这一张」：这一局实际用的是一套自己的方案、本局没结束、这一局没有关掉按流派换；
+        这一张属于一个还没进入的流派（已持有的、通用和地图专属筹码都不标）；按地图那一步定出来的那套按「已有筹码 + 这一张」
+        走偏了，并且找得到对得上的方案（_school_choice），换成的那套不是现在用的这套；它在那套里标的是必选或推荐（可选、
+        不选、没标都不标）。只读内存。"""
+        names = list(names)
+        out: list[SwitchTag | None] = [None] * len(names)
+        g = self.game
+        choice = self.scheme_choice()
+        if choice.used is None or g.game_over or g.school_scheme_off:
+            return out
+        owned = tuple(n for n in self.settings.owned if n in self.db.chips)
+        entered = owned_schools(self.db, owned)
+        hero = self.settings.hero
+        for i, name in enumerate(names):
+            school = school_of(self.db, name)
+            if school is None or school in entered or name in owned:
+                continue
+            after = self._school_choice(hero, choice.base, (*owned, name))
+            if after is None or after.used == choice.used:
+                continue
+            tier = after.used.tiers.get(name)
+            if tier in TARGET_TIERS:
+                out[i] = SwitchTag(after.used, tier)
+        return out
 
     def recompute(self) -> Event | None:
         """切换了当前角色用的筹码方案、或编辑了正在用的方案之后调用：按最近一次三选一的画面立即重算，返回新的事件

@@ -38,13 +38,15 @@ from PySide6.QtWidgets import QApplication
 app = QApplication.instance() or QApplication(["acc-test"])
 
 from advisor.ui import text
-from advisor.ui.overlay_parts import advice_card, owned_card, scheme_card
+from advisor.ui.overlay_parts import advice_card, owned_card, scheme_card, wording
 
 chip = SimpleNamespace(name="测试筹码", hant="測試籌碼", rarity="普通", school="治愈",
                        effect="获得 2 个筹码，提高攻击力", tags=["攻击"])
 item = SimpleNamespace(
     chip=chip, percent=0.5, lookahead=0.0, lookahead_reason="",
-    parts=[SimpleNamespace(label="角色特点", score=2.0, reason="提高攻击力", short="", origin="", net="")],
+    parts=[SimpleNamespace(label="角色特点", score=2.0, reason="提高攻击力", short="", origin="", net=""),
+           # 大数据（只计分、不在悬浮窗上显示）：悬停明细里简体、繁体都不出现
+           SimpleNamespace(label="大数据", score=-20.0, reason="玩家很少选它", short="", origin="大数据", net="")],
 )
 
 
@@ -92,6 +94,14 @@ print(json.dumps({
         "SOURCE_EITHER": text.SOURCE_EITHER,
         "source_text": text.source_text("shop", "shop_window"),
     },
+    "school_switch": {
+        "SWITCHED": wording.SCHOOL_SCHEME_SWITCHED, "REVERTED": wording.SCHOOL_SCHEME_REVERTED,
+        "TEXT": wording.SCHOOL_SCHEME_TEXT, "REVERT_TIP": wording.SCHOOL_SCHEME_REVERT_TIP,
+        "pill": [(p.text, p.tip) for p in text.switch_pills(SimpleNamespace(scheme=SimpleNamespace(name="乙"),
+                                                                          tier="core"))],
+        "pill_shown": [lang.t(p.text) for p in text.switch_pills(SimpleNamespace(scheme=SimpleNamespace(name="乙"),
+                                                                                 tier="first"))],
+    },
     "owned_constants": {"GENERAL_SCHOOL": owned_card.GENERAL_SCHOOL},
     "scheme_constants": {"SCHEME_DEFAULT": scheme_card.SCHEME_DEFAULT},
 }, ensure_ascii=False))
@@ -125,6 +135,8 @@ class CardsHantTest(unittest.TestCase):
         self.assertIn(self.hant("角色专属规则"), breakdown)
         self.assertIn(self.hant("提高攻击力"), breakdown)
         self.assertIn(self.hant("推荐度 50%"), breakdown)
+        for hidden in ("大数据", "大數據", "玩家很少选它", self.hant("玩家很少选它")):
+            self.assertNotIn(hidden, breakdown)
 
     def test_card_display_uses_t(self):
         """owned_card、scheme_card 不加 localize，显示处包 t()：来源说明和方案悬停说明是繁体。"""
@@ -160,6 +172,19 @@ class CardsHantTest(unittest.TestCase):
         self.assertIn("识别文字：「测试筹码」", diag)
         self.assertIn("识别提示：匹配度低", diag)
         self.assertNotIn("籌碼三選一", diag)
+
+    def test_school_switch_texts(self):
+        """按已进入的流派换方案的几句（wording 里的一次性提示、那一行、悬停）在繁体界面转成繁体；候选上的灰色标签在 text.py
+        里照旧简体，显示处（lang.t）转成繁体。"""
+        got = self._data["school_switch"]
+        expected = {"SWITCHED": "已进入{schools}流派：已换用「{name}」", "REVERTED": "已换回「{name}」，这一局不再按流派自动换方案",
+                    "TEXT": "本局按已进入的流派换用了「{name}」", "REVERT_TIP": "换回「{name}」，这一局不再按流派自动换"}
+        for key, simplified in expected.items():
+            self.assertEqual(got[key], self.hant(simplified))
+            self.assertNotEqual(got[key], simplified)
+        self.assertEqual(got["pill"], [["方案「乙」的必选", "在方案「乙」里是必选。选了以后这一局自动换用「乙」。"]])
+        self.assertEqual(got["pill_shown"], [self.hant("方案「乙」的推荐")])
+        self.assertNotEqual(got["pill_shown"], ["方案「乙」的推荐"])
 
     def test_other_card_modules_not_localized(self):
         """owned_card、scheme_card 没有自己的界面文字常量、不调 localize：text.py 的常量照样是简体。"""

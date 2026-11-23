@@ -31,7 +31,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from advisor import clock  # noqa: E402
-from advisor.data import CLASSES, RULE_DIFFICULTY, heroes_in_group_order, load_db  # noqa: E402
+from advisor.data import CLASSES, BIGDATA_ORIGIN, HERO_GROUPS, RULE_DIFFICULTY, heroes_in_group_order, load_db  # noqa: E402
 from advisor.engine import Scorer, hero_classes, hero_tendency  # noqa: E402
 from advisor.engine.advice_text import mates_short  # noqa: E402
 from advisor.paths import app_dir, data_dir  # noqa: E402
@@ -176,7 +176,11 @@ def rows_for(db, hero_name: str):
             (p for p in parts if p.reason and (p.label not in NOT_REASONS or (p.label == "推荐流派" and p.score < 0))),
             key=lambda p: -abs(p.score),
         )
-        text = "；".join(f"{p.reason}（{p.score:+.0f}）" for p in reasons[:2]) or "—"
+        # 大数据（照真实玩家对局的统计）那一项在理由前写明「大数据：」，和照机制推的理由分得开。理由只列分值最大的两项，
+        # 大数据（全体的和这名角色的）每一项都列，排不进前两项的接在后面
+        shown = reasons[:2] + [p for p in reasons[2:] if p.origin == BIGDATA_ORIGIN]
+        text = "；".join(f"{BIGDATA_ORIGIN + '：' if p.origin == BIGDATA_ORIGIN else ''}{p.reason}（{p.score:+.0f}）"
+                        for p in shown) or "—"
         rows.append((total, official, total - counted, chip, text))
     rows.sort(key=lambda r: (-r[0], r[3].name))
     return rows
@@ -220,6 +224,51 @@ def _names(items) -> str:
 def _num(value: float, sign: bool = True) -> str:
     """规则里的分值、上限照原值写（7.5 写 7.5，不四舍五入成 8）。"""
     return f"{value:+g}" if sign else f"{value:g}"
+
+
+def rule_conditions(rule, difficulty_label: dict) -> str:
+    """一条规则的生效条件（地图、已持有、轮次、难度、来源），写在审查清单里那条规则后面；没有条件时为空。
+    difficulty_label：State.difficulty 的取值 → 难度名（RULE_DIFFICULTY 反过来）。"""
+    bits = []
+    if rule.maps:
+        bits.append(f"地图：{'、'.join(sorted(rule.maps))}")
+    if rule.needs_owned:
+        bits.append(f"已持有：{'、'.join(sorted(rule.needs_owned))}之一")
+    if rule.max_round is not None:
+        bits.append(f"第 {rule.max_round} 轮及以前")
+    if rule.difficulty is not None:
+        bits.append(f"只在{difficulty_label.get(rule.difficulty, rule.difficulty)}难度")
+    if rule.needs_source:
+        bits.append(f"有{rule.needs_source}来源时")
+    if rule.without_source:
+        bits.append(f"没有{rule.without_source}来源时")
+    # 只看角色的两个条件（只有全体的大数据规则会写）
+    if rule.hero_groups:
+        bits.append(f"只对{'、'.join(g for g in HERO_GROUPS if g in rule.hero_groups)}")
+    if rule.own_school:
+        bits.append("只在属于这个角色的推荐流派时")
+    return f"〔{'；'.join(bits)}〕" if bits else ""
+
+
+def data_section(db) -> list[str]:
+    """全体的大数据规则（synergy.toml 最外层的 [[bigdata]]）一览：不挂在某个角色下面，按文件里的先后列出。"""
+    out = [
+        f"## 全体的{BIGDATA_ORIGIN}规则",
+        "",
+        "照真实玩家对局的统计、对所有角色都算的加减分（synergy.toml 最外层的 [[bigdata]]），可以只对某几类角色"
+        "（角色分组），或只在这张筹码属于这个角色的推荐流派时生效。和各角色自己的大数据规则（[[hero.bigdata]]）"
+        "在同样的情形下算，命中的各条各成一项、相加；上面各角色的表里已经算进去了（理由前写「"
+        f"{BIGDATA_ORIGIN}：」）。",
+        "",
+    ]
+    if not db.bigdata_rules:
+        return out + ["（暂无）", ""]
+    label = {v: k for k, v in RULE_DIFFICULTY.items()}
+    out += ["| 筹码 | 分值 | 理由 | 条件 |", "|---|---|---|---|"]
+    for r in db.bigdata_rules:
+        out.append(f"| {'、'.join(sorted(r.chips))} | {_num(r.score)} | {r.reason} "
+                   f"| {rule_conditions(r, label).strip('〔〕') or '全部角色'} |")
+    return out + [""]
 
 
 def _scaled_note(db) -> str:
@@ -362,6 +411,10 @@ def _write_review(out: str | None) -> None:
         "- 标题后注明「默认推荐标了档位」的角色（synergy.toml 的 [[player]]，代码里的内部名字叫玩家思路，界面上不出现），"
         "标了档位、写进带条件的规则的筹码用这一层的分值（理由以「筹码方案：」开头），其余筹码用自动层。"
         "这一层只用于默认推荐；选了自己的筹码方案时，没标档位的筹码只按自动层等计算。",
+        f"- 「{BIGDATA_ORIGIN}」一段是照真实玩家对局的统计加减的分，分两层：这名角色的（synergy.toml 的 [[hero.bigdata]]，"
+        f"列在各角色下面）和全体的（最外层的 [[bigdata]]，列在各角色之后「全体的{BIGDATA_ORIGIN}规则」一节）。和自动层在同样的情形下算，"
+        "命中的各条单独相加，不和角色专属规则、特性规则合并；只计分，悬浮窗上不显示。表里的理由前写「"
+        f"{BIGDATA_ORIGIN}：」。",
         "- 默认推荐列为「必选」的筹码，和默认推荐没列入的筹码出现在同一次三选一里时，引擎会给必选补分，"
         f"让它至少高出 {db.rules['synergy']['core_lead']} 分（rules.toml 的 core_lead）。下表是补分前的分数，"
         "所以必选筹码在表里可能排在没列入的筹码后面。",
@@ -399,12 +452,17 @@ def _write_review(out: str | None) -> None:
                 if r.origin == "角色" and r.difficulty is not None:
                     lines.append(f"- 只在{label.get(r.difficulty, r.difficulty)}难度生效：{'、'.join(sorted(r.chips))}"
                                  f" {_num(r.score)}（{r.reason}）")
+            if hs.bigdata_rules:
+                lines.append(f"- {BIGDATA_ORIGIN}（照真实玩家对局的统计，每条单独相加）：")
+                lines += [f"  - {'、'.join(sorted(r.chips))} {_num(r.score)}（{r.reason}）{rule_conditions(r, label)}"
+                          for r in hs.bigdata_rules]
             if ps and ps.note:
                 lines.append(f"- 攻略原文：{ps.note}")
             rows = rows_for(db, hero.name)
             lines += ["", f"最高的 {TOP} 个：", "", *table(rows[:TOP]), ""]
             lines += [f"最低的 {BOTTOM} 个：", "", *table(rows[-BOTTOM:]), ""]
 
+    lines += data_section(db)
     lines += combo_section(db)
     lines += teammate_section(db)
     lines += need_section(db)

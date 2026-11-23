@@ -11,10 +11,10 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import NamedTuple
 
-from ..data import CLASSES, DB, DIFFICULTY_NAMES, LEVEL_HARD_PLUS, LEVEL_NORMAL
+from ..data import CLASSES, BIGDATA_ORIGIN, DB, DIFFICULTY_NAMES, LEVEL_HARD_PLUS, LEVEL_NORMAL
 # 和命令行同一句的几处从 engine 取（发行版不带 advisor.cli，不能从那里导入）
-from ..engine import (CHAIN_NOTE, REROLL_P, REROLL_P_TOP, REROLL_SLOT, chance_text, reroll_cost_note, reroll_counts,
-                      shown_int, shown_percent_texts)
+from ..engine import (CHAIN_NOTE, REROLL_P, REROLL_P_TOP, REROLL_SLOT, below_line_texts, chance_text, reroll_cost_note,
+                      reroll_counts, shown_int, shown_percent_texts)
 from ..engine import CHANCE_OVER, CHANCE_UNDER
 from ..engine import SUPERSEDED as FULL_SUPERSEDED  # 诊断包推荐全文的写法（本模块的 SUPERSEDED 是悬浮窗上的短句）
 from ..engine import NEED_ORIGIN, REROLL, ChipEval, Part, compare_text, tie_key
@@ -123,6 +123,9 @@ REROLL_GIVES_UP = "刷新会放弃本次的三个候选筹码。"
 # Part.label → 悬停明细里显示的分项名。特性名不出现在界面上，只写「特性」。默认推荐的分项（内部名「玩家思路」）和自己的方案
 # 带来的分项（内部名「方案」）都显示成「筹码方案」：界面上不出现「玩家思路」
 PART_LABEL = {"角色特点": "角色专属规则", "玩家思路": "筹码方案", "方案": "筹码方案"}
+# 只计分、不在悬浮窗上显示的分项（Part.origin）：照真实玩家对局的统计加减的「大数据」（data.BIGDATA_ORIGIN）。理由标签
+# （reason_pills）和悬停明细（breakdown_rows）都不列，分值照样算进总分和推荐度；诊断包的推荐全文（advice_text）照写
+HIDDEN_ORIGINS = frozenset({BIGDATA_ORIGIN})
 
 
 def option_name(name: str) -> str:
@@ -481,10 +484,11 @@ def reason_pills(item: ChipEval, limit: int, ahead=None, skip=()) -> list[Reason
 
     ahead：代替前瞻那条的标签和排序用的值（（ReasonPill 或 None, 值）；自己的方案里标了档位的候选按档位前瞻写，
     scheme_ahead），不给时照常按前瞻（lookahead_pill）。skip：不做成标签的分项（Part.origin），例如收入降档的候选另有
-    一条「按低一档排」的标签，收入折算那一项就不再重复。
+    一条「按低一档排」的标签，收入折算那一项就不再重复。只计分的分项（HIDDEN_ORIGINS，大数据）不做成标签、不占名额。
     """
     pool = net_parts([p for p in item.parts if p.reason and p.label != TAG_LABEL
-                      and p.origin not in SCHEME_TIER_ORIGINS and p.origin not in skip])
+                      and p.origin not in SCHEME_TIER_ORIGINS and p.origin not in HIDDEN_ORIGINS
+                      and p.origin not in skip])
     need = next((p for _, p in pool if p.origin == NEED_ORIGIN), None)
     rest = sorted(((r, p) for r, p in pool if p is not need), key=lambda rp: -rp[0])
     parts = rest[:limit]
@@ -1393,10 +1397,14 @@ LOSS_KEEP_TIP = "另选{names}能保住{what}，所以排在{them}后面。"
 # LOSS_KEEP_LAST_TIP；一张都没有（这次的候选选哪张都会少拿）写 LOSS_NO_KEEP_TIP
 LOSS_KEEP_LAST_TIP = "另选{names}能保住{what}，但{them}按不选排在最后，所以这张仍排在前面。"
 LOSS_NO_KEEP_TIP = "这次的候选选哪张都会少拿方案里的必选、推荐，所以照原来的先后排。"
-# 不算拿不到（灰色，避免不了）：悬停整句后接这一句；本次之后预计没有筹码三选一时（Loss.final）改接 LOSS_FINAL_TIP
+# 不算拿不到（灰色，避免不了）：悬停整句后接这一句；本次之后预计没有筹码三选一时（Loss.final）改接 LOSS_FINAL_TIP；
+# 选了确实少拿、只是选了才拿不到的那几张之后出现的机会不到线时（Loss.slim）改接 LOSS_SLIM_TIP：{what} 是比的那几张
+# 有哪几档（「必选」「推荐」「必选、推荐」），{p} 是机会（「约 11%」，取整后为 0 / 100 时「不到 1%」「超过 99%」），{line} 是线（「20%」）；
+# 取整后机会不比线低时两个都写到小数点后一位（「约 19.7%」「20%」，engine.below_line_texts）
 LOSS_UNAVOIDABLE_TIP = ("流派名额有限，方案里的必选、推荐本局拿不全；选这张不会少拿比它更要紧的筹码（先保必选、再保推荐），"
                         "所以照原来的先后排。")
 LOSS_FINAL_TIP = "本次之后预计没有筹码三选一，这一项不影响先后。"
+LOSS_SLIM_TIP = "选这张才拿不到的{what}之后在三选一里至少出现一张的机会{p}，不到 {line}，所以不因此排到后面。"
 # 同一档（推荐、可选）按档位前瞻排先后（engine.Move）：标签（不超过 SHORT_LIMIT 个字）和悬停说明。
 # {place} 是比较对象的位次（「可选 1」），{tier} 是这一档（「可选」），{others} 是比较对象（「「摩托头盔-中级」（顺位 1）」，
 # 几张用「、」连），{me} 是这张候选，{them} 一张写「它」、几张写「它们」。MOVE_AHEAD、MOVE_LEAD 绿色，MOVE_BEHIND 橙色，
@@ -1457,7 +1465,8 @@ def _tier_chips(chips) -> str:
 def place_tip(place, name: str, loss=None) -> str:
     """位次的悬停说明（engine.Place）：标了档位的「筹码方案「X」：推荐，顺位 2」，未标记的「……：未标记，按角色特性计算」，
     方案外的流派已进入、改按未标记算的和被锁成不选的流派各有一句。loss 为不算拿不到的「只能再进入一个」（LOSS_TIP，
-    不做标签）时，另起一行接在后面，再接一句为什么不算（_loss_tail：避免不了，或本次之后预计没有三选一）；算拿不到的另有
+    不做标签）时，另起一行接在后面，再接一句为什么不算（_loss_tail：避免不了、本次之后预计没有三选一，或选了才拿不到的
+    几张之后出现的机会不到线）；算拿不到的另有
     橙色标签（loss_pills）。"""
     if place.kind == PLACE_MARKED:
         text = PLACE_MARKED_TIP.format(name=name, tier=SCHEME_TIER_WORD.get(place.tier, ""), rank=place.rank)
@@ -1479,10 +1488,16 @@ def _them(n: int) -> str:
 def _loss_tail(loss, names) -> str:
     """「选择后无法获得……」悬停整句后接的一句：算拿不到时写排在它前面、能保住的几张（LOSS_KEEP_TIP）；前面没有能保住的时，
     写能保住的只有排在最后的不选、其他流派（LOSS_KEEP_LAST_TIP，Loss.keep_last），或者选哪张都会少拿（LOSS_NO_KEEP_TIP，
-    Loss.alone）；不选、其他流派的候选自己照旧排在最后，不另写。不算时写为什么避免不了（LOSS_UNAVOIDABLE_TIP）。
-    names 是各候选的筹码名（Advice.evals 同序），不给时不写能保住的几张。"""
+    Loss.alone）；不选、其他流派的候选自己照旧排在最后，不另写。不算时写为什么不算：本次之后预计没有三选一
+    （LOSS_FINAL_TIP）、选了才拿不到的几张之后出现的机会不到线（LOSS_SLIM_TIP，Loss.slim），其余是避免不了
+    （LOSS_UNAVOIDABLE_TIP）。names 是各候选的筹码名（Advice.evals 同序），不给时不写能保住的几张。"""
     if getattr(loss, "final", False):
         return LOSS_FINAL_TIP
+    slim = getattr(loss, "slim", "")
+    chance = getattr(loss, "chance", None)
+    if slim and chance is not None:
+        p, line = below_line_texts(chance, getattr(loss, "chance_line", 0.0))
+        return LOSS_SLIM_TIP.format(what="、".join(SCHEME_TIER_WORD.get(t, "") for t in slim), p=p, line=line)
     if not getattr(loss, "warn", False):
         return LOSS_UNAVOIDABLE_TIP
     what = SCHEME_TIER_WORD["core"] if getattr(loss, "lost", "") == LOST_CORE else SCHEME_TIER_WORD["first"]
@@ -1497,7 +1512,7 @@ def loss_pills(loss, name: str, names=()) -> list[ReasonPill]:
     """「选择后无法获得……」的标签（engine.Loss）：马上拿不到（LOSS_NOW）写排在最前的那一个必选或推荐，只剩一个流派名额
     （LOSS_ONE_LEFT，以及算拿不到的 LOSS_TIP）写哪几个流派只能再进入一个。Loss.warn 为真（算拿不到：另选别的能保住，这张
     排到了它们后面）时橙色（ALERT），悬停后接能保住的几张（能保住的只有排在最后的不选、其他流派，或选哪张都会少拿时写明
-    为什么仍排在前面）；否则灰色，悬停后接为什么避免不了（_loss_tail）。不算拿不到的
+    为什么仍排在前面）；否则灰色，悬停后接为什么不算（_loss_tail：避免不了、之后没有三选一、机会不到线）。不算拿不到的
     LOSS_TIP 只写在位次的悬停里（place_tip），没有的为空。name 是方案名，names 是各候选的筹码名（Advice.evals 同序）。"""
     if loss is None:
         return []
@@ -1607,9 +1622,31 @@ def demotion_pills(ranking, slot: int) -> list[ReasonPill]:
     return [ReasonPill(DEMOTE_TEXT.format(brief=found.brief), MINUS, tip)]
 
 
-def _scheme_views(adv, ranking, fixed=()) -> list[OptionView]:
+# 选了这张候选，这一局就会按已进入的流派换用另一套方案、它在那套里标的是必选或推荐时（Session.switch_tags，推荐事件的
+# switch_tags）：灰色标签写那套方案和档位，先后、推荐度、分值都不变。标签超过 SHORT_LIMIT 个字（方案名长）时改写
+# SWITCH_TAG_SHORT，方案名写在悬停说明里。{name} 是方案名，{tier} 是档位（必选 / 推荐）
+SWITCH_TAG_TEXT = "方案「{name}」的{tier}"
+SWITCH_TAG_SHORT = "另一套方案的{tier}"
+SWITCH_TAG_TIP = "在方案「{name}」里是{tier}。选了以后这一局自动换用「{name}」。"
+
+
+def switch_pills(tag) -> list[ReasonPill]:
+    """一张候选的灰色标签（tag：session.SwitchTag，有 scheme、tier；None 时没有）：「方案「乙」的必选」，悬停说明写那套方案里
+    是哪一档、选了以后这一局自动换用它。标签照理由标签的长度规矩（SHORT_LIMIT），方案名长时只写「另一套方案的必选」。"""
+    if tag is None:
+        return []
+    name = getattr(tag.scheme, "name", "") or ""
+    tier = SCHEME_TIER_WORD.get(tag.tier, "")
+    text = SWITCH_TAG_TEXT.format(name=name, tier=tier)
+    if len(text) > SHORT_LIMIT:
+        text = SWITCH_TAG_SHORT.format(tier=tier)
+    return [ReasonPill(text, INFO, SWITCH_TAG_TIP.format(name=name, tier=tier))]
+
+
+def _scheme_views(adv, ranking, fixed=(), tags=()) -> list[OptionView]:
     """按自己的方案计算时的选项块：照 Ranking.order 的先后；候选第一行写位次（不写推荐度），
-    ★ 照旧；档位那一项不做成标签（reason_pills）。理由标签前面依次是「选择后无法获得……」（loss_pills）、收入降档
+    ★ 照旧；档位那一项不做成标签（reason_pills）。理由标签前面依次是「选择后无法获得……」（loss_pills）、选了以后会按流派
+    换用另一套方案的灰色标签（switch_pills，tags 和 Advice.evals 同序）、收入降档
     （demotion_pills，这时收入折算那一项不再另做标签）、同一档按档位前瞻排先后的说明（move_pills）；标了档位的候选前瞻那一条
     按档位前瞻写（scheme_ahead）。刷新那一行见 scheme_reroll_pills。被同系列上位替代的照旧写「被X上位替代」（悬停说明不提
     推荐度）。"""
@@ -1630,7 +1667,8 @@ def _scheme_views(adv, ranking, fixed=()) -> list[OptionView]:
         loss = ranking.losses[slot] if slot < len(ranking.losses) else None
         demoted = demotion_pills(ranking, slot)
         pills = [] if replaced else [
-            *loss_pills(loss, name, chip_names), *demoted, *move_pills(adv, ranking, slot),
+            *loss_pills(loss, name, chip_names), *switch_pills(tags[slot] if slot < len(tags) else None), *demoted,
+            *move_pills(adv, ranking, slot),
             *option_pills(item, best, scheme_ahead(adv, slot), ("income",) if demoted else ())]
         views.append(OptionView(
             slot=slot, name=names.chip_name(item.chip), key=item.chip.name,
@@ -1644,12 +1682,13 @@ def _scheme_views(adv, ranking, fixed=()) -> list[OptionView]:
     return views
 
 
-def option_views(adv, fixed=()) -> list[OptionView]:
+def option_views(adv, fixed=(), tags=()) -> list[OptionView]:
     """推荐区的各个选项块，按推荐度从高到低，被同系列上位替代的排在最后。fixed：用户改正过的候选筹码（从 0 数）。
-    按自己的方案计算时见 _scheme_views（写位次、照方案的先后）。"""
+    按自己的方案计算时见 _scheme_views（写位次、照方案的先后）；tags 是和 Advice.evals 同序的候选提示（推荐事件的
+    switch_tags，见 switch_pills），只在按自己的方案计算时用，不改先后。"""
     ranking = getattr(adv, "ranking", None)
     if ranking is not None:
-        return _scheme_views(adv, ranking, fixed)
+        return _scheme_views(adv, ranking, fixed, tags)
     views = []
     shown = shown_percent_texts(adv)
     for percent, slot, item in ordered_options(adv):
@@ -1754,11 +1793,12 @@ def tone_color(tone: str) -> str:
 def breakdown_rows(item: ChipEval, ahead=None) -> list[tuple[str, str, str]]:
     """悬停明细里的全部理由：（分项名, 整句, 色调），按分值的绝对值从大到小排，和理由标签的排法一致。
 
-    不写分值；没有说明的分项（基础分）不列。前瞻和理由标签一样，绝对值不到 LOOKAHEAD_MIN 时不列
-    （没有分值时，一条很小的前瞻也会显得和别的理由一样重要）。ahead：代替前瞻那一行（scheme_ahead 的结果：自己的方案里
+    不写分值；没有说明的分项（基础分）和只计分的分项（HIDDEN_ORIGINS，大数据）不列。前瞻和理由标签一样，
+    绝对值不到 LOOKAHEAD_MIN 时不列（没有分值时，一条很小的前瞻也会显得和别的理由一样重要）。ahead：代替前瞻那一行（scheme_ahead 的结果：自己的方案里
     标了档位的候选按档位前瞻写，为（None, 0）时不列）；不给时照常按前瞻。
     """
-    rows = [(abs(p.score), part_label(p.label), p.reason, part_tone(p)) for p in item.parts if p.reason]
+    rows = [(abs(p.score), part_label(p.label), p.reason, part_tone(p)) for p in item.parts
+            if p.reason and getattr(p, "origin", "") not in HIDDEN_ORIGINS]
     if ahead is None:
         if item.lookahead_reason and abs(item.lookahead) >= LOOKAHEAD_MIN:
             rows.append((abs(item.lookahead), "前瞻", item.lookahead_reason, tone_of(item.lookahead)))

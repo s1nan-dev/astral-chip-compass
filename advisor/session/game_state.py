@@ -285,13 +285,18 @@ class GameState:
     # 见 Session._chip_map_confirmed
     _chip_vote: tuple | None = None
 
-    # ---- 筹码方案（这一局实际用哪套每次现算，见 Session.scheme_choice；这里只记两样）
+    # ---- 筹码方案（这一局实际用哪套每次现算，见 Session.scheme_choice；这里只记按地图、按流派换的两个开关和告诉过的那一次）
     # 这一局不再按地图自动换方案（Session.stop_map_scheme：点了「换回原来的」，或在悬浮窗上手动换了方案）：之后这一局都用
     # 保存的方案。新的一局换上新对象就清掉，撤销新的一局时跟着旧的那一局回来
     map_scheme_off: bool = False
     # 这一局最近一次告诉过用户的按地图换方案：（角色, 换成的方案 id），见 Session.take_map_switch。同一局里接着换着同一套
     # 不再提示；撤销新的一局时跟着回来，换回那一局时不重复提示。没有按地图换着时为 None
     _map_switch_told: tuple[str, str] | None = None
+    # 这一局不再按已进入的流派自动换方案（Session.stop_school_scheme）：之后这一局都用按地图那一步定出来的那套。和
+    # map_scheme_off 分开，互不影响；新的一局清掉，撤销新的一局时跟着旧的那一局回来
+    school_scheme_off: bool = False
+    # 这一局最近一次告诉过用户的按流派换方案：（角色, 换成的方案 id），见 Session.take_school_switch，做法同 _map_switch_told
+    _school_switch_told: tuple[str, str] | None = None
 
     @classmethod
     def from_settings(cls, settings) -> GameState:
